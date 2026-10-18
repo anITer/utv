@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">北京联通IPTV播放器</string>
+    <string name="scanner_title">组播地址动态扫描与巡检 (check_iptv_m3u.sh)</string>
+
+    <!-- Player & HUD -->
+    <string name="VideoView_ar_aspect_fit_parent">适应屏幕 (Fit Parent)</string>
+    <string name="VideoView_ar_aspect_fill_parent">铺满裁剪 (Fill Parent)</string>
+    <string name="VideoView_ar_aspect_wrap_content">原始尺寸 (Wrap Content)</string>
+    <string name="VideoView_ar_match_parent">拉伸全屏 (Match Parent)</string>
+    <string name="VideoView_ar_16_9_fit_parent">16:9 宽屏</string>
+    <string name="VideoView_ar_4_3_fit_parent">4:3 传统</string>
+    <string name="VideoView_error_text_invalid_progressive_playback">该组播/单播流格式暂不支持渐进式播放</string>
+    <string name="VideoView_error_text_unknown">无法连接 IPTV 节目源，请检查网络或配置 udpxy 代理</string>
+    <string name="VideoView_error_button">确定</string>
+    <string name="N_A">N/A</string>
+
+    <!-- Groups -->
+    <string name="group_all">全部频道</string>
+    <string name="group_favorites">收藏频道</string>
+    <string name="group_4k">4K超清</string>
+    <string name="group_hd_cctv">[高清]央视</string>
+    <string name="group_hd_satellite">[高清]卫视</string>
+    <string name="group_hd_bj">[高清]北京</string>
+    <string name="group_hd_iptv">[高清]北京IPTV</string>
+    <string name="group_kids">少儿</string>
+    <string name="group_sd">标清/传统频道</string>
+    <string name="group_discovered">动态扫描发现</string>
+</resources>

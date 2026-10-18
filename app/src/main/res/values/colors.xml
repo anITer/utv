@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Material Design 3 Dark Theme Core Tokens -->
+    <color name="md_theme_dark_primary">#A8C7FA</color>
+    <color name="md_theme_dark_onPrimary">#062E6F</color>
+    <color name="md_theme_dark_primaryContainer">#0842A0</color>
+    <color name="md_theme_dark_onPrimaryContainer">#D3E3FD</color>
+
+    <color name="md_theme_dark_secondary">#7FCFFF</color>
+    <color name="md_theme_dark_onSecondary">#003355</color>
+    <color name="md_theme_dark_secondaryContainer">#004A77</color>
+    <color name="md_theme_dark_onSecondaryContainer">#C2E7FF</color>
+
+    <color name="md_theme_dark_tertiary">#6DD58C</color>
+    <color name="md_theme_dark_onTertiary">#0A3818</color>
+    <color name="md_theme_dark_tertiaryContainer">#0F5223</color>
+    <color name="md_theme_dark_onTertiaryContainer">#C4EED0</color>
+
+    <color name="md_theme_dark_background">#0B0F17</color>
+    <color name="md_theme_dark_surface">#111722</color>
+    <color name="md_theme_dark_surfaceContainerLow">#161E2C</color>
+    <color name="md_theme_dark_surfaceContainer">#1B2536</color>
+    <color name="md_theme_dark_surfaceContainerHigh">#233046</color>
+    <color name="md_theme_dark_surfaceContainerHighest">#2D3D59</color>
+
+    <color name="md_theme_dark_onSurface">#E2E8F0</color>
+    <color name="md_theme_dark_onSurfaceVariant">#94A3B8</color>
+    <color name="md_theme_dark_outline">#64748B</color>
+    <color name="md_theme_dark_outlineVariant">#2E3C54</color>
+    <color name="md_theme_dark_ripple">#33A8C7FA</color>
+
+    <!-- App Semantic & Legacy Mapped Tokens -->
+    <color name="bg_primary">#0B0F17</color>
+    <color name="bg_surface">#131A26</color>
+    <color name="bg_panel">#EB121926</color>
+    <color name="bg_panel_solid">#161F2E</color>
+    <color name="bg_card">#1B2536</color>
+    <color name="bg_card_selected">#12397A</color>
+    <color name="bg_card_focused">#1E4E9E</color>
+
+    <color name="accent_blue">#3B82F6</color>
+    <color name="accent_cyan">#38BDF8</color>
+    <color name="accent_green">#34D399</color>
+    <color name="accent_amber">#FBBF24</color>
+    <color name="accent_red">#F87171</color>
+    <color name="accent_purple">#A78BFA</color>
+
+    <color name="text_primary">#F1F5F9</color>
+    <color name="text_secondary">#94A3B8</color>
+    <color name="text_muted">#64748B</color>
+    <color name="divider">#293548</color>
+
+    <color name="badge_4k">#D97706</color>
+    <color name="badge_hd">#1D4ED8</color>
+    <color name="badge_sd">#334155</color>
+    <color name="badge_online">#059669</color>
+    <color name="badge_offline">#DC2626</color>
+</resources>

@@ -1,0 +1,397 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg_primary"
+    android:orientation="vertical"
+    android:padding="18dp">
+
+    <!-- Material 3 顶部 Top App Bar 卡片 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@drawable/bg_md3_card_container"
+        android:elevation="4dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingHorizontal="16dp"
+        android:paddingVertical="10dp">
+
+        <Button
+            android:id="@+id/btn_scanner_back"
+            style="@style/Widget.BjUnicomIptv.HudButton"
+            android:layout_width="wrap_content"
+            android:layout_height="38dp"
+            android:focusable="true"
+            android:nextFocusDown="@id/rb_mode_dynamic_subnet"
+            android:nextFocusRight="@id/btn_export_m3u"
+            android:paddingHorizontal="16dp"
+            android:text="← 返回播放"
+            android:textSize="13sp" />
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="16dp"
+            android:layout_weight="1"
+            android:fontFamily="sans-serif-medium"
+            android:text="北京联通组播地址动态扫描 &amp; check_iptv_m3u.sh 节目巡检"
+            android:textColor="@color/text_primary"
+            android:textSize="17sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/btn_export_m3u"
+            style="@style/Widget.BjUnicomIptv.HudButton"
+            android:layout_width="wrap_content"
+            android:layout_height="38dp"
+            android:focusable="true"
+            android:nextFocusDown="@id/sv_scan_log"
+            android:nextFocusLeft="@id/btn_scanner_back"
+            android:paddingHorizontal="16dp"
+            android:text="导出 M3U / CSV"
+            android:textColor="@color/md_theme_dark_primary"
+            android:textSize="13sp" />
+    </LinearLayout>
+
+    <!-- 主体左右双栏 Material 3 Surface Container 卡片 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_marginTop="14dp"
+        android:layout_weight="1"
+        android:orientation="horizontal">
+
+        <!-- 左侧扫描参数配置卡片 -->
+        <ScrollView
+            android:layout_width="360dp"
+            android:layout_height="match_parent"
+            android:background="@drawable/bg_md3_card_container"
+            android:elevation="2dp"
+            android:padding="18dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="sans-serif-medium"
+                    android:text="1. 选择扫描 / 巡检模式"
+                    android:textColor="@color/md_theme_dark_primary"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <RadioGroup
+                    android:id="@+id/rg_scan_mode"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp">
+
+                    <RadioButton
+                        android:id="@+id/rb_mode_dynamic_subnet"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:background="@drawable/bg_badge"
+                        android:buttonTint="@color/md_theme_dark_primary"
+                        android:checked="true"
+                        android:focusable="true"
+                        android:paddingHorizontal="8dp"
+                        android:text="动态扫描网段全部组播地址 (239.3.1.x)"
+                        android:textColor="@color/text_primary"
+                        android:textSize="13sp" />
+
+                    <RadioButton
+                        android:id="@+id/rb_mode_check_playlist"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:background="@drawable/bg_badge"
+                        android:buttonTint="@color/md_theme_dark_primary"
+                        android:focusable="true"
+                        android:paddingHorizontal="8dp"
+                        android:text="巡检内置频道表 (check_iptv_m3u.sh 逻辑)"
+                        android:textColor="@color/text_primary"
+                        android:textSize="13sp" />
+
+                    <RadioButton
+                        android:id="@+id/rb_mode_shell_script"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:background="@drawable/bg_badge"
+                        android:buttonTint="@color/md_theme_dark_primary"
+                        android:focusable="true"
+                        android:paddingHorizontal="8dp"
+                        android:text="直接执行 check_iptv_m3u.sh 脚本引擎"
+                        android:textColor="@color/text_primary"
+                        android:textSize="13sp" />
+                </RadioGroup>
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:fontFamily="sans-serif-medium"
+                    android:text="2. 组播网段与 IP 范围配置"
+                    android:textColor="@color/md_theme_dark_primary"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="网段前缀:"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="13sp" />
+
+                    <EditText
+                        android:id="@+id/et_scan_subnet"
+                        android:layout_width="0dp"
+                        android:layout_height="38dp"
+                        android:layout_marginStart="8dp"
+                        android:layout_weight="1"
+                        android:background="@drawable/bg_badge"
+                        android:focusable="true"
+                        android:fontFamily="monospace"
+                        android:paddingHorizontal="12dp"
+                        android:singleLine="true"
+                        android:text="239.3.1"
+                        android:textColor="@color/text_primary"
+                        android:textSize="13sp" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="主机范围:"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="13sp" />
+
+                    <EditText
+                        android:id="@+id/et_scan_start"
+                        android:layout_width="72dp"
+                        android:layout_height="38dp"
+                        android:layout_marginStart="8dp"
+                        android:background="@drawable/bg_badge"
+                        android:focusable="true"
+                        android:fontFamily="monospace"
+                        android:gravity="center"
+                        android:inputType="number"
+                        android:text="1"
+                        android:textColor="@color/text_primary"
+                        android:textSize="13sp" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginHorizontal="8dp"
+                        android:text="~"
+                        android:textColor="@color/text_primary" />
+
+                    <EditText
+                        android:id="@+id/et_scan_end"
+                        android:layout_width="72dp"
+                        android:layout_height="38dp"
+                        android:background="@drawable/bg_badge"
+                        android:focusable="true"
+                        android:fontFamily="monospace"
+                        android:gravity="center"
+                        android:inputType="number"
+                        android:text="254"
+                        android:textColor="@color/text_primary"
+                        android:textSize="13sp" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="udpxy代理:"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="13sp" />
+
+                    <EditText
+                        android:id="@+id/et_scan_udpxy"
+                        android:layout_width="0dp"
+                        android:layout_height="38dp"
+                        android:layout_marginStart="8dp"
+                        android:layout_weight="1"
+                        android:background="@drawable/bg_badge"
+                        android:focusable="true"
+                        android:fontFamily="monospace"
+                        android:hint="如 192.168.2.1:8012"
+                        android:paddingHorizontal="12dp"
+                        android:singleLine="true"
+                        android:text="192.168.2.1:8012"
+                        android:textColor="@color/text_primary"
+                        android:textSize="13sp" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="探测超时(ms):"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="13sp" />
+
+                    <EditText
+                        android:id="@+id/et_scan_timeout"
+                        android:layout_width="90dp"
+                        android:layout_height="38dp"
+                        android:layout_marginStart="8dp"
+                        android:background="@drawable/bg_badge"
+                        android:focusable="true"
+                        android:fontFamily="monospace"
+                        android:gravity="center"
+                        android:inputType="number"
+                        android:text="1500"
+                        android:textColor="@color/text_primary"
+                        android:textSize="13sp" />
+                </LinearLayout>
+
+                <CheckBox
+                    android:id="@+id/cb_full_port_scan"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/bg_badge"
+                    android:buttonTint="@color/md_theme_dark_primary"
+                    android:focusable="true"
+                    android:paddingHorizontal="8dp"
+                    android:text="扫描全部已知联通组播端口 (较慢)"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="12sp" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:orientation="horizontal">
+
+                    <Button
+                        android:id="@+id/btn_start_scan"
+                        style="@style/Widget.BjUnicomIptv.PrimaryButton"
+                        android:layout_width="0dp"
+                        android:layout_height="44dp"
+                        android:layout_weight="1"
+                        android:focusable="true"
+                        android:nextFocusRight="@id/btn_stop_scan"
+                        android:text="开始动态扫描 (绿键)"
+                        android:textStyle="bold" />
+
+                    <Button
+                        android:id="@+id/btn_stop_scan"
+                        style="@style/Widget.BjUnicomIptv.HudButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="44dp"
+                        android:layout_marginStart="8dp"
+                        android:enabled="false"
+                        android:focusable="true"
+                        android:nextFocusLeft="@id/btn_start_scan"
+                        android:nextFocusRight="@id/sv_scan_log"
+                        android:paddingHorizontal="16dp"
+                        android:text="停止" />
+                </LinearLayout>
+            </LinearLayout>
+        </ScrollView>
+
+        <!-- 右侧统计面板与实时脚本日志输出卡片 -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_marginStart="14dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_md3_card_container"
+            android:elevation="2dp"
+            android:orientation="vertical"
+            android:padding="18dp">
+
+            <TextView
+                android:id="@+id/tv_scan_progress_label"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fontFamily="sans-serif-medium"
+                android:text="就绪：按遥控器[OK]或[绿键]启动扫描，探测联通组播源并生成 results.csv 与 modified_iptv.m3u"
+                android:textColor="@color/text_primary"
+                android:textSize="13sp" />
+
+            <ProgressBar
+                android:id="@+id/pb_scan_progress"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="8dp"
+                android:layout_marginTop="10dp"
+                android:max="100"
+                android:progress="0"
+                android:progressTint="@color/md_theme_dark_primary" />
+
+            <!-- check_iptv_m3u.sh 实时统计卡片 -->
+            <TextView
+                android:id="@+id/tv_scan_stats_summary"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:background="@drawable/bg_badge"
+                android:fontFamily="sans-serif-medium"
+                android:padding="12dp"
+                android:text="总计: 0 | 可用(true): 0 | 不可用(false): 0 | 高清: 0 | 4K: 0 | 标清: 0 | 新发现: 0"
+                android:textColor="@color/accent_green"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+
+            <!-- 终端输出日志 (script.log) -->
+            <ScrollView
+                android:id="@+id/sv_scan_log"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_marginTop="10dp"
+                android:layout_weight="1"
+                android:background="@drawable/bg_badge"
+                android:focusable="true"
+                android:nextFocusLeft="@id/btn_start_scan"
+                android:padding="12dp">
+
+                <TextView
+                    android:id="@+id/tv_scan_console_log"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="monospace"
+                    android:lineSpacingExtra="2dp"
+                    android:text="[check_iptv_m3u.sh] Ready.\n"
+                    android:textColor="#A7F3D0"
+                    android:textSize="11sp" />
+            </ScrollView>
+        </LinearLayout>
+    </LinearLayout>
+
+</LinearLayout>

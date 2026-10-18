@@ -1,0 +1,180 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@drawable/bg_md3_dialog_surface"
+    android:padding="20dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <!-- Section 1: 网络转发模式卡片 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_md3_card_container"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fontFamily="sans-serif-medium"
+                android:text="网络转发模式 (IGMP 组播 / udpxy 单播)"
+                android:textColor="@color/md_theme_dark_primary"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <RadioGroup
+                android:id="@+id/rg_stream_mode"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp">
+
+                <RadioButton
+                    android:id="@+id/rb_stream_udpxy"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:buttonTint="@color/md_theme_dark_primary"
+                    android:text="路由器 udpxy 组播转单播 (推荐，如 http://192.168.2.1:8012/rtp/...)"
+                    android:textColor="@color/text_primary"
+                    android:textSize="13sp" />
+
+                <RadioButton
+                    android:id="@+id/rb_stream_local_proxy"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:buttonTint="@color/md_theme_dark_primary"
+                    android:text="内置 Android 本地 udpxy 代理网关 (自动剥离 RTP 头转 HTTP-TS)"
+                    android:textColor="@color/text_primary"
+                    android:textSize="13sp" />
+
+                <RadioButton
+                    android:id="@+id/rb_stream_direct_rtp"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:buttonTint="@color/md_theme_dark_primary"
+                    android:text="池化下载器原生 IGMP 组播直连 (rtp://239.3.1.x:port)"
+                    android:textColor="@color/text_primary"
+                    android:textSize="13sp" />
+            </RadioGroup>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="局域网 udpxy 代理地址与端口 (IP:Port)"
+                android:textColor="@color/text_secondary"
+                android:textSize="12sp" />
+
+            <EditText
+                android:id="@+id/et_settings_udpxy"
+                android:layout_width="match_parent"
+                android:layout_height="42dp"
+                android:layout_marginTop="6dp"
+                android:background="@drawable/bg_md3_search_bar"
+                android:fontFamily="monospace"
+                android:hint="192.168.2.1:8012"
+                android:paddingHorizontal="16dp"
+                android:singleLine="true"
+                android:textColor="@color/text_primary"
+                android:textSize="14sp" />
+        </LinearLayout>
+
+        <!-- Section 2: 解码器池与渲染引擎设置卡片 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:background="@drawable/bg_md3_card_container"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fontFamily="sans-serif-medium"
+                android:text="播放器内核与池化解码设置"
+                android:textColor="@color/md_theme_dark_primary"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <RadioGroup
+                android:id="@+id/rg_player_core"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:orientation="horizontal">
+
+                <RadioButton
+                    android:id="@+id/rb_core_ijk"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginEnd="16dp"
+                    android:buttonTint="@color/md_theme_dark_primary"
+                    android:text="IjkMediaPlayer (池化)"
+                    android:textColor="@color/text_primary" />
+
+                <RadioButton
+                    android:id="@+id/rb_core_exo"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginEnd="16dp"
+                    android:buttonTint="@color/md_theme_dark_primary"
+                    android:text="IjkExoPlayer"
+                    android:textColor="@color/text_primary" />
+
+                <RadioButton
+                    android:id="@+id/rb_core_android"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:buttonTint="@color/md_theme_dark_primary"
+                    android:text="AndroidMediaPlayer"
+                    android:textColor="@color/text_primary" />
+            </RadioGroup>
+
+            <CheckBox
+                android:id="@+id/cb_settings_mediacodec"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:buttonTint="@color/md_theme_dark_primary"
+                android:text="开启 MediaCodec 硬件加速解码 (H.264)"
+                android:textColor="@color/text_primary" />
+
+            <CheckBox
+                android:id="@+id/cb_settings_hevc"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:buttonTint="@color/md_theme_dark_primary"
+                android:text="开启 MediaCodec HEVC/H.265 4K 超高清硬解"
+                android:textColor="@color/text_primary" />
+
+            <CheckBox
+                android:id="@+id/cb_settings_opensles"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:buttonTint="@color/md_theme_dark_primary"
+                android:text="开启 OpenSL ES 音频硬件加速"
+                android:textColor="@color/text_primary" />
+
+            <CheckBox
+                android:id="@+id/cb_settings_textureview"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:buttonTint="@color/md_theme_dark_primary"
+                android:text="使用 TextureRenderView 渲染画面 (默认 SurfaceRenderView)"
+                android:textColor="@color/text_primary" />
+
+            <CheckBox
+                android:id="@+id/cb_settings_all_channels"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:buttonTint="@color/md_theme_dark_primary"
+                android:text="包含项目仓库全部 215 个频道 (含标清及历史频道)"
+                android:textColor="@color/text_primary" />
+        </LinearLayout>
+
+    </LinearLayout>
+</ScrollView>
