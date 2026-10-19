@@ -73,6 +73,7 @@
         android:id="@+id/player_hud_overlay"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
+        android:descendantFocusability="afterDescendants"
         android:visibility="visible">
 
         <!-- 顶部悬浮 Top App Bar (Material 3 Surface Container) -->
@@ -94,11 +95,15 @@
                 style="@style/Widget.BjUnicomIptv.HudButton"
                 android:layout_width="wrap_content"
                 android:layout_height="38dp"
+                android:drawableStart="@drawable/ic_flat_menu"
+                android:drawablePadding="6dp"
                 android:focusable="true"
                 android:nextFocusDown="@id/btn_prev_channel"
+                android:nextFocusLeft="@id/btn_reload_stream"
                 android:nextFocusRight="@id/btn_open_scanner"
-                android:paddingHorizontal="16dp"
-                android:text="☰ 频道列表"
+                android:nextFocusUp="@id/btn_prev_channel"
+                android:paddingHorizontal="14dp"
+                android:text="频道列表"
                 android:textSize="13sp" />
 
             <View
@@ -142,10 +147,13 @@
                 android:layout_width="wrap_content"
                 android:layout_height="38dp"
                 android:layout_marginEnd="8dp"
+                android:drawableStart="@drawable/ic_flat_radar"
+                android:drawablePadding="6dp"
                 android:focusable="true"
                 android:nextFocusDown="@id/btn_aspect_ratio"
                 android:nextFocusLeft="@id/btn_toggle_drawer"
                 android:nextFocusRight="@id/btn_open_settings"
+                android:nextFocusUp="@id/btn_aspect_ratio"
                 android:paddingHorizontal="14dp"
                 android:text="组播扫描"
                 android:textSize="13sp" />
@@ -155,9 +163,13 @@
                 style="@style/Widget.BjUnicomIptv.HudButton"
                 android:layout_width="wrap_content"
                 android:layout_height="38dp"
+                android:drawableStart="@drawable/ic_flat_settings"
+                android:drawablePadding="6dp"
                 android:focusable="true"
                 android:nextFocusDown="@id/btn_reload_stream"
                 android:nextFocusLeft="@id/btn_open_scanner"
+                android:nextFocusRight="@id/btn_prev_channel"
+                android:nextFocusUp="@id/btn_reload_stream"
                 android:paddingHorizontal="14dp"
                 android:text="播放设置"
                 android:textSize="13sp" />
@@ -238,11 +250,15 @@
                     android:layout_width="wrap_content"
                     android:layout_height="36dp"
                     android:layout_marginEnd="6dp"
+                    android:drawableStart="@drawable/ic_flat_prev"
+                    android:drawablePadding="4dp"
                     android:focusable="true"
+                    android:nextFocusDown="@id/btn_toggle_drawer"
+                    android:nextFocusLeft="@id/btn_open_settings"
                     android:nextFocusRight="@id/btn_next_channel"
                     android:nextFocusUp="@id/btn_toggle_drawer"
                     android:paddingHorizontal="12dp"
-                    android:text="▼ 上一台"
+                    android:text="上一台"
                     android:textSize="12sp" />
 
                 <Button
@@ -251,12 +267,15 @@
                     android:layout_width="wrap_content"
                     android:layout_height="36dp"
                     android:layout_marginEnd="6dp"
+                    android:drawableStart="@drawable/ic_flat_next"
+                    android:drawablePadding="4dp"
                     android:focusable="true"
+                    android:nextFocusDown="@id/btn_toggle_drawer"
                     android:nextFocusLeft="@id/btn_prev_channel"
                     android:nextFocusRight="@id/btn_numpad_dialog"
                     android:nextFocusUp="@id/btn_toggle_drawer"
                     android:paddingHorizontal="12dp"
-                    android:text="▲ 下一台"
+                    android:text="下一台"
                     android:textSize="12sp" />
 
                 <Button
@@ -265,7 +284,10 @@
                     android:layout_width="wrap_content"
                     android:layout_height="36dp"
                     android:layout_marginEnd="6dp"
+                    android:drawableStart="@drawable/ic_flat_dialpad"
+                    android:drawablePadding="5dp"
                     android:focusable="true"
+                    android:nextFocusDown="@id/btn_toggle_drawer"
                     android:nextFocusLeft="@id/btn_next_channel"
                     android:nextFocusRight="@id/btn_favorite_channel"
                     android:nextFocusUp="@id/btn_toggle_drawer"
@@ -279,12 +301,15 @@
                     android:layout_width="wrap_content"
                     android:layout_height="36dp"
                     android:layout_marginEnd="6dp"
+                    android:drawableStart="@drawable/ic_flat_star_outline"
+                    android:drawablePadding="5dp"
                     android:focusable="true"
+                    android:nextFocusDown="@id/btn_open_scanner"
                     android:nextFocusLeft="@id/btn_numpad_dialog"
                     android:nextFocusRight="@id/btn_aspect_ratio"
                     android:nextFocusUp="@id/btn_open_scanner"
                     android:paddingHorizontal="12dp"
-                    android:text="☆ 收藏"
+                    android:text="收藏"
                     android:textSize="12sp" />
 
                 <Button
@@ -293,7 +318,10 @@
                     android:layout_width="wrap_content"
                     android:layout_height="36dp"
                     android:layout_marginEnd="6dp"
+                    android:drawableStart="@drawable/ic_flat_aspect_ratio"
+                    android:drawablePadding="5dp"
                     android:focusable="true"
+                    android:nextFocusDown="@id/btn_open_scanner"
                     android:nextFocusLeft="@id/btn_favorite_channel"
                     android:nextFocusRight="@id/btn_reload_stream"
                     android:nextFocusUp="@id/btn_open_scanner"
@@ -306,8 +334,12 @@
                     style="@style/Widget.BjUnicomIptv.HudButton"
                     android:layout_width="wrap_content"
                     android:layout_height="36dp"
+                    android:drawableStart="@drawable/ic_flat_refresh"
+                    android:drawablePadding="5dp"
                     android:focusable="true"
+                    android:nextFocusDown="@id/btn_open_settings"
                     android:nextFocusLeft="@id/btn_aspect_ratio"
+                    android:nextFocusRight="@id/btn_toggle_drawer"
                     android:nextFocusUp="@id/btn_open_settings"
                     android:paddingHorizontal="12dp"
                     android:text="重连"
@@ -357,7 +389,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="5dp"
                 android:singleLine="true"
-                android:text="遥控器导航: [▲/▼]上下换台  [OK/◄]频道抽屉  [►]底部控制栏  [长按OK/菜单]快捷面板(数字选台/收藏/设置/扫描)"
+                android:text="遥控器导航: [◄/►]切换按钮焦点  [OK]确认按钮/打开频道列表  [▲/▼]上下换台  [长按OK/菜单]快捷面板"
                 android:textColor="@color/text_muted"
                 android:textSize="11sp" />
         </LinearLayout>
@@ -376,7 +408,7 @@
         android:orientation="vertical"
         android:paddingHorizontal="16dp"
         android:paddingVertical="16dp"
-        android:visibility="visible">
+        android:visibility="gone">
 
         <!-- 抽屉顶部 Header：标题 + 虚拟数字盘入口 + 仅看可用过滤 -->
         <LinearLayout
@@ -392,7 +424,7 @@
                 android:layout_weight="1"
                 android:fontFamily="sans-serif-medium"
                 android:letterSpacing="0.01"
-                android:text="北京联通 IPTV (215频道)"
+                android:text="uTV (215频道)"
                 android:textColor="@color/text_primary"
                 android:textSize="16sp"
                 android:textStyle="bold" />
@@ -403,6 +435,8 @@
                 android:layout_width="wrap_content"
                 android:layout_height="32dp"
                 android:layout_marginEnd="8dp"
+                android:drawableStart="@drawable/ic_flat_dialpad"
+                android:drawablePadding="5dp"
                 android:focusable="true"
                 android:nextFocusDown="@id/et_search_channel"
                 android:nextFocusRight="@id/cb_only_available"
@@ -436,6 +470,7 @@
             android:drawableStart="@drawable/ic_md_search"
             android:drawablePadding="10dp"
             android:focusable="true"
+            android:focusableInTouchMode="false"
             android:hint="搜索频道名 / 台号 / 239.3.1.x..."
             android:imeOptions="actionSearch"
             android:inputType="text"

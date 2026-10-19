@@ -56,9 +56,8 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginEnd="8dp"
-                android:text="★"
-                android:textColor="@color/accent_amber"
-                android:textSize="15sp"
+                android:drawableStart="@drawable/ic_flat_star_filled"
+                android:text=""
                 android:visibility="gone" />
 
             <TextView

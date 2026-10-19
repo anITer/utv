@@ -93,6 +93,7 @@ public class IjkVideoView extends FrameLayout {
 
     private Context mAppContext;
     private IptvSettings mSettings;
+    private int mCurrentRender = RENDER_SURFACE_VIEW;
     private IRenderView mRenderView;
     private int mCurrentAspectRatioIndex = 0;
     private int mCurrentAspectRatio = s_allAspectRatio[0];
@@ -132,8 +133,8 @@ public class IjkVideoView extends FrameLayout {
 
         mVideoWidth = 0;
         mVideoHeight = 0;
-        setFocusable(true);
-        setFocusableInTouchMode(true);
+        setFocusable(false);
+        setFocusableInTouchMode(false);
         mCurrentState = STATE_IDLE;
         mTargetState = STATE_IDLE;
     }
@@ -146,6 +147,9 @@ public class IjkVideoView extends FrameLayout {
             View renderUIView = mRenderView.getView();
             mRenderView.removeRenderCallback(mSHCallback);
             mRenderView = null;
+            mSurfaceHolder = null;
+            mSurfaceWidth = 0;
+            mSurfaceHeight = 0;
             removeView(renderUIView);
         }
 
@@ -175,6 +179,10 @@ public class IjkVideoView extends FrameLayout {
     }
 
     public void setRender(int render) {
+        if (mRenderView != null && mCurrentRender == render) {
+            return;
+        }
+        mCurrentRender = render;
         switch (render) {
             case RENDER_TEXTURE_VIEW: {
                 TextureRenderView renderView = new TextureRenderView(getContext());
@@ -189,6 +197,7 @@ public class IjkVideoView extends FrameLayout {
             }
             case RENDER_SURFACE_VIEW:
             default: {
+                mCurrentRender = RENDER_SURFACE_VIEW;
                 SurfaceRenderView renderView = new SurfaceRenderView(getContext());
                 setRenderView(renderView);
                 break;
@@ -436,6 +445,17 @@ public class IjkVideoView extends FrameLayout {
             mPooledIjkDecoder = null;
             mMediaPlayer = null;
         } else if (mMediaPlayer != null) {
+            if (mMediaPlayer instanceof TextureMediaPlayer) {
+                try {
+                    ((TextureMediaPlayer) mMediaPlayer).releaseSurfaceTexture();
+                } catch (Throwable ignored) {
+                }
+            }
+            try {
+                mMediaPlayer.setDisplay(null);
+                mMediaPlayer.setSurface(null);
+            } catch (Throwable ignored) {
+            }
             try {
                 mMediaPlayer.reset();
             } catch (Throwable ignored) {
@@ -570,6 +590,21 @@ public class IjkVideoView extends FrameLayout {
      * 获取当前解码器名称与池化状态
      */
     public String getDecoderName() {
+        int playerType = mSettings.getPlayerType();
+        if (playerType == IptvSettings.PLAYER_ANDROID_MEDIA) {
+            String hwAudio = mHwAudioCompanion.getActiveCodecLabel();
+            if (!TextUtils.isEmpty(hwAudio)) {
+                return "AndroidMediaPlayer / " + hwAudio;
+            }
+            return "AndroidMediaPlayer (系统硬解)";
+        } else if (playerType == IptvSettings.PLAYER_IJK_EXO) {
+            String hwAudio = mHwAudioCompanion.getActiveCodecLabel();
+            if (!TextUtils.isEmpty(hwAudio)) {
+                return "IjkExoMediaPlayer / " + hwAudio;
+            }
+            return "IjkExoMediaPlayer (Exo硬解)";
+        }
+
         boolean pooledHit = (mPooledIjkDecoder != null && mPooledIjkDecoder.reusedFromPool);
         String poolTag = pooledHit ? "池化复用" : "池化";
         String videoDecoder = mSettings.isMediaCodecEnabled() ? "MediaCodec" : "FFmpeg";
@@ -763,6 +798,14 @@ public class IjkVideoView extends FrameLayout {
                         if (mRenderView != null) {
                             mRenderView.setVideoSize(mVideoWidth, mVideoHeight);
                             mRenderView.setVideoSampleAspectRatio(mVideoSarNum, mVideoSarDen);
+                            if (!mRenderView.shouldWaitForResize() || (mSurfaceWidth == mVideoWidth && mSurfaceHeight == mVideoHeight)) {
+                                if (mTargetState == STATE_PLAYING && !isPlaying()) {
+                                    start();
+                                }
+                            } else if (mTargetState == STATE_PLAYING && isInPlaybackState() && !isPlaying()) {
+                                // AndroidMediaPlayer 播放 MPEG-TS 时若 Surface 尺寸已就绪，兜底立即启动播放，防止因等待 resize 导致卡在 PREPARED 黑屏
+                                start();
+                            }
                         }
                         requestLayout();
                     }
@@ -792,7 +835,9 @@ public class IjkVideoView extends FrameLayout {
                 if (mRenderView != null) {
                     mRenderView.setVideoSize(mVideoWidth, mVideoHeight);
                     mRenderView.setVideoSampleAspectRatio(mVideoSarNum, mVideoSarDen);
-                    if (!mRenderView.shouldWaitForResize() || (mSurfaceWidth == mVideoWidth && mSurfaceHeight == mVideoHeight)) {
+                    if (!mRenderView.shouldWaitForResize()
+                            || (mSurfaceWidth == mVideoWidth && mSurfaceHeight == mVideoHeight)
+                            || mSettings.getPlayerType() != IptvSettings.PLAYER_IJK) {
                         if (mTargetState == STATE_PLAYING) {
                             start();
                         }

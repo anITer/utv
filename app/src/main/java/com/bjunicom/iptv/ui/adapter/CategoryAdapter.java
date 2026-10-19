@@ -24,6 +24,12 @@ public class CategoryAdapter extends RecyclerView.Adapter<CategoryAdapter.ViewHo
 
         default void onRequestChannelListFocus() {
         }
+
+        default void onRequestHeaderFocus() {
+        }
+
+        default void onSwitchCategory(int delta) {
+        }
     }
 
     private final List<String> categories = new ArrayList<>();
@@ -52,9 +58,22 @@ public class CategoryAdapter extends RecyclerView.Adapter<CategoryAdapter.ViewHo
         }
     }
 
-    private void safeNotifyDataSetChanged() {
-        if (attachedRecyclerView != null && attachedRecyclerView.isComputingLayout()) {
-            attachedRecyclerView.post(this::notifyDataSetChanged);
+    private void updateSelectionVisuals() {
+        if (attachedRecyclerView != null) {
+            for (int i = 0; i < attachedRecyclerView.getChildCount(); i++) {
+                View child = attachedRecyclerView.getChildAt(i);
+                RecyclerView.ViewHolder vh = attachedRecyclerView.getChildViewHolder(child);
+                if (vh instanceof ViewHolder) {
+                    int pos = vh.getAdapterPosition();
+                    if (pos >= 0 && pos < categories.size()) {
+                        boolean isSelected = categories.get(pos).equals(selectedCategory);
+                        ((ViewHolder) vh).tvName.setSelected(isSelected);
+                    }
+                }
+            }
+            if (!attachedRecyclerView.isComputingLayout()) {
+                notifyDataSetChanged();
+            }
         } else {
             notifyDataSetChanged();
         }
@@ -62,7 +81,7 @@ public class CategoryAdapter extends RecyclerView.Adapter<CategoryAdapter.ViewHo
 
     public void setSelectedCategory(String category) {
         this.selectedCategory = category;
-        safeNotifyDataSetChanged();
+        updateSelectionVisuals();
     }
 
     public String getSelectedCategory() {
@@ -75,16 +94,17 @@ public class CategoryAdapter extends RecyclerView.Adapter<CategoryAdapter.ViewHo
     }
 
     /**
-     * 供遥控器左/右方向键在任意位置快速切换分类
+     * 供遥控器左/右方向键在任意位置快速循环切换分类
      */
     public int selectAdjacentCategory(int delta) {
         if (categories.isEmpty()) {
             return 0;
         }
         int curIdx = getSelectedPosition();
-        int nextIdx = (curIdx + delta + categories.size()) % categories.size();
+        int size = categories.size();
+        int nextIdx = ((curIdx + delta) % size + size) % size;
         selectedCategory = categories.get(nextIdx);
-        safeNotifyDataSetChanged();
+        updateSelectionVisuals();
         if (listener != null) {
             listener.onCategorySelected(selectedCategory, nextIdx);
         }
@@ -109,8 +129,8 @@ public class CategoryAdapter extends RecyclerView.Adapter<CategoryAdapter.ViewHo
 
         holder.tvName.setOnFocusChangeListener((v, hasFocus) -> {
             v.animate().scaleX(hasFocus ? 1.06f : 1.0f).scaleY(hasFocus ? 1.06f : 1.0f).setDuration(120).start();
-            if (hasFocus && !cat.equals(selectedCategory)) {
-                selectCategoryAt(position);
+            if (!hasFocus) {
+                v.setFocusableInTouchMode(false);
             }
         });
 
@@ -118,9 +138,28 @@ public class CategoryAdapter extends RecyclerView.Adapter<CategoryAdapter.ViewHo
             if (event.getAction() != KeyEvent.ACTION_DOWN) {
                 return false;
             }
-            if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+            if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+                if (listener != null) {
+                    listener.onSwitchCategory(-1);
+                } else {
+                    selectAdjacentCategory(-1);
+                }
+                return true;
+            } else if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                if (listener != null) {
+                    listener.onSwitchCategory(1);
+                } else {
+                    selectAdjacentCategory(1);
+                }
+                return true;
+            } else if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
                 if (listener != null) {
                     listener.onRequestChannelListFocus();
+                    return true;
+                }
+            } else if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+                if (listener != null) {
+                    listener.onRequestHeaderFocus();
                     return true;
                 }
             }
@@ -134,7 +173,7 @@ public class CategoryAdapter extends RecyclerView.Adapter<CategoryAdapter.ViewHo
         }
         String cat = categories.get(position);
         selectedCategory = cat;
-        safeNotifyDataSetChanged();
+        updateSelectionVisuals();
         if (listener != null) {
             listener.onCategorySelected(cat, position);
         }

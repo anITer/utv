@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">北京联通IPTV播放器</string>
+    <string name="app_name">uTV</string>
     <string name="scanner_title">组播地址动态扫描与巡检 (check_iptv_m3u.sh)</string>
 
     <!-- Player & HUD -->

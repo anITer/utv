@@ -40,20 +40,28 @@
     <!-- Material 3 Tonal Action Chip Button (HUD & Top Bar) -->
     <style name="Widget.BjUnicomIptv.HudButton" parent="Widget.AppCompat.Button.Borderless">
         <item name="android:background">@drawable/bg_group_tab</item>
+        <item name="backgroundTint">@null</item>
+        <item name="android:backgroundTint">@null</item>
         <item name="android:textColor">@color/text_primary</item>
         <item name="android:textAllCaps">false</item>
         <item name="android:fontFamily">sans-serif-medium</item>
         <item name="android:gravity">center</item>
+        <item name="android:focusable">true</item>
+        <item name="android:focusableInTouchMode">false</item>
         <item name="android:stateListAnimator">@null</item>
     </style>
 
     <!-- Material 3 Primary Filled Button -->
     <style name="Widget.BjUnicomIptv.PrimaryButton" parent="Widget.AppCompat.Button.Borderless">
         <item name="android:background">@drawable/bg_md3_primary_button</item>
+        <item name="backgroundTint">@null</item>
+        <item name="android:backgroundTint">@null</item>
         <item name="android:textColor">@color/text_primary</item>
         <item name="android:textAllCaps">false</item>
         <item name="android:fontFamily">sans-serif-medium</item>
         <item name="android:gravity">center</item>
+        <item name="android:focusable">true</item>
+        <item name="android:focusableInTouchMode">false</item>
         <item name="android:stateListAnimator">@null</item>
     </style>
 </resources>

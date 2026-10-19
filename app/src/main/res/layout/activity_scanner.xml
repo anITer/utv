@@ -22,11 +22,13 @@
             style="@style/Widget.BjUnicomIptv.HudButton"
             android:layout_width="wrap_content"
             android:layout_height="38dp"
+            android:drawableStart="@drawable/ic_flat_back"
+            android:drawablePadding="6dp"
             android:focusable="true"
             android:nextFocusDown="@id/rb_mode_dynamic_subnet"
             android:nextFocusRight="@id/btn_export_m3u"
             android:paddingHorizontal="16dp"
-            android:text="← 返回播放"
+            android:text="返回播放"
             android:textSize="13sp" />
 
         <TextView
@@ -45,6 +47,8 @@
             style="@style/Widget.BjUnicomIptv.HudButton"
             android:layout_width="wrap_content"
             android:layout_height="38dp"
+            android:drawableStart="@drawable/ic_flat_export"
+            android:drawablePadding="6dp"
             android:focusable="true"
             android:nextFocusDown="@id/sv_scan_log"
             android:nextFocusLeft="@id/btn_scanner_back"
@@ -304,8 +308,11 @@
                         android:layout_width="0dp"
                         android:layout_height="44dp"
                         android:layout_weight="1"
+                        android:drawableStart="@drawable/ic_flat_radar"
+                        android:drawablePadding="6dp"
                         android:focusable="true"
                         android:nextFocusRight="@id/btn_stop_scan"
+                        android:paddingHorizontal="14dp"
                         android:text="开始动态扫描 (绿键)"
                         android:textStyle="bold" />
 
@@ -315,11 +322,13 @@
                         android:layout_width="wrap_content"
                         android:layout_height="44dp"
                         android:layout_marginStart="8dp"
+                        android:drawableStart="@drawable/ic_flat_stop"
+                        android:drawablePadding="5dp"
                         android:enabled="false"
                         android:focusable="true"
                         android:nextFocusLeft="@id/btn_start_scan"
                         android:nextFocusRight="@id/sv_scan_log"
-                        android:paddingHorizontal="16dp"
+                        android:paddingHorizontal="14dp"
                         android:text="停止" />
                 </LinearLayout>
             </LinearLayout>

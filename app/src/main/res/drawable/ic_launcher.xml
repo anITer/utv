@@ -4,19 +4,12 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+    <!-- 镂空透明扁平电视外框（无任何实心底图填充） -->
     <path
-        android:fillColor="#161C28"
-        android:pathData="M0,0h108v108h-108z" />
-    <path
-        android:fillColor="#3B82F6"
-        android:pathData="M20,30h68c3.3,0 6,2.7 6,6v40c0,3.3 -2.7,6 -6,6H20c-3.3,0 -6,-2.7 -6,-6V36c0,-3.3 2.7,-6 6,-6z" />
-    <path
-        android:fillColor="#0E121A"
-        android:pathData="M24,35h60v30H24z" />
+        android:fillColor="#38BDF8"
+        android:pathData="M20,22h68c4.42,0 8,3.58 8,8v42c0,4.42 -3.58,8 -8,8H60v6h14c1.66,0 3,1.34 3,3s-1.34,3 -3,3H34c-1.66,0 -3,-1.34 -3,-3s1.34,-3 3,-3h14v-6H20c-4.42,0 -8,-3.58 -8,-8V30c0,-4.42 3.58,-8 8,-8zM20,29c-0.55,0 -1,0.45 -1,1v42c0,0.55 0.45,1 1,1h68c0.55,0 1,-0.45 1,-1V30c0,-0.55 -0.45,-1 -1,-1H20z" />
+    <!-- 中心扁平播放标识 -->
     <path
         android:fillColor="#10B981"
-        android:pathData="M46,42l18,8l-18,8z" />
-    <path
-        android:fillColor="#94A3B8"
-        android:pathData="M38,85h32v4H38z" />
+        android:pathData="M45,38l24,13l-24,13z" />
 </vector>

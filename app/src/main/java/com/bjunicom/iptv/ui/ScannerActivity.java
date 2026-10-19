@@ -102,6 +102,27 @@ public class ScannerActivity extends AppCompatActivity {
 
         btnStartScan.setOnClickListener(v -> startScanning());
         btnStopScan.setOnClickListener(v -> stopScanningByUser());
+
+        View.OnFocusChangeListener focusScale = (v, hasFocus) -> {
+            v.animate().scaleX(hasFocus ? 1.06f : 1.0f).scaleY(hasFocus ? 1.06f : 1.0f).setDuration(120).start();
+            v.setSelected(hasFocus);
+        };
+        int[] scannerFocusableIds = {
+                R.id.btn_scanner_back,
+                R.id.btn_export_m3u,
+                R.id.btn_start_scan,
+                R.id.btn_stop_scan,
+                R.id.rb_mode_dynamic_subnet,
+                R.id.rb_mode_check_playlist,
+                R.id.rb_mode_shell_script,
+                R.id.cb_full_port_scan
+        };
+        for (int id : scannerFocusableIds) {
+            View v = findViewById(id);
+            if (v != null) {
+                v.setOnFocusChangeListener(focusScale);
+            }
+        }
     }
 
     private void stopScanningByUser() {

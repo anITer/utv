@@ -37,7 +37,10 @@
                     android:id="@+id/rb_stream_udpxy"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:background="@drawable/bg_badge"
                     android:buttonTint="@color/md_theme_dark_primary"
+                    android:focusable="true"
+                    android:paddingHorizontal="8dp"
                     android:text="路由器 udpxy 组播转单播 (推荐，如 http://192.168.2.1:8012/rtp/...)"
                     android:textColor="@color/text_primary"
                     android:textSize="13sp" />
@@ -46,7 +49,11 @@
                     android:id="@+id/rb_stream_local_proxy"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:background="@drawable/bg_badge"
                     android:buttonTint="@color/md_theme_dark_primary"
+                    android:focusable="true"
+                    android:paddingHorizontal="8dp"
                     android:text="内置 Android 本地 udpxy 代理网关 (自动剥离 RTP 头转 HTTP-TS)"
                     android:textColor="@color/text_primary"
                     android:textSize="13sp" />
@@ -55,7 +62,11 @@
                     android:id="@+id/rb_stream_direct_rtp"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:background="@drawable/bg_badge"
                     android:buttonTint="@color/md_theme_dark_primary"
+                    android:focusable="true"
+                    android:paddingHorizontal="8dp"
                     android:text="池化下载器原生 IGMP 组播直连 (rtp://239.3.1.x:port)"
                     android:textColor="@color/text_primary"
                     android:textSize="13sp" />
@@ -112,8 +123,11 @@
                     android:id="@+id/rb_core_ijk"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginEnd="16dp"
+                    android:layout_marginEnd="12dp"
+                    android:background="@drawable/bg_badge"
                     android:buttonTint="@color/md_theme_dark_primary"
+                    android:focusable="true"
+                    android:paddingHorizontal="8dp"
                     android:text="IjkMediaPlayer (池化)"
                     android:textColor="@color/text_primary" />
 
@@ -121,8 +135,11 @@
                     android:id="@+id/rb_core_exo"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginEnd="16dp"
+                    android:layout_marginEnd="12dp"
+                    android:background="@drawable/bg_badge"
                     android:buttonTint="@color/md_theme_dark_primary"
+                    android:focusable="true"
+                    android:paddingHorizontal="8dp"
                     android:text="IjkExoPlayer"
                     android:textColor="@color/text_primary" />
 
@@ -130,7 +147,10 @@
                     android:id="@+id/rb_core_android"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
+                    android:background="@drawable/bg_badge"
                     android:buttonTint="@color/md_theme_dark_primary"
+                    android:focusable="true"
+                    android:paddingHorizontal="8dp"
                     android:text="AndroidMediaPlayer"
                     android:textColor="@color/text_primary" />
             </RadioGroup>
@@ -139,7 +159,11 @@
                 android:id="@+id/cb_settings_mediacodec"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:background="@drawable/bg_badge"
                 android:buttonTint="@color/md_theme_dark_primary"
+                android:focusable="true"
+                android:paddingHorizontal="8dp"
                 android:text="开启 MediaCodec 硬件加速解码 (H.264)"
                 android:textColor="@color/text_primary" />
 
@@ -147,7 +171,11 @@
                 android:id="@+id/cb_settings_hevc"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:background="@drawable/bg_badge"
                 android:buttonTint="@color/md_theme_dark_primary"
+                android:focusable="true"
+                android:paddingHorizontal="8dp"
                 android:text="开启 MediaCodec HEVC/H.265 4K 超高清硬解"
                 android:textColor="@color/text_primary" />
 
@@ -155,7 +183,11 @@
                 android:id="@+id/cb_settings_opensles"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:background="@drawable/bg_badge"
                 android:buttonTint="@color/md_theme_dark_primary"
+                android:focusable="true"
+                android:paddingHorizontal="8dp"
                 android:text="开启 OpenSL ES 音频硬件加速"
                 android:textColor="@color/text_primary" />
 
@@ -163,7 +195,11 @@
                 android:id="@+id/cb_settings_textureview"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:background="@drawable/bg_badge"
                 android:buttonTint="@color/md_theme_dark_primary"
+                android:focusable="true"
+                android:paddingHorizontal="8dp"
                 android:text="使用 TextureRenderView 渲染画面 (默认 SurfaceRenderView)"
                 android:textColor="@color/text_primary" />
 
@@ -171,7 +207,11 @@
                 android:id="@+id/cb_settings_all_channels"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:background="@drawable/bg_badge"
                 android:buttonTint="@color/md_theme_dark_primary"
+                android:focusable="true"
+                android:paddingHorizontal="8dp"
                 android:text="包含项目仓库全部 215 个频道 (含标清及历史频道)"
                 android:textColor="@color/text_primary" />
         </LinearLayout>

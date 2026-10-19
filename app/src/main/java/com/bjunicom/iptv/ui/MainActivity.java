@@ -79,6 +79,10 @@ public class MainActivity extends AppCompatActivity {
     private TextView tvOsdTrackInfo;
     private Button btnFavoriteChannel;
     private Button btnPrevChannel;
+    private View[] hudButtons;
+    private int currentHudFocusIndex = 0;
+    private boolean longPressCenterHandled = false;
+    private boolean drawerFocusOnCategories = false;
 
     private TextView tvDrawerTitle;
     private CheckBox cbOnlyAvailable;
@@ -100,9 +104,11 @@ public class MainActivity extends AppCompatActivity {
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     private final Runnable hideHudRunnable = () -> {
-        if (drawerPanel.getVisibility() != View.VISIBLE) {
-            hudOverlay.setVisibility(View.GONE);
+        if (drawerPanel.getVisibility() == View.VISIBLE) {
+            drawerPanel.setVisibility(View.GONE);
         }
+        hudOverlay.setVisibility(View.GONE);
+        updateHudButtonsVisualState();
     };
 
     private final Runnable commitNumberInputRunnable = () -> {
@@ -148,9 +154,11 @@ public class MainActivity extends AppCompatActivity {
         // 自动播放上次观看的频道 (默认 CCTV-1综合[1][高清])
         playInitialChannel();
 
-        // 启动时如果抽屉可见，自动将遥控器焦点定位到当前播放的频道项
+        // 启动时如果抽屉可见，自动将遥控器焦点定位到当前播放的频道项；否则聚焦播放页 HUD 按钮
         if (drawerPanel.getVisibility() == View.VISIBLE) {
             focusChannelListAt(channelAdapter.getPlayingChannelIndex());
+        } else {
+            focusHudButtonAt(currentHudFocusIndex);
         }
     }
 
@@ -221,6 +229,164 @@ public class MainActivity extends AppCompatActivity {
                 playChannel(currentChannel);
             }
         });
+
+        setupButtonFocusEffects();
+    }
+
+    private void setupButtonFocusEffects() {
+        hudButtons = new View[]{
+                findViewById(R.id.btn_toggle_drawer),
+                findViewById(R.id.btn_open_scanner),
+                findViewById(R.id.btn_open_settings),
+                findViewById(R.id.btn_prev_channel),
+                findViewById(R.id.btn_next_channel),
+                findViewById(R.id.btn_numpad_dialog),
+                findViewById(R.id.btn_favorite_channel),
+                findViewById(R.id.btn_aspect_ratio),
+                findViewById(R.id.btn_reload_stream)
+        };
+
+        for (int i = 0; i < hudButtons.length; i++) {
+            final int btnIndex = i;
+            View btn = hudButtons[i];
+            if (btn != null) {
+                btn.setFocusable(true);
+                btn.setBackgroundTintList(null);
+                btn.setOnFocusChangeListener((v, hasFocus) -> {
+                    if (hasFocus && drawerPanel.getVisibility() != View.VISIBLE) {
+                        currentHudFocusIndex = btnIndex;
+                        updateHudButtonsVisualState();
+                    } else if (!hasFocus) {
+                        v.setFocusableInTouchMode(false);
+                    }
+                });
+            }
+        }
+
+        int[] drawerBtnIds = {
+                R.id.btn_drawer_numpad,
+                R.id.cb_only_available
+        };
+        View.OnFocusChangeListener drawerFocusListener = (v, hasFocus) -> {
+            v.animate()
+                    .scaleX(hasFocus ? 1.08f : 1.0f)
+                    .scaleY(hasFocus ? 1.08f : 1.0f)
+                    .setDuration(120)
+                    .start();
+            v.setSelected(hasFocus);
+            if (!hasFocus) {
+                v.setFocusableInTouchMode(false);
+            }
+        };
+        for (int id : drawerBtnIds) {
+            View btn = findViewById(id);
+            if (btn != null) {
+                btn.setFocusable(true);
+                btn.setBackgroundTintList(null);
+                btn.setOnFocusChangeListener(drawerFocusListener);
+                btn.setOnKeyListener((v, keyCode, event) -> {
+                    if (event.getAction() != KeyEvent.ACTION_DOWN) {
+                        return false;
+                    }
+                    if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                        drawerFocusOnCategories = true;
+                        focusSelectedCategoryTab();
+                        return true;
+                    } else if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT || keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+                        if (v.getId() == R.id.btn_drawer_numpad) {
+                            requestFocusCompat(cbOnlyAvailable);
+                        } else {
+                            requestFocusCompat(findViewById(R.id.btn_drawer_numpad));
+                        }
+                        return true;
+                    }
+                    return false;
+                });
+            }
+        }
+
+        if (etSearchChannel != null) {
+            etSearchChannel.setOnClickListener(v -> {
+                etSearchChannel.setFocusableInTouchMode(true);
+                etSearchChannel.requestFocus();
+            });
+            etSearchChannel.setOnFocusChangeListener((v, hasFocus) -> {
+                if (!hasFocus) {
+                    v.setFocusableInTouchMode(false);
+                }
+            });
+            etSearchChannel.setOnKeyListener((v, keyCode, event) -> {
+                if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                    if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                        focusSelectedCategoryTab();
+                        return true;
+                    } else if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+                        requestFocusCompat(findViewById(R.id.btn_drawer_numpad));
+                        return true;
+                    }
+                }
+                return false;
+            });
+        }
+    }
+
+    private void requestFocusCompat(View target) {
+        if (target == null) {
+            return;
+        }
+        if (target.isInTouchMode()) {
+            target.setFocusableInTouchMode(true);
+        }
+        target.requestFocus();
+    }
+
+    public int getCurrentHudFocusIndex() {
+        return currentHudFocusIndex;
+    }
+
+    public View getFocusedHudButton() {
+        if (hudButtons == null || hudButtons.length == 0) {
+            return null;
+        }
+        int idx = (currentHudFocusIndex % hudButtons.length + hudButtons.length) % hudButtons.length;
+        return hudButtons[idx];
+    }
+
+    private void updateHudButtonsVisualState() {
+        if (hudButtons == null) {
+            return;
+        }
+        boolean showFocus = drawerPanel.getVisibility() != View.VISIBLE
+                && hudOverlay.getVisibility() == View.VISIBLE;
+        for (int i = 0; i < hudButtons.length; i++) {
+            View btn = hudButtons[i];
+            if (btn == null) {
+                continue;
+            }
+            boolean isTarget = showFocus && (i == currentHudFocusIndex);
+            btn.setSelected(isTarget);
+            btn.setBackgroundResource(isTarget ? R.drawable.bg_md3_primary_button : R.drawable.bg_group_tab);
+            btn.setBackgroundTintList(null);
+            btn.setElevation(isTarget ? 12f : 0f);
+            btn.setScaleX(isTarget ? 1.08f : 1.0f);
+            btn.setScaleY(isTarget ? 1.08f : 1.0f);
+        }
+    }
+
+    private void focusHudButtonAt(int index) {
+        if (hudButtons == null || hudButtons.length == 0) {
+            return;
+        }
+        currentHudFocusIndex = (index % hudButtons.length + hudButtons.length) % hudButtons.length;
+        updateHudButtonsVisualState();
+        View target = hudButtons[currentHudFocusIndex];
+        if (target != null && drawerPanel.getVisibility() != View.VISIBLE && hudOverlay.getVisibility() == View.VISIBLE) {
+            requestFocusCompat(target);
+        }
+    }
+
+    private void moveHudButtonFocus(int delta) {
+        focusHudButtonAt(currentHudFocusIndex + delta);
     }
 
     /**
@@ -298,7 +464,22 @@ public class MainActivity extends AppCompatActivity {
 
                     @Override
                     public void onRequestChannelListFocus() {
-                        focusChannelListAt(channelAdapter.getPlayingChannelIndex());
+                        if (channelAdapter != null && channelAdapter.getItemCount() > 0) {
+                            drawerFocusOnCategories = false;
+                            focusChannelListAt(channelAdapter.getPlayingChannelIndex());
+                        }
+                    }
+
+                    @Override
+                    public void onRequestHeaderFocus() {
+                        drawerFocusOnCategories = false;
+                        requestFocusCompat(findViewById(R.id.btn_drawer_numpad));
+                    }
+
+                    @Override
+                    public void onSwitchCategory(int delta) {
+                        drawerFocusOnCategories = true;
+                        switchCategoryInDrawer(delta);
                     }
                 });
         rvCategories.setAdapter(categoryAdapter);
@@ -325,25 +506,36 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public void onSwitchCategory(int delta) {
-                if (categoryAdapter != null) {
-                    int newCatPos = categoryAdapter.selectAdjacentCategory(delta);
-                    rvCategories.scrollToPosition(newCatPos);
-                    // 切换分类后自动把遥控器焦点落在新分类的第一项（或正在播放项）
-                    focusChannelListAt(channelAdapter.getPlayingChannelIndex());
-                }
+                drawerFocusOnCategories = false;
+                switchCategoryInDrawer(delta);
             }
 
             @Override
             public void onNavigateUpFromTop() {
+                drawerFocusOnCategories = true;
                 focusSelectedCategoryTab();
             }
 
             @Override
             public void onWrapToTop() {
+                drawerFocusOnCategories = false;
                 focusChannelListAt(0);
             }
         });
         rvChannels.setAdapter(channelAdapter);
+    }
+
+    private void switchCategoryInDrawer(int delta) {
+        if (categoryAdapter == null) {
+            return;
+        }
+        int newCatPos = categoryAdapter.selectAdjacentCategory(delta);
+        rvCategories.scrollToPosition(newCatPos);
+        if (drawerFocusOnCategories || channelAdapter == null || channelAdapter.getItemCount() == 0) {
+            focusSelectedCategoryTab();
+        } else {
+            focusChannelListAt(channelAdapter.getPlayingChannelIndex());
+        }
     }
 
     private void setupPlayerListeners() {
@@ -432,7 +624,7 @@ public class MainActivity extends AppCompatActivity {
         String statsSuffix = availableCount > 0
                 ? String.format(Locale.US, " (%d/%d 可用)", availableCount, all.size())
                 : String.format(Locale.US, " (共%d频道)", all.size());
-        tvDrawerTitle.setText("北京联通 IPTV" + statsSuffix);
+        tvDrawerTitle.setText("uTV" + statsSuffix);
     }
 
     private void playInitialChannel() {
@@ -565,9 +757,13 @@ public class MainActivity extends AppCompatActivity {
 
     private void updateFavoriteButtonText() {
         if (currentChannel != null && currentChannel.isFavorite()) {
-            btnFavoriteChannel.setText("★ 已收藏");
+            btnFavoriteChannel.setText("已收藏");
+            btnFavoriteChannel.setCompoundDrawablesRelativeWithIntrinsicBounds(
+                    R.drawable.ic_flat_star_filled, 0, 0, 0);
         } else {
-            btnFavoriteChannel.setText("☆ 收藏");
+            btnFavoriteChannel.setText("收藏");
+            btnFavoriteChannel.setCompoundDrawablesRelativeWithIntrinsicBounds(
+                    R.drawable.ic_flat_star_outline, 0, 0, 0);
         }
     }
 
@@ -625,13 +821,19 @@ public class MainActivity extends AppCompatActivity {
     private void openChannelDrawerAndFocus() {
         drawerPanel.setVisibility(View.VISIBLE);
         hudOverlay.setVisibility(View.VISIBLE);
-        mainHandler.removeCallbacks(hideHudRunnable);
-        focusChannelListAt(channelAdapter.getPlayingChannelIndex());
+        drawerFocusOnCategories = false;
+        updateHudButtonsVisualState();
+        if (channelAdapter != null && channelAdapter.getItemCount() > 0) {
+            focusChannelListAt(channelAdapter.getPlayingChannelIndex());
+        } else {
+            focusSelectedCategoryTab();
+        }
+        scheduleHideHud();
     }
 
     private void closeChannelDrawer() {
         drawerPanel.setVisibility(View.GONE);
-        scheduleHideHud();
+        showHudTemporarily();
     }
 
     private void focusChannelListAt(int position) {
@@ -643,9 +845,16 @@ public class MainActivity extends AppCompatActivity {
         rvChannels.post(() -> {
             RecyclerView.ViewHolder vh = rvChannels.findViewHolderForAdapterPosition(safePos);
             if (vh != null && vh.itemView != null) {
-                vh.itemView.requestFocus();
+                requestFocusCompat(vh.itemView);
             } else {
-                rvChannels.requestFocus();
+                rvChannels.post(() -> {
+                    RecyclerView.ViewHolder delayedVh = rvChannels.findViewHolderForAdapterPosition(safePos);
+                    if (delayedVh != null && delayedVh.itemView != null) {
+                        requestFocusCompat(delayedVh.itemView);
+                    } else {
+                        requestFocusCompat(rvChannels);
+                    }
+                });
             }
         });
     }
@@ -659,32 +868,48 @@ public class MainActivity extends AppCompatActivity {
         rvCategories.post(() -> {
             RecyclerView.ViewHolder vh = rvCategories.findViewHolderForAdapterPosition(pos);
             if (vh != null && vh.itemView != null) {
-                vh.itemView.requestFocus();
+                requestFocusCompat(vh.itemView);
             } else {
-                rvCategories.requestFocus();
+                rvCategories.post(() -> {
+                    RecyclerView.ViewHolder delayedVh = rvCategories.findViewHolderForAdapterPosition(pos);
+                    if (delayedVh != null && delayedVh.itemView != null) {
+                        requestFocusCompat(delayedVh.itemView);
+                    } else {
+                        requestFocusCompat(rvCategories);
+                    }
+                });
             }
         });
     }
 
     private boolean isHudButtonFocused() {
-        View focused = getCurrentFocus();
-        if (focused == null || hudOverlay.getVisibility() != View.VISIBLE) {
+        if (hudOverlay.getVisibility() != View.VISIBLE || drawerPanel.getVisibility() == View.VISIBLE) {
             return false;
         }
-        int id = focused.getId();
-        return id == R.id.btn_toggle_drawer
-                || id == R.id.btn_open_scanner
-                || id == R.id.btn_open_settings
-                || id == R.id.btn_prev_channel
-                || id == R.id.btn_next_channel
-                || id == R.id.btn_numpad_dialog
-                || id == R.id.btn_favorite_channel
-                || id == R.id.btn_aspect_ratio
-                || id == R.id.btn_reload_stream;
+        View focused = getCurrentFocus();
+        if (focused != null) {
+            int id = focused.getId();
+            if (id == R.id.btn_toggle_drawer
+                    || id == R.id.btn_open_scanner
+                    || id == R.id.btn_open_settings
+                    || id == R.id.btn_prev_channel
+                    || id == R.id.btn_next_channel
+                    || id == R.id.btn_numpad_dialog
+                    || id == R.id.btn_favorite_channel
+                    || id == R.id.btn_aspect_ratio
+                    || id == R.id.btn_reload_stream) {
+                return true;
+            }
+        }
+        View target = getFocusedHudButton();
+        return target != null && target.isSelected();
     }
 
     private void showHudTemporarily() {
         hudOverlay.setVisibility(View.VISIBLE);
+        if (drawerPanel.getVisibility() != View.VISIBLE) {
+            focusHudButtonAt(currentHudFocusIndex);
+        }
         scheduleHideHud();
     }
 
@@ -737,6 +962,10 @@ public class MainActivity extends AppCompatActivity {
         for (int i = 0; i <= 9; i++) {
             final int digit = i;
             Button b = view.findViewById(btnIds[i]);
+            b.setOnFocusChangeListener((v, hasFocus) -> {
+                v.animate().scaleX(hasFocus ? 1.08f : 1.0f).scaleY(hasFocus ? 1.08f : 1.0f).setDuration(100).start();
+                v.setSelected(hasFocus);
+            });
             b.setOnClickListener(v -> {
                 if (inputBuf.length() >= 4) {
                     inputBuf.setLength(0);
@@ -746,19 +975,29 @@ public class MainActivity extends AppCompatActivity {
             });
         }
 
-        view.findViewById(R.id.btn_numpad_del).setOnClickListener(v -> {
+        View btnDel = view.findViewById(R.id.btn_numpad_del);
+        btnDel.setOnFocusChangeListener((v, hasFocus) -> {
+            v.animate().scaleX(hasFocus ? 1.08f : 1.0f).scaleY(hasFocus ? 1.08f : 1.0f).setDuration(100).start();
+            v.setSelected(hasFocus);
+        });
+        btnDel.setOnClickListener(v -> {
             if (inputBuf.length() > 0) {
                 inputBuf.deleteCharAt(inputBuf.length() - 1);
                 updatePreview.run();
             }
         });
-        view.findViewById(R.id.btn_numpad_del).setOnLongClickListener(v -> {
+        btnDel.setOnLongClickListener(v -> {
             inputBuf.setLength(0);
             updatePreview.run();
             return true;
         });
 
-        view.findViewById(R.id.btn_numpad_go).setOnClickListener(v -> {
+        View btnGo = view.findViewById(R.id.btn_numpad_go);
+        btnGo.setOnFocusChangeListener((v, hasFocus) -> {
+            v.animate().scaleX(hasFocus ? 1.08f : 1.0f).scaleY(hasFocus ? 1.08f : 1.0f).setDuration(100).start();
+            v.setSelected(hasFocus);
+        });
+        btnGo.setOnClickListener(v -> {
             if (inputBuf.length() == 0) {
                 Toast.makeText(this, "请先输入台号", Toast.LENGTH_SHORT).show();
                 return;
@@ -791,17 +1030,17 @@ public class MainActivity extends AppCompatActivity {
      */
     private void showSmartRemoteQuickMenu() {
         String favText = (currentChannel != null && currentChannel.isFavorite())
-                ? "★ 取消收藏当前频道 (" + currentChannel.getDisplayName() + ")"
-                : "☆ 收藏当前频道 (" + (currentChannel != null ? currentChannel.getDisplayName() : "") + ")";
+                ? "取消收藏当前频道 (" + currentChannel.getDisplayName() + ")"
+                : "收藏当前频道 (" + (currentChannel != null ? currentChannel.getDisplayName() : "") + ")";
 
         String[] items = {
-                "🔢 虚拟数字键盘选台 (按台号直达)",
-                "📺 打开频道分类列表 (左右键切换分类)",
+                "虚拟数字键盘选台 (按台号直达)",
+                "打开频道分类列表 (左右键切换分类)",
                 favText,
-                "📐 切换画面比例 (16:9 / 4:3 / 铺满 / 适应)",
-                "🔄 重新连接当前频道流",
-                "⚙️ 播放与网络转发设置 (udpxy / RTP 组播直连)",
-                "📡 组播地址动态扫描与巡检 (check_iptv_m3u.sh)"
+                "切换画面比例 (16:9 / 4:3 / 铺满 / 适应)",
+                "重新连接当前频道流",
+                "播放与网络转发设置 (udpxy / RTP 组播直连)",
+                "组播地址动态扫描与巡检 (check_iptv_m3u.sh)"
         };
 
         new MaterialAlertDialogBuilder(this)
@@ -875,7 +1114,7 @@ public class MainActivity extends AppCompatActivity {
         cbAllChannels.setChecked(settings.isIncludeAllRepoChannels());
 
         new MaterialAlertDialogBuilder(this)
-                .setTitle("北京联通 IPTV 播放与网络配置")
+                .setTitle("uTV 播放与网络配置")
                 .setView(view)
                 .setPositiveButton("保存并应用", (dialog, which) -> {
                     int checkedMode = rgStreamMode.getCheckedRadioButtonId();
@@ -905,8 +1144,11 @@ public class MainActivity extends AppCompatActivity {
                     int renderType = cbTextureView.isChecked()
                             ? IjkVideoView.RENDER_TEXTURE_VIEW
                             : IjkVideoView.RENDER_SURFACE_VIEW;
+                    int prevRenderType = settings.getRenderViewType();
                     settings.setRenderViewType(renderType);
-                    videoView.setRender(renderType);
+                    if (prevRenderType != renderType) {
+                        videoView.setRender(renderType);
+                    }
 
                     boolean prevAll = settings.isIncludeAllRepoChannels();
                     if (prevAll != cbAllChannels.isChecked()) {
@@ -939,11 +1181,19 @@ public class MainActivity extends AppCompatActivity {
      *   - INFO 键：显隐流媒体信息栏
      */
     @Override
+    public boolean dispatchTouchEvent(MotionEvent ev) {
+        if (hudOverlay.getVisibility() == View.VISIBLE || drawerPanel.getVisibility() == View.VISIBLE) {
+            scheduleHideHud();
+        }
+        return super.dispatchTouchEvent(ev);
+    }
+
+    @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
         if (event.getAction() == KeyEvent.ACTION_DOWN) {
             int keyCode = event.getKeyCode();
 
-            if (hudOverlay.getVisibility() == View.VISIBLE && drawerPanel.getVisibility() != View.VISIBLE) {
+            if (hudOverlay.getVisibility() == View.VISIBLE || drawerPanel.getVisibility() == View.VISIBLE) {
                 scheduleHideHud();
             }
 
@@ -1008,40 +1258,70 @@ public class MainActivity extends AppCompatActivity {
                 return true;
             }
 
-            // 4. 当左侧频道列表抽屉关闭时的全屏遥控器方向键与长按 OK 逻辑
-            if (drawerPanel.getVisibility() != View.VISIBLE) {
+            // 4. 当左侧频道列表抽屉打开时的遥控器方向键循环切换逻辑
+            if (drawerPanel.getVisibility() == View.VISIBLE) {
+                if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                    View focused = getCurrentFocus();
+                    int focusedId = focused != null ? focused.getId() : View.NO_ID;
+                    if (focusedId == R.id.btn_drawer_numpad) {
+                        requestFocusCompat(cbOnlyAvailable);
+                        return true;
+                    } else if (focusedId == R.id.cb_only_available) {
+                        requestFocusCompat(findViewById(R.id.btn_drawer_numpad));
+                        return true;
+                    } else if (focusedId == R.id.et_search_channel
+                            && etSearchChannel.getText() != null
+                            && etSearchChannel.getText().length() > 0) {
+                        return super.dispatchKeyEvent(event);
+                    }
+                    int delta = (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) ? -1 : 1;
+                    switchCategoryInDrawer(delta);
+                    return true;
+                }
+            } else {
+                // 当左侧频道列表抽屉关闭时的全屏遥控器方向键与长按 OK 逻辑
                 if (keyCode == KeyEvent.KEYCODE_PROG_RED || keyCode == KeyEvent.KEYCODE_BOOKMARK) {
                     toggleCurrentChannelFavorite();
                     return true;
                 }
 
-                // 若当前遥控器焦点不在 HUD 按钮上：
+                // 播放时方向键逻辑：
+                // - 左/右方向键：切换页面上所有 HUD 按钮的焦点（若 HUD 已隐藏则先唤出 HUD 并聚焦按钮）
                 // - 上/下方向键：直接切换上/下一频道
-                // - 短按 OK / 左方向键：打开左侧频道抽屉并定位当前频道
-                // - 长按 OK 键：弹出「智能遥控器快捷操作面板」（含虚拟数字键盘选台、收藏、画面比例、播放设置、动态扫描）
-                // - 右方向键：唤出底部操控栏并将遥控器焦点移入功能按钮
-                if (!isHudButtonFocused()) {
-                    if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
-                        switchAdjacentChannel(1);
-                        return true;
-                    } else if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
-                        switchAdjacentChannel(-1);
-                        return true;
-                    } else if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
-                        openChannelDrawerAndFocus();
-                        return true;
-                    } else if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER
-                            || keyCode == KeyEvent.KEYCODE_ENTER
-                            || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER) {
-                        if (event.getRepeatCount() > 0) {
-                            showSmartRemoteQuickMenu();
-                        }
-                        return true;
-                    } else if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                // - 短按 OK：若 HUD 已显示则触发当前聚焦的按钮点击；若 HUD 未显示则打开频道抽屉
+                // - 长按 OK 键：弹出「智能遥控器快捷操作面板」
+                if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+                    if (hudOverlay.getVisibility() != View.VISIBLE) {
                         showHudTemporarily();
-                        btnPrevChannel.requestFocus();
-                        return true;
+                    } else {
+                        scheduleHideHud();
+                        moveHudButtonFocus(-1);
                     }
+                    return true;
+                } else if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                    if (hudOverlay.getVisibility() != View.VISIBLE) {
+                        showHudTemporarily();
+                    } else {
+                        scheduleHideHud();
+                        moveHudButtonFocus(1);
+                    }
+                    return true;
+                } else if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+                    switchAdjacentChannel(1);
+                    return true;
+                } else if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                    switchAdjacentChannel(-1);
+                    return true;
+                } else if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER
+                        || keyCode == KeyEvent.KEYCODE_ENTER
+                        || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER) {
+                    if (event.getRepeatCount() > 0) {
+                        longPressCenterHandled = true;
+                        showSmartRemoteQuickMenu();
+                    } else {
+                        longPressCenterHandled = false;
+                    }
+                    return true;
                 }
             }
 
@@ -1058,23 +1338,33 @@ public class MainActivity extends AppCompatActivity {
                 long now = System.currentTimeMillis();
                 if (now - lastBackPressTimeMs > DOUBLE_BACK_EXIT_MS) {
                     lastBackPressTimeMs = now;
-                    Toast.makeText(this, "再按一次返回键退出北京联通 IPTV", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(this, "再按一次返回键退出 uTV", Toast.LENGTH_SHORT).show();
                     return true;
                 }
             }
         } else if (event.getAction() == KeyEvent.ACTION_UP) {
             int keyCode = event.getKeyCode();
-            // 全屏且焦点不在 HUD 按钮上时，短按松开 OK 键打开频道列表（区分于长按 OK 键呼出快捷菜单）
+            // 全屏播放时，短按松开 OK 键：若 HUD 显示则执行当前聚焦按钮功能，否则打开频道列表
             if (drawerPanel.getVisibility() != View.VISIBLE
-                    && !isHudButtonFocused()
                     && remoteNumberBuffer.length() == 0
                     && (keyCode == KeyEvent.KEYCODE_DPAD_CENTER
                     || keyCode == KeyEvent.KEYCODE_ENTER
                     || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER)) {
-                if (!event.isCanceled() && (event.getEventTime() - event.getDownTime() < 500)) {
+                boolean wasLongPress = longPressCenterHandled;
+                longPressCenterHandled = false;
+                if (!wasLongPress && !event.isCanceled() && (event.getEventTime() - event.getDownTime() < 500)) {
+                    if (hudOverlay.getVisibility() == View.VISIBLE) {
+                        View focusedBtn = getFocusedHudButton();
+                        if (focusedBtn != null) {
+                            scheduleHideHud();
+                            focusedBtn.performClick();
+                            return true;
+                        }
+                    }
                     openChannelDrawerAndFocus();
                     return true;
                 }
+                return true;
             }
         }
         return super.dispatchKeyEvent(event);
