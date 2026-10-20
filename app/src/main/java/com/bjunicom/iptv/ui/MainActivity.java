@@ -59,6 +59,7 @@ import tv.danmaku.ijk.media.player.IMediaPlayer;
 public class MainActivity extends AppCompatActivity {
 
     private static final long HUD_AUTO_HIDE_MS = 6000L;
+    private static final long LOADING_HINT_DELAY_MS = 700L;
     private static final long NUMBER_INPUT_COMMIT_MS = 1800L;
     private static final long DOUBLE_BACK_EXIT_MS = 2000L;
 
@@ -102,6 +103,7 @@ public class MainActivity extends AppCompatActivity {
     private long lastBackPressTimeMs = 0L;
     private final StringBuilder remoteNumberBuffer = new StringBuilder();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final Runnable showLoadingRunnable = () -> loadingOverlay.setVisibility(View.VISIBLE);
 
     private final Runnable hideHudRunnable = () -> {
         if (drawerPanel.getVisibility() == View.VISIBLE) {
@@ -511,9 +513,9 @@ public class MainActivity extends AppCompatActivity {
             }
 
             @Override
-            public void onNavigateUpFromTop() {
-                drawerFocusOnCategories = true;
-                focusSelectedCategoryTab();
+            public void onWrapToBottom() {
+                drawerFocusOnCategories = false;
+                focusChannelListAt(channelAdapter.getItemCount() - 1);
             }
 
             @Override
@@ -540,6 +542,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void setupPlayerListeners() {
         videoView.setOnPreparedListener(mp -> {
+            mainHandler.removeCallbacks(showLoadingRunnable);
             loadingOverlay.setVisibility(View.GONE);
             if (currentChannel != null) {
                 currentChannel.setConnected(true);
@@ -564,10 +567,12 @@ public class MainActivity extends AppCompatActivity {
 
         videoView.setOnInfoListener((mp, what, extra) -> {
             if (what == IMediaPlayer.MEDIA_INFO_BUFFERING_START) {
-                loadingOverlay.setVisibility(View.VISIBLE);
                 tvLoadingHint.setText("正在缓冲视频流...");
+                mainHandler.removeCallbacks(showLoadingRunnable);
+                mainHandler.postDelayed(showLoadingRunnable, LOADING_HINT_DELAY_MS);
             } else if (what == IMediaPlayer.MEDIA_INFO_BUFFERING_END
                     || what == IMediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START) {
+                mainHandler.removeCallbacks(showLoadingRunnable);
                 loadingOverlay.setVisibility(View.GONE);
                 if (currentChannel != null) {
                     updateOsdWithChannel(currentChannel);
@@ -595,6 +600,7 @@ public class MainActivity extends AppCompatActivity {
                     return true;
                 }
             }
+            mainHandler.removeCallbacks(showLoadingRunnable);
             loadingOverlay.setVisibility(View.GONE);
             if (currentChannel != null) {
                 currentChannel.setConnected(false);
@@ -649,6 +655,11 @@ public class MainActivity extends AppCompatActivity {
         if (channel == null) {
             return;
         }
+        // 换台时保持全屏播放，不自动弹出上下两块播放控制栏。
+        mainHandler.removeCallbacks(hideHudRunnable);
+        drawerPanel.setVisibility(View.GONE);
+        hudOverlay.setVisibility(View.GONE);
+        updateHudButtonsVisualState();
         currentChannel = channel;
         fallbackToLocalProxyAttempted = false;
         settings.setLastChannelUrl(channel.getRawUrl());
@@ -669,12 +680,14 @@ public class MainActivity extends AppCompatActivity {
         } else {
             resolvedUrl = StreamUrlResolver.resolvePlaybackUrl(channel, settings, localProxyPort);
         }
-        loadingOverlay.setVisibility(View.VISIBLE);
+        // 短暂换台不闪现中央加载框；连接超过 700ms 时才提示。
+        mainHandler.removeCallbacks(showLoadingRunnable);
+        loadingOverlay.setVisibility(View.GONE);
         tvLoadingHint.setText(String.format(Locale.US, "正在连接 [%s] %s...",
                 channel.getChannelNumberDisplay(), channel.getDisplayName()));
+        mainHandler.postDelayed(showLoadingRunnable, LOADING_HINT_DELAY_MS);
 
         updateOsdWithChannel(channel);
-        showHudTemporarily();
 
         videoView.setRawChannelUrl(channel.getRawUrl());
         videoView.setVideoPath(resolvedUrl);
@@ -789,14 +802,12 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void switchAdjacentChannel(int delta) {
-        List<IptvChannel> list = channelAdapter.getChannels();
-        if (list.isEmpty()) {
-            list = repository.getAllChannels();
-        }
+        // 换台始终按完整频道顺序循环，不受抽屉的搜索/分类/仅看可用筛选影响。
+        List<IptvChannel> list = repository.getAllChannels();
         if (list.isEmpty()) {
             return;
         }
-        int curIdx = 0;
+        int curIdx = -1;
         if (currentChannel != null) {
             for (int i = 0; i < list.size(); i++) {
                 if (list.get(i).getRawUrl().equals(currentChannel.getRawUrl())) {
@@ -805,9 +816,10 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
         }
-        int nextIdx = (curIdx + delta + list.size()) % list.size();
+        int nextIdx = curIdx < 0
+                ? (delta >= 0 ? 0 : list.size() - 1)
+                : (curIdx + delta + list.size()) % list.size();
         playChannel(list.get(nextIdx));
-        rvChannels.scrollToPosition(nextIdx);
     }
 
     private void toggleChannelDrawer() {
@@ -833,7 +845,9 @@ public class MainActivity extends AppCompatActivity {
 
     private void closeChannelDrawer() {
         drawerPanel.setVisibility(View.GONE);
-        showHudTemporarily();
+        hudOverlay.setVisibility(View.GONE);
+        mainHandler.removeCallbacks(hideHudRunnable);
+        updateHudButtonsVisualState();
     }
 
     private void focusChannelListAt(int position) {
@@ -1170,7 +1184,7 @@ public class MainActivity extends AppCompatActivity {
      * - 数字键 0~9 / 小键盘 0~9：输入台号选台，OSD 实时预览台名，按 OK 键立即跳转
      * - 频道加减键 (CHANNEL_UP / CHANNEL_DOWN / PAGE_UP / PAGE_DOWN)：随时上下换台
      * - 全屏状态下（抽屉关闭）：
-     *   - 上/下方向键：直接切换上/下一频道
+     *   - 上/下方向键：直接切换上一/下一频道
      *   - OK / Enter / 左方向键：打开左侧频道抽屉并自动将焦点落在当前频道上
      *   - 右方向键：唤出底部操控栏并将遥控器焦点移入功能按钮
      * - 机顶盒四色功能键与快捷键：
@@ -1287,7 +1301,7 @@ public class MainActivity extends AppCompatActivity {
 
                 // 播放时方向键逻辑：
                 // - 左/右方向键：切换页面上所有 HUD 按钮的焦点（若 HUD 已隐藏则先唤出 HUD 并聚焦按钮）
-                // - 上/下方向键：直接切换上/下一频道
+                // - 上/下方向键：上一/下一频道，与列表视觉顺序一致
                 // - 短按 OK：若 HUD 已显示则触发当前聚焦的按钮点击；若 HUD 未显示则打开频道抽屉
                 // - 长按 OK 键：弹出「智能遥控器快捷操作面板」
                 if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
@@ -1307,10 +1321,10 @@ public class MainActivity extends AppCompatActivity {
                     }
                     return true;
                 } else if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
-                    switchAdjacentChannel(1);
+                    switchAdjacentChannel(-1);
                     return true;
                 } else if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
-                    switchAdjacentChannel(-1);
+                    switchAdjacentChannel(1);
                     return true;
                 } else if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER
                         || keyCode == KeyEvent.KEYCODE_ENTER

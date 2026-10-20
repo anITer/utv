@@ -7,7 +7,12 @@ import android.view.SurfaceView;
 import com.bjunicom.iptv.player.IjkVideoView;
 import com.bjunicom.iptv.player.StreamDownloaderPool;
 import com.bjunicom.iptv.player.TsCodecDescriptor;
+import com.bjunicom.iptv.config.IptvSettings;
+import com.bjunicom.iptv.model.IptvChannel;
+import com.bjunicom.iptv.repository.ChannelRepository;
 import com.bjunicom.iptv.ui.MainActivity;
+
+import java.util.List;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -120,9 +125,12 @@ public class StartupSmokeTest {
                     R.id.btn_reload_stream
             };
 
-            // Initial HUD focus is on the first HUD button
+            // Playback starts without covering the picture; right reveals the HUD.
             assertNotNull(activity.getFocusedHudButton());
             assertEquals(expectedOrder[0], activity.getFocusedHudButton().getId());
+            assertEquals(android.view.View.GONE, activity.findViewById(R.id.player_hud_overlay).getVisibility());
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_RIGHT));
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_RIGHT));
             assertTrue(activity.getFocusedHudButton().isSelected());
 
             // Pressing DPAD_RIGHT steps through all HUD buttons and wraps around
@@ -140,6 +148,33 @@ public class StartupSmokeTest {
             activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_LEFT));
             assertEquals(R.id.btn_reload_stream, activity.getFocusedHudButton().getId());
             assertTrue(activity.getFocusedHudButton().isSelected());
+        }
+    }
+
+    @Test
+    public void testRemoteUpDownWrapChannelsWithoutShowingHud() {
+        List<IptvChannel> channels = ChannelRepository.getInstance(
+                org.robolectric.RuntimeEnvironment.getApplication()).getAllChannels();
+        assertTrue(channels.size() > 2);
+        IptvSettings settings = new IptvSettings(org.robolectric.RuntimeEnvironment.getApplication());
+        settings.setLastChannelUrl(channels.get(0).getRawUrl());
+
+        try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class)) {
+            MainActivity activity = controller.create().start().resume().visible().get();
+
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_UP));
+            assertEquals(channels.get(channels.size() - 1).getRawUrl(), settings.getLastChannelUrl());
+            assertEquals(android.view.View.GONE, activity.findViewById(R.id.player_hud_overlay).getVisibility());
+
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_DOWN));
+            assertEquals(channels.get(0).getRawUrl(), settings.getLastChannelUrl());
+
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_DOWN));
+            assertEquals(channels.get(1).getRawUrl(), settings.getLastChannelUrl());
+
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_UP));
+            assertEquals(channels.get(0).getRawUrl(), settings.getLastChannelUrl());
+            assertEquals(android.view.View.GONE, activity.findViewById(R.id.player_hud_overlay).getVisibility());
         }
     }
 
