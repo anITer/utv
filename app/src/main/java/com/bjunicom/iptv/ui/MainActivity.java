@@ -99,8 +99,14 @@ public class MainActivity extends AppCompatActivity {
     private IptvChannel currentChannel;
     private boolean fallbackToLocalProxyAttempted = false;
     private boolean udpxyUnreachableInSession = false;
-    // 本会话内检测到 4K HEVC 硬件解码不可用后，4K 频道强制走系统播放器 + 内置本地组播代理
+    // 4K HEVC 硬件解码不可用后的处理策略（优先 IJK 最高帧率）：
+    // - hevcHwFallbackFor4k: 一次性，仅本次重播立即走系统播放器，下次切台恢复优先 IJK
+    // - 按频道持久化记忆: 同一频道 IJK 连续失败 >=2 次才记入 hevc_fallback_channels，
+    //   之后该频道直接走系统播放器；IJK 播放成功自动清除记忆
     private boolean hevcHwFallbackFor4k = false;
+    private boolean lastPlayForcedSystem = false;
+    private String hevcFailStreakUrl = null;
+    private int hevcFailStreak = 0;
     private long lastBackPressTimeMs = 0L;
     private final StringBuilder remoteNumberBuffer = new StringBuilder();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -548,6 +554,19 @@ public class MainActivity extends AppCompatActivity {
                 return;
             }
             hevcHwFallbackFor4k = true;
+            String url = currentChannel != null ? currentChannel.getRawUrl() : null;
+            if (url != null) {
+                if (url.equals(hevcFailStreakUrl)) {
+                    hevcFailStreak++;
+                } else {
+                    hevcFailStreakUrl = url;
+                    hevcFailStreak = 1;
+                }
+                // 连续 2 次失败才持久化记忆：偶发的网络丢包不应封禁 IJK 可恢复的频道
+                if (hevcFailStreak >= 2) {
+                    settings.addHevcFallbackChannel(url);
+                }
+            }
             Toast.makeText(this, "检测到 4K 硬件解码不可用，已切换系统播放器内核", Toast.LENGTH_LONG).show();
             if (currentChannel != null) {
                 playChannel(currentChannel);
@@ -559,6 +578,14 @@ public class MainActivity extends AppCompatActivity {
             if (currentChannel != null) {
                 currentChannel.setConnected(true);
                 currentChannel.setLatencyMs(videoView.getPrepareCostMs());
+                // IJK 在 4K 频道上准备成功：清除该频道的硬解失败记忆，继续优先 IJK
+                if ("4K".equals(currentChannel.getResolutionTag()) && !lastPlayForcedSystem) {
+                    settings.removeHevcFallbackChannel(currentChannel.getRawUrl());
+                    if (currentChannel.getRawUrl() != null
+                            && currentChannel.getRawUrl().equals(hevcFailStreakUrl)) {
+                        hevcFailStreak = 0;
+                    }
+                }
                 String vTrack = videoView.getFormattedVideoTrackInfo();
                 String aTrack = videoView.getFormattedAudioTrackInfo();
                 String detectedRes = videoView.getDetectedResolutionFlag();
@@ -674,8 +701,11 @@ public class MainActivity extends AppCompatActivity {
             localProxyPort = ((IptvApplication) getApplication()).getLocalProxyPort();
         }
 
-        // 4K 硬件解码不可用时会话级回退：强制系统播放器内核 + 内置本地组播代理 URL
-        boolean forceSystemPlayerFor4k = hevcHwFallbackFor4k && "4K".equals(channel.getResolutionTag());
+        // 4K 硬件解码不可用时的兜底（一次性 + 按频道持久化记忆）：强制系统播放器内核 + 内置本地组播代理 URL
+        boolean forceSystemPlayerFor4k = "4K".equals(channel.getResolutionTag())
+                && (hevcHwFallbackFor4k || settings.isHevcFallbackChannel(channel.getRawUrl()));
+        hevcHwFallbackFor4k = false; // 一次性：仅本次重播生效，用户切台后重新优先 IJK
+        lastPlayForcedSystem = forceSystemPlayerFor4k;
         videoView.setForceFallbackPlayer(forceSystemPlayerFor4k);
 
         String resolvedUrl;

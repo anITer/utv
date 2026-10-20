@@ -4,6 +4,10 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.text.TextUtils;
 
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
+
 /**
  * 播放器与北京联通 IPTV 网络转发配置管理
  */
@@ -31,6 +35,7 @@ public class IptvSettings {
     private static final String KEY_INCLUDE_HISTORICAL = "include_historical_channels";
     private static final String KEY_ONLY_SHOW_AVAILABLE = "only_show_available";
     private static final String KEY_LAST_CHANNEL_URL = "last_channel_url";
+    private static final String KEY_HEVC_FALLBACK_CHANNELS = "hevc_fallback_channels";
     private static final String KEY_SCAN_SUBNET = "scan_subnet";
     private static final String KEY_SCAN_START_HOST = "scan_start_host";
     private static final String KEY_SCAN_END_HOST = "scan_end_host";
@@ -69,6 +74,38 @@ public class IptvSettings {
 
     public void setPlayerType(int playerType) {
         prefs.edit().putInt(KEY_PLAYER_TYPE, playerType).apply();
+    }
+
+    /**
+     * 按频道记忆的 4K HEVC 硬解失败列表（IJK 无法硬解的频道直接走系统播放器内核）。
+     * IJK 播放成功后由 MainActivity 自动移除，优先保证 IJK 最高帧率。
+     */
+    public Set<String> getHevcFallbackChannels() {
+        return prefs.getStringSet(KEY_HEVC_FALLBACK_CHANNELS, Collections.emptySet());
+    }
+
+    public boolean isHevcFallbackChannel(String url) {
+        return url != null && getHevcFallbackChannels().contains(url);
+    }
+
+    public void addHevcFallbackChannel(String url) {
+        if (url == null) {
+            return;
+        }
+        Set<String> updated = new HashSet<>(getHevcFallbackChannels());
+        if (updated.add(url)) {
+            prefs.edit().putStringSet(KEY_HEVC_FALLBACK_CHANNELS, updated).apply();
+        }
+    }
+
+    public void removeHevcFallbackChannel(String url) {
+        if (url == null) {
+            return;
+        }
+        Set<String> updated = new HashSet<>(getHevcFallbackChannels());
+        if (updated.remove(url)) {
+            prefs.edit().putStringSet(KEY_HEVC_FALLBACK_CHANNELS, updated).apply();
+        }
     }
 
     public boolean isMediaCodecEnabled() {
