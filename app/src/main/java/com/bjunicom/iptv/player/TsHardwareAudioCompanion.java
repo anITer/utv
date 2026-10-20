@@ -473,6 +473,13 @@ public class TsHardwareAudioCompanion {
         boolean healthy = true;
         long presentationTimeUs = 0L;
 
+        // AAC (ADTS over TS) 专用：跨 PES 重组帧缓冲与已生效配置
+        final ByteArrayOutputStream aacEsBuffer = new ByteArrayOutputStream(16384);
+        boolean aacSawConfig = false;
+        int aacSampleRate = 48000;
+        int aacChannels = 2;
+        long aacPtsUs = 0L;
+
         void acquireDecoderFromPool() {
             initialized = true;
             if (mimeType == null) {
@@ -492,7 +499,100 @@ public class TsHardwareAudioCompanion {
                 pooledSlot.audioTrack.write(data, offset, length);
                 return;
             }
-            MediaCodec codec = pooledSlot.codec;
+            if (pooledSlot.codec == null) {
+                return;
+            }
+            // AAC over TS 的 PES 载荷是 ADTS 帧序列，而 audio/mp4a-latm 解码器只吃裸 AAC：
+            // 需按 ADTS 头切帧、剥头、由首帧头生成 AudioSpecificConfig 作为 csd-0
+            if (MediaFormat.MIMETYPE_AUDIO_AAC.equals(mimeType)) {
+                feedAacAdtsStream(data, offset, length);
+            } else {
+                queueEncodedFrame(data, offset, length, presentationTimeUs);
+                presentationTimeUs += 24000;
+            }
+            drainDecoderOutputs();
+        }
+
+        /**
+         * 从 ES 字节流中切出完整 ADTS 帧：裸 AAC 载荷入队解码器，首帧头推导 csd-0。
+         * 帧可能跨 PES 包，用 aacEsBuffer 做尾保留重组。
+         */
+        private void feedAacAdtsStream(byte[] data, int offset, int length) {
+            aacEsBuffer.write(data, offset, length);
+            byte[] buf = aacEsBuffer.toByteArray();
+            int n = buf.length;
+            int pos = 0;
+            int retainFrom = 0;
+            while (pos + 7 <= n) {
+                if (!((buf[pos] & 0xFF) == 0xFF && (buf[pos + 1] & 0xF6) == 0xF0)) {
+                    pos++;
+                    continue;
+                }
+                int protectionAbsent = buf[pos + 1] & 0x01;
+                int profile = (buf[pos + 2] >> 6) & 0x03;
+                int sfIndex = (buf[pos + 2] >> 2) & 0x0F;
+                int chanConfig = ((buf[pos + 2] & 0x01) << 2) | ((buf[pos + 3] >> 6) & 0x03);
+                int frameLen = ((buf[pos + 3] & 0x03) << 11)
+                        | ((buf[pos + 4] & 0xFF) << 3) | ((buf[pos + 5] >> 5) & 0x07);
+                int headerLen = protectionAbsent == 1 ? 7 : 9;
+                if (sfIndex == 15 || frameLen < headerLen + 8 || frameLen > 8192) {
+                    pos++; // 伪同步
+                    continue;
+                }
+                if (pos + frameLen > n) {
+                    retainFrom = pos; // 帧不完整，等下一批数据
+                    break;
+                }
+                if (!aacSawConfig) {
+                    int objectType = profile + 1; // ADTS profile 字段 = AudioObjectType - 1
+                    byte[] asc = new byte[]{
+                            (byte) ((objectType << 3) | (sfIndex >> 1)),
+                            (byte) (((sfIndex & 0x01) << 7) | (chanConfig << 3))};
+                    int sr = aacSampleRateFromIndex(sfIndex);
+                    int ch = chanConfig == 0 ? 2 : chanConfig;
+                    if (pooledSlot != null) {
+                        pooledSlot.configureAac(asc, sr, ch);
+                    }
+                    aacSampleRate = sr;
+                    aacChannels = ch;
+                    aacPtsUs = 0L;
+                    aacSawConfig = true;
+                }
+                queueEncodedFrame(buf, pos + headerLen, frameLen - headerLen, aacPtsUs);
+                aacPtsUs += (1024L * 1_000_000L) / Math.max(1, aacSampleRate);
+                pos += frameLen;
+            }
+            if (pos < n) {
+                retainFrom = pos;
+            }
+            aacEsBuffer.reset();
+            int keep = n - retainFrom;
+            if (keep > 0 && keep <= 32768) {
+                aacEsBuffer.write(buf, retainFrom, keep);
+            }
+        }
+
+        private int aacSampleRateFromIndex(int sfIndex) {
+            switch (sfIndex) {
+                case 0: return 96000;
+                case 1: return 88200;
+                case 2: return 64000;
+                case 3: return 48000;
+                case 4: return 44100;
+                case 5: return 32000;
+                case 6: return 24000;
+                case 7: return 22050;
+                case 8: return 16000;
+                case 9: return 12000;
+                case 10: return 11025;
+                case 11: return 8000;
+                case 12: return 7350;
+                default: return 48000;
+            }
+        }
+
+        private void queueEncodedFrame(byte[] data, int offset, int length, long ptsUs) {
+            MediaCodec codec = pooledSlot != null ? pooledSlot.codec : null;
             if (codec == null) {
                 return;
             }
@@ -504,11 +604,21 @@ public class TsHardwareAudioCompanion {
                         inBuf.clear();
                         int copyLen = Math.min(length, inBuf.remaining());
                         inBuf.put(data, offset, copyLen);
-                        codec.queueInputBuffer(inIdx, 0, copyLen, presentationTimeUs, 0);
-                        presentationTimeUs += 24000;
+                        codec.queueInputBuffer(inIdx, 0, copyLen, ptsUs, 0);
                     }
                 }
+            } catch (Throwable t) {
+                healthy = false;
+                Log.w(TAG, "Audio queue input error: " + t.getMessage());
+            }
+        }
 
+        private void drainDecoderOutputs() {
+            MediaCodec codec = pooledSlot != null ? pooledSlot.codec : null;
+            if (codec == null) {
+                return;
+            }
+            try {
                 MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
                 while (running.get()) {
                     int outIdx = codec.dequeueOutputBuffer(info, 0);

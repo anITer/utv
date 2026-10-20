@@ -78,9 +78,54 @@ public class CodecDecoderPool {
         public int sampleRate = 48000;
         public int channelCount = 2;
         public String label = "";
+        // AAC 已生效的 AudioSpecificConfig (csd-0)，避免重复 stop/configure/start
+        private byte[] aacActiveAsc;
 
         PooledHwAudioDecoder(String mimeType) {
             this.mimeType = mimeType;
+        }
+
+        /**
+         * 按 ADTS 头解析出的 AudioSpecificConfig 重新配置 AAC 解码器。
+         * MediaCodec 的 audio/mp4a-latm 解码器只接受裸 AAC 帧且必须携带 csd-0，
+         * 直接喂 ADTS 帧会静默无声（北京联通 4K 频道即此场景）。
+         * 相同配置重复调用是 no-op；flush() 复用不会丢失 csd-0。
+         */
+        public synchronized void configureAac(byte[] asc, int sampleRate, int channels) {
+            if (codec == null || !MediaFormat.MIMETYPE_AUDIO_AAC.equals(mimeType) || asc == null) {
+                return;
+            }
+            if (aacActiveAsc != null && aacActiveAsc.length == asc.length) {
+                boolean same = true;
+                for (int i = 0; i < asc.length; i++) {
+                    if (aacActiveAsc[i] != asc[i]) {
+                        same = false;
+                        break;
+                    }
+                }
+                if (same) {
+                    return;
+                }
+            }
+            try {
+                codec.stop();
+            } catch (Throwable ignored) {
+            }
+            try {
+                MediaFormat format = MediaFormat.createAudioFormat(
+                        MediaFormat.MIMETYPE_AUDIO_AAC, sampleRate, channels);
+                format.setByteBuffer("csd-0", java.nio.ByteBuffer.wrap(asc));
+                codec.configure(format, null, null, 0);
+                codec.start();
+                aacActiveAsc = asc;
+                this.sampleRate = sampleRate;
+                this.channelCount = channels;
+                this.label = MediaFormat.MIMETYPE_AUDIO_AAC + " (池化硬解/ADTS)";
+                Log.i(TAG, "Reconfigured AAC decoder with ADTS-derived CSD: sr=" + sampleRate
+                        + " ch=" + channels);
+            } catch (Throwable t) {
+                Log.w(TAG, "AAC reconfigure with CSD failed: " + t.getMessage());
+            }
         }
 
         public void flushForReuse() {
@@ -220,6 +265,34 @@ public class CodecDecoderPool {
         });
     }
 
+    /**
+     * 清空某 Codec Profile 的池化解码器（全部彻底 release，不回收）。
+     * 用于 HEVC 硬解失败后的全新实例重试，避免重试拿到池中的旧实例。
+     */
+    public void drainIjkDecodersForProfile(TsCodecDescriptor descriptor, IptvSettings settings) {
+        if (descriptor == null) {
+            return;
+        }
+        String key = descriptor.toDecoderPoolKey(settings);
+        Queue<PooledIjkDecoder> q = ijkDecoderPools.get(key);
+        if (q == null) {
+            return;
+        }
+        PooledIjkDecoder slot;
+        int drained = 0;
+        while ((slot = q.poll()) != null) {
+            try {
+                slot.player.release();
+            } catch (Throwable ignored) {
+            }
+            drained++;
+        }
+        if (drained > 0) {
+            Log.i(TAG, "Drained " + drained + " pooled decoder(s) for profile=" + key
+                    + " before fresh HEVC retry");
+        }
+    }
+
     private Queue<PooledIjkDecoder> getOrCreateIjkQueue(String profileKey) {
         Queue<PooledIjkDecoder> q = ijkDecoderPools.get(profileKey);
         if (q == null) {
@@ -277,9 +350,16 @@ public class CodecDecoderPool {
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "max-buffer-size", 2 * 1024 * 1024L);
 
         // 下载模块已完成 PAT+PMT+IDR 对齐，FFmpeg 仅需极小探针即可完成流信息识别，避免积压历史包导致慢放
+        // HEVC 4K 例外：Wi-Fi 组播加入初期的丢包常损坏首个 IDR，探针太小会探测不到视频参数
+        // (unspecified size) → MTK 硬解以 0x0 尺寸配置失败 (err -1010) 或被 ijk 直接跳过。
+        // 加大 HEVC 的探测窗口让 FFmpeg 等到下一个完整 IDR，代价仅是 4K 起播多等约 1 秒。
         boolean preAligned = desc != null && desc.keyframeAligned;
         long probeSize = preAligned ? (96 * 1024L) : (256 * 1024L);
         long analyzeUs = preAligned ? 120000L : 400000L;
+        if (isHevcStream) {
+            probeSize = Math.max(probeSize, 1536 * 1024L);
+            analyzeUs = Math.max(analyzeUs, 1500000L);
+        }
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "probesize", probeSize);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "analyzeduration", analyzeUs);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "fpsprobesize", 0);

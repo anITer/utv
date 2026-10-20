@@ -105,6 +105,9 @@ public class IjkVideoView extends FrameLayout {
     private OnHevcSoftwareDecodeListener mOnHevcSoftwareDecodeListener;
     // 4K HEVC 硬件解码不可用（厂商解码器配置失败降级软解）时，强制走系统播放器内核
     private boolean mForceFallbackPlayer = false;
+    // 同一频道播放期间只允许一次"全新实例重试"：MTK OMX HEVC 解码器
+    // 在旧实例尚未拆除完毕时配置必失败 (err -1010/-22)，重建干净实例即可恢复硬解
+    private boolean mHevcFreshRetryAttempted = false;
 
     /**
      * HEVC 硬件解码静默降级为软件解码的回调（如索尼/联发科 OMX.MTK.VIDEO.DECODER.HEVC
@@ -244,6 +247,7 @@ public class IjkVideoView extends FrameLayout {
     public void setVideoURI(Uri uri, Map<String, String> headers) {
         mUri = uri;
         mHeaders = headers;
+        mHevcFreshRetryAttempted = false;
         openVideo();
         requestLayout();
         invalidate();
@@ -453,6 +457,14 @@ public class IjkVideoView extends FrameLayout {
      * - 解码模块对象归还至 CodecDecoderPool（后台异步 reset 复用，不销毁重建）。
      */
     public void release(boolean cleartargetstate) {
+        release(cleartargetstate, false);
+    }
+
+    /**
+     * @param forceDestroyPooled true 时池化解码器不再回收复用而是彻底销毁
+     *                           （用于 HEVC 硬解配置失败后重建干净实例）
+     */
+    private void release(boolean cleartargetstate, boolean forceDestroyPooled) {
         mPlaybackSessionToken.incrementAndGet();
         mHwAudioCompanion.stop();
 
@@ -463,7 +475,7 @@ public class IjkVideoView extends FrameLayout {
         mActiveCodecDescriptor = null;
 
         if (mPooledIjkDecoder != null) {
-            boolean healthy = (mCurrentState != STATE_ERROR);
+            boolean healthy = (mCurrentState != STATE_ERROR) && !forceDestroyPooled;
             if (mMediaPlayer instanceof TextureMediaPlayer) {
                 try {
                     ((TextureMediaPlayer) mMediaPlayer).releaseSurfaceTexture();
@@ -942,13 +954,42 @@ public class IjkVideoView extends FrameLayout {
             if (raw instanceof IjkMediaPlayer) {
                 int vdec = ((IjkMediaPlayer) raw).getVideoDecoder();
                 if (vdec != IjkMediaPlayer.FFP_PROPV_DECODER_MEDIACODEC) {
-                    Log.w(TAG, "HEVC hardware decode unavailable (vdec=" + vdec
-                            + "), silently fell back to software decoding");
-                    mOnHevcSoftwareDecodeListener.onHevcSoftwareDecodeDetected();
+                    if (!mHevcFreshRetryAttempted) {
+                        retryHevcHardwareDecodeWithFreshInstance();
+                    } else {
+                        Log.w(TAG, "HEVC hardware decode unavailable again after fresh retry (vdec="
+                                + vdec + "), falling back to system player");
+                        mOnHevcSoftwareDecodeListener.onHevcSoftwareDecodeDetected();
+                    }
                 }
             }
         } catch (Throwable ignored) {
         }
+    }
+
+    /**
+     * HEVC 硬解静默降级后的自救重试：
+     * 索尼/联发科 OMX.MTK.VIDEO.DECODER.HEVC 在旧实例尚未拆除完毕（Surface 断开、
+     * 显存注销均为异步）时 configure 必失败 (setPortMode DynamicANWBuffer err -1010)，
+     * 失败后 ijk 无提示降级 avcodec 软解。这里彻底销毁半残实例、等待旧 OMX 资源释放、
+     * 再用全新实例重新初始化——干净环境下硬解必成；仍失败才回调外部走系统播放器兜底。
+     */
+    private void retryHevcHardwareDecodeWithFreshInstance() {
+        mHevcFreshRetryAttempted = true;
+        Log.w(TAG, "HEVC hw decode fell back to software; retrying once with a fresh decoder instance");
+        TsCodecDescriptor descriptorBeforeTeardown = mActiveCodecDescriptor;
+        release(false, true);
+        // 池中可能还有之前正常回收的同 Profile 实例，一并清空，确保重试用的是全新实例
+        CodecDecoderPool.getInstance().drainIjkDecodersForProfile(descriptorBeforeTeardown, mSettings);
+        mTargetState = STATE_PLAYING;
+        final long tokenAfterTeardown = mPlaybackSessionToken.get();
+        postDelayed(() -> {
+            if (tokenAfterTeardown != mPlaybackSessionToken.get() || mForceFallbackPlayer) {
+                return; // 期间用户已切台或兜底已触发
+            }
+            Log.i(TAG, "Fresh HEVC decode retry: re-opening stream");
+            openVideo();
+        }, 700);
     }
 
     private final IMediaPlayer.OnCompletionListener mCompletionListener = new IMediaPlayer.OnCompletionListener() {
