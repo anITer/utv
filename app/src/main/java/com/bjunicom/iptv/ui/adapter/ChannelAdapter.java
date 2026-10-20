@@ -31,7 +31,7 @@ public class ChannelAdapter extends RecyclerView.Adapter<ChannelAdapter.ViewHold
         default void onSwitchCategory(int delta) {
         }
 
-        default void onNavigateUpFromTop() {
+        default void onWrapToBottom() {
         }
 
         default void onWrapToTop() {
@@ -188,7 +188,7 @@ public class ChannelAdapter extends RecyclerView.Adapter<ChannelAdapter.ViewHold
         // 电视遥控器在频道列表中的快捷导航：
         // - 左/右方向键：直接切换频道分类标签 ([高清]央视 / [高清]卫视 / 4K / 标清 等)
         // - 红键/星号键/书签键：一键收藏/取消收藏当前焦点频道
-        // - 首项按上键跳到分类栏，末项按下键循环回首项
+        // - 首项按上键循环到末项，末项按下键循环到首项
         holder.itemView.setOnKeyListener((v, keyCode, event) -> {
             if (event.getAction() != KeyEvent.ACTION_DOWN || listener == null) {
                 return false;
@@ -204,7 +204,7 @@ public class ChannelAdapter extends RecyclerView.Adapter<ChannelAdapter.ViewHold
                 listener.onSwitchCategory(1);
                 return true;
             } else if (keyCode == KeyEvent.KEYCODE_DPAD_UP && adapterPos == 0) {
-                listener.onNavigateUpFromTop();
+                listener.onWrapToBottom();
                 return true;
             } else if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN && adapterPos == channels.size() - 1) {
                 listener.onWrapToTop();
