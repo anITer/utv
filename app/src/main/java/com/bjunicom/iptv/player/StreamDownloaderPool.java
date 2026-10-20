@@ -55,6 +55,9 @@ public class StreamDownloaderPool {
         return t;
     });
     private final AtomicInteger createdCount = new AtomicInteger(0);
+    // 进程级记录外部 HTTP 转发 (udpxy) 是否已出现过连接级失败：
+    // 一旦失败，本会话内后续所有 HTTP 播放地址跳过 2.5s 连接超时等待，立即回退组播，消除每次切台白等
+    private static final AtomicBoolean httpTransportBroken = new AtomicBoolean(false);
 
     public interface OnStreamEventsListener {
         void onCodecParsed(TsCodecDescriptor descriptor, PooledStreamDownloader downloader);
@@ -130,7 +133,9 @@ public class StreamDownloaderPool {
         // 冷启动时部分路由器/交换机的 IGMP 组播转发需要数秒才能建立，默认 4 秒超时窗口内首包可能尚未到达，
         // 导致每次冷启动后的首次连接必然失败；将首包等待宽限延长到 15 秒，期间周期性补发 IGMP 加入报告。
         private static final long MCAST_RECEIVE_TIMEOUT_MS = 4000L;
-        private static final long MCAST_FIRST_PACKET_GRACE_MS = 15000L;
+        // 首包宽限 45 秒：部分网络 (Wi-Fi + IGMP Snooping) 组播转发建立需 10~30 秒甚至更久，
+        // 宽限内每 4 秒补发 IGMP 加入报告；超时后由上层兜底链路发起全新一轮加入
+        private static final long MCAST_FIRST_PACKET_GRACE_MS = 45000L;
         private static final int MCAST_MAX_CONSECUTIVE_TIMEOUTS = 3;
 
         private final StreamDownloaderPool ownerPool;
@@ -161,6 +166,10 @@ public class StreamDownloaderPool {
         private boolean audioAligned = false;
         private long firstVideoPts = -1L;
         private long parseStartTimeMs = 0L;
+        // 解析时钟是否已锚定到首个数据字节：未锚定时 parseStartTimeMs 仅表示任务开始时间，
+        // 若期间经历过 udpxy HTTP 连接超时(2.5s)，会错误触发 IDR 对齐兜底逻辑，
+        // 导致 PAT/PMT 尚未解析就用默认 h264/mp2 凑数通知解码器（4K 频道将因此关闭 HEVC 硬解）
+        private boolean parseClockAnchored = false;
         private boolean codecNotified = false;
         private volatile TsCodecDescriptor currentDescriptor = null;
 
@@ -201,6 +210,7 @@ public class StreamDownloaderPool {
             audioAligned = false;
             firstVideoPts = -1L;
             codecNotified = false;
+            parseClockAnchored = false;
             currentDescriptor = null;
             currentSpeedBytesPerSec = 0L;
             bytesInCurrentWindow = 0L;
@@ -233,6 +243,7 @@ public class StreamDownloaderPool {
             sessionActive = true;
             streamEof = false;
             parseStartTimeMs = System.currentTimeMillis();
+            parseClockAnchored = false;
             speedWindowStartMs = parseStartTimeMs;
 
             ownerPool.getDownloadExecutor().execute(() ->
@@ -287,7 +298,13 @@ public class StreamDownloaderPool {
                 if (preferDirectMulticast) {
                     downloadFromMulticast(token, mcastTarget, listener);
                 } else if (uriStr.startsWith("http://") || uriStr.startsWith("https://")) {
-                    boolean httpOk = downloadFromHttp(token, uriStr, listener);
+                    boolean httpOk = false;
+                    if (!httpTransportBroken.get()) {
+                        httpOk = downloadFromHttp(token, uriStr, listener);
+                        if (!httpOk && isTokenValid(token)) {
+                            httpTransportBroken.set(true);
+                        }
+                    }
                     if (!httpOk && isTokenValid(token) && !TextUtils.isEmpty(mcastTarget)) {
                         Log.i(TAG, "HTTP stream unreachable, falling back in-downloader to multicast: " + mcastTarget);
                         downloadFromMulticast(token, mcastTarget, listener);
@@ -574,6 +591,12 @@ public class StreamDownloaderPool {
 
         private void recordDownloadedBytes(int bytes) {
             long now = System.currentTimeMillis();
+            // 将 MPEG-TS 解析时钟锚定到首个数据字节，而非 startDownload 调用时刻，
+            // 避免前置的 udpxy HTTP 连接超时(2.5s)挤占 IDR 对齐等待窗口、绕过 PAT/PMT 解析
+            if (!parseClockAnchored) {
+                parseClockAnchored = true;
+                parseStartTimeMs = now;
+            }
             bytesInCurrentWindow += bytes;
             long elapsed = now - speedWindowStartMs;
             if (elapsed >= 500L) {

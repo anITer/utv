@@ -102,6 +102,28 @@ public class IjkVideoView extends FrameLayout {
     private IMediaPlayer.OnCompletionListener mOnCompletionListener;
     private IMediaPlayer.OnErrorListener mOnErrorListener;
     private IMediaPlayer.OnInfoListener mOnInfoListener;
+    private OnHevcSoftwareDecodeListener mOnHevcSoftwareDecodeListener;
+    // 4K HEVC 硬件解码不可用（厂商解码器配置失败降级软解）时，强制走系统播放器内核
+    private boolean mForceFallbackPlayer = false;
+
+    /**
+     * HEVC 硬件解码静默降级为软件解码的回调（如索尼/联发科 OMX.MTK.VIDEO.DECODER.HEVC
+     * Surface 配置失败时 ijk 无提示回退 avcodec 软解，4K@50fps 软解帧率仅个位数）
+     */
+    public interface OnHevcSoftwareDecodeListener {
+        void onHevcSoftwareDecodeDetected();
+    }
+
+    public void setOnHevcSoftwareDecodeListener(OnHevcSoftwareDecodeListener l) {
+        mOnHevcSoftwareDecodeListener = l;
+    }
+
+    /**
+     * 由外部（MainActivity）按频道设置：true 时本次及后续播放强制使用系统播放器内核
+     */
+    public void setForceFallbackPlayer(boolean force) {
+        mForceFallbackPlayer = force;
+    }
 
     private long mPrepareStartTime = 0;
     private long mPrepareEndTime = 0;
@@ -256,7 +278,8 @@ public class IjkVideoView extends FrameLayout {
         try {
             Uri playbackUri = resolvePlaybackUri(mUri);
             String scheme = playbackUri.getScheme();
-            boolean useSeparatedPoolPipeline = (mSettings.getPlayerType() == IptvSettings.PLAYER_IJK)
+            boolean useSeparatedPoolPipeline = (getEffectivePlayerType() == IptvSettings.PLAYER_IJK)
+                    && !mForceFallbackPlayer
                     && scheme != null
                     && (scheme.equalsIgnoreCase("http")
                     || scheme.equalsIgnoreCase("https")
@@ -298,7 +321,7 @@ public class IjkVideoView extends FrameLayout {
             }
 
             // 非 IJK 模式 (ExoPlayer / AndroidMediaPlayer) 走常规播放器路径
-            mMediaPlayer = createFallbackPlayer(mSettings.getPlayerType());
+            mMediaPlayer = createFallbackPlayer(getEffectivePlayerType());
             attachPlayerListeners(mMediaPlayer);
             mMediaPlayer.setDataSource(mAppContext, playbackUri, mHeaders);
             bindSurfaceHolder(mMediaPlayer, mSurfaceHolder);
@@ -362,7 +385,7 @@ public class IjkVideoView extends FrameLayout {
         if (scheme != null && (scheme.equalsIgnoreCase("rtp") || scheme.equalsIgnoreCase("udp"))) {
             // StreamDownloaderPool 内置了直连 IGMP 组播 Socket 的能力，可直接处理 rtp:// / udp://；
             // 若用户切换到 ExoPlayer / AndroidMediaPlayer，则通过 LocalMulticastProxyServer 转换。
-            if (mSettings.getPlayerType() != IptvSettings.PLAYER_IJK && mAppContext instanceof IptvApplication) {
+            if (getEffectivePlayerType() != IptvSettings.PLAYER_IJK && mAppContext instanceof IptvApplication) {
                 int proxyPort = ((IptvApplication) mAppContext).getLocalProxyPort();
                 if (proxyPort > 0) {
                     String localUrl = StreamUrlResolver.toUdpxyUrl(
@@ -385,8 +408,14 @@ public class IjkVideoView extends FrameLayout {
         mp.setOnInfoListener(mInfoListener);
     }
 
-    public IMediaPlayer createFallbackPlayer(int playerType) {
-        IMediaPlayer mediaPlayer;
+    /**
+     * 实际生效的播放器内核：4K HEVC 硬件解码不可用时强制为系统播放器
+     */
+    private int getEffectivePlayerType() {
+        return mForceFallbackPlayer ? IptvSettings.PLAYER_ANDROID_MEDIA : mSettings.getPlayerType();
+    }
+
+    public IMediaPlayer createFallbackPlayer(int playerType) {        IMediaPlayer mediaPlayer;
         switch (playerType) {
             case IptvSettings.PLAYER_IJK_EXO:
                 try {
@@ -823,6 +852,7 @@ public class IjkVideoView extends FrameLayout {
             } catch (Throwable ignored) {
             }
             checkAndStartHwAudioIfNeeded();
+            checkHevcHardwareDecodeFailure(mp);
 
             mVideoWidth = mp.getVideoWidth();
             mVideoHeight = mp.getVideoHeight();
@@ -885,6 +915,39 @@ public class IjkVideoView extends FrameLayout {
             }
         } catch (Throwable t) {
             Log.w(TAG, "checkAndStartHwAudioIfNeeded failed", t);
+        }
+    }
+
+    /**
+     * 检测 HEVC 硬件解码是否静默降级为软件解码：
+     * 部分电视 (如索尼/联发科) 的 OMX HEVC 解码器 Surface 配置失败 (err -22) 时，
+     * ijk 会无提示回退 avcodec 软解，4K@50fps 软解帧率仅个位数且无任何报错，
+     * 必须在 onPrepared 后主动检查解码器实现并回调外部切换播放内核。
+     */
+    private void checkHevcHardwareDecodeFailure(IMediaPlayer mp) {
+        if (mOnHevcSoftwareDecodeListener == null || mForceFallbackPlayer) {
+            return;
+        }
+        if (mPooledIjkDecoder == null || mActiveCodecDescriptor == null
+                || !mActiveCodecDescriptor.isHevc()) {
+            return;
+        }
+        if (mSettings.getPlayerType() != IptvSettings.PLAYER_IJK
+                || !mSettings.isMediaCodecEnabled()
+                || !mSettings.isMediaCodecHevcEnabled()) {
+            return;
+        }
+        try {
+            IMediaPlayer raw = unwrapIjkMediaPlayer();
+            if (raw instanceof IjkMediaPlayer) {
+                int vdec = ((IjkMediaPlayer) raw).getVideoDecoder();
+                if (vdec != IjkMediaPlayer.FFP_PROPV_DECODER_MEDIACODEC) {
+                    Log.w(TAG, "HEVC hardware decode unavailable (vdec=" + vdec
+                            + "), silently fell back to software decoding");
+                    mOnHevcSoftwareDecodeListener.onHevcSoftwareDecodeDetected();
+                }
+            }
+        } catch (Throwable ignored) {
         }
     }
 

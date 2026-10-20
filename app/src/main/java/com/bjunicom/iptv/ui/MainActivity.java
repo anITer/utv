@@ -99,6 +99,8 @@ public class MainActivity extends AppCompatActivity {
     private IptvChannel currentChannel;
     private boolean fallbackToLocalProxyAttempted = false;
     private boolean udpxyUnreachableInSession = false;
+    // 本会话内检测到 4K HEVC 硬件解码不可用后，4K 频道强制走系统播放器 + 内置本地组播代理
+    private boolean hevcHwFallbackFor4k = false;
     private long lastBackPressTimeMs = 0L;
     private final StringBuilder remoteNumberBuffer = new StringBuilder();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -539,6 +541,19 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void setupPlayerListeners() {
+        // 4K HEVC 硬件解码静默降级软解（厂商解码器 Surface 配置失败）时，
+        // 自动切换系统播放器内核经本地组播代理重播，避免 4K 软解帧率个位数
+        videoView.setOnHevcSoftwareDecodeListener(() -> {
+            if (hevcHwFallbackFor4k) {
+                return;
+            }
+            hevcHwFallbackFor4k = true;
+            Toast.makeText(this, "检测到 4K 硬件解码不可用，已切换系统播放器内核", Toast.LENGTH_LONG).show();
+            if (currentChannel != null) {
+                playChannel(currentChannel);
+            }
+        });
+
         videoView.setOnPreparedListener(mp -> {
             loadingOverlay.setVisibility(View.GONE);
             if (currentChannel != null) {
@@ -659,8 +674,14 @@ public class MainActivity extends AppCompatActivity {
             localProxyPort = ((IptvApplication) getApplication()).getLocalProxyPort();
         }
 
+        // 4K 硬件解码不可用时会话级回退：强制系统播放器内核 + 内置本地组播代理 URL
+        boolean forceSystemPlayerFor4k = hevcHwFallbackFor4k && "4K".equals(channel.getResolutionTag());
+        videoView.setForceFallbackPlayer(forceSystemPlayerFor4k);
+
         String resolvedUrl;
-        if (settings.getStreamMode() == IptvSettings.STREAM_MODE_UDPXY
+        if (forceSystemPlayerFor4k && localProxyPort > 0) {
+            resolvedUrl = StreamUrlResolver.toUdpxyUrl(channel.getRawUrl(), "127.0.0.1:" + localProxyPort);
+        } else if (settings.getStreamMode() == IptvSettings.STREAM_MODE_UDPXY
                 && udpxyUnreachableInSession
                 && localProxyPort > 0) {
             // 若当前会话已检测到外部 udpxy 不可达，切台时直接走本地网卡组播直连，避免每次切台等待 udpxy 超时
