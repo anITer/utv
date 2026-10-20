@@ -10,6 +10,83 @@
         android:layout_height="wrap_content"
         android:orientation="vertical">
 
+        <!-- Section 0: IPTV 运营商节目源切换卡片 (北京联通 / 北京移动 / 北京电信 / 三网聚合) -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp"
+            android:background="@drawable/bg_md3_card_container"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fontFamily="sans-serif-medium"
+                android:text="北京 IPTV 运营商节目源 (联通 / 移动 / 电信)"
+                android:textColor="@color/md_theme_dark_primary"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <RadioGroup
+                android:id="@+id/rg_isp_provider"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp">
+
+                <RadioButton
+                    android:id="@+id/rb_isp_unicom"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/bg_badge"
+                    android:buttonTint="@color/md_theme_dark_primary"
+                    android:focusable="true"
+                    android:paddingHorizontal="8dp"
+                    android:text="北京联通 IPTV (bj-unicom-iptv 组播源 rtp://239.3.1.x)"
+                    android:textColor="@color/text_primary"
+                    android:textSize="13sp" />
+
+                <RadioButton
+                    android:id="@+id/rb_isp_mobile"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:background="@drawable/bg_badge"
+                    android:buttonTint="@color/md_theme_dark_primary"
+                    android:focusable="true"
+                    android:paddingHorizontal="8dp"
+                    android:text="北京移动 IPTV (bj-mobile-iptv 单播源 http://.../*.m3u8)"
+                    android:textColor="@color/text_primary"
+                    android:textSize="13sp" />
+
+                <RadioButton
+                    android:id="@+id/rb_isp_telecom"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:background="@drawable/bg_badge"
+                    android:buttonTint="@color/md_theme_dark_primary"
+                    android:focusable="true"
+                    android:paddingHorizontal="8dp"
+                    android:text="北京电信 IPTV (bj-telecom-iptv 组播源 rtp://225.1.8.x)"
+                    android:textColor="@color/text_primary"
+                    android:textSize="13sp" />
+
+                <RadioButton
+                    android:id="@+id/rb_isp_all"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:background="@drawable/bg_badge"
+                    android:buttonTint="@color/md_theme_dark_primary"
+                    android:focusable="true"
+                    android:paddingHorizontal="8dp"
+                    android:text="北京三网聚合 (同时加载联通 + 移动 + 电信全部频道)"
+                    android:textColor="@color/text_primary"
+                    android:textSize="13sp" />
+            </RadioGroup>
+        </LinearLayout>
+
         <!-- Section 1: 网络转发模式卡片 -->
         <LinearLayout
             android:layout_width="match_parent"

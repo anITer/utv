@@ -71,11 +71,12 @@ public class MulticastScannerEngine {
     private ExecutorService workerPool;
     private Process activeShellProcess;
 
-    // 北京联通高频组播端口列表 (按出现频次降序排列，加速动态扫描)
+    // 北京联通与北京电信高频组播端口列表 (按出现频次降序排列，加速动态扫描)
     private static final int[] FAST_UNICOM_PORTS = {
-            8001, 4120, 8000, 4220, 2000, 1234,
+            8002, 8001, 4120, 8000, 4220, 2000, 1234, 5008,
             3001, 3002, 3003, 3004, 3005, 3006,
-            8004, 8008, 8012, 8016, 8020, 8028, 8032, 8036, 9000, 9012, 9020, 9024
+            8004, 8008, 8012, 8016, 8020, 8028, 8032, 8036, 8068, 8080, 8128, 8264,
+            9000, 9004, 9008, 9012, 9016, 9020, 9024
     };
 
     public MulticastScannerEngine(Context context) {
@@ -236,9 +237,10 @@ public class MulticastScannerEngine {
                             channel = known;
                         } else {
                             String rawUrl = "rtp://" + ip + ":" + port;
+                            String ispPrefix = cleanSubnet.startsWith("225.") ? "电信组播" : "联通组播";
                             String extInf = String.format(Locale.US,
-                                    "#EXTINF:-1 tvg-id=\"\" tvg-name=\"\" tvg-logo=\"\" group-title=\"动态扫描发现\",联通组播_%s_%d[%d][%s]",
-                                    ip, port, 500 + idx, probe.resolutionFlag);
+                                    "#EXTINF:-1 tvg-id=\"\" tvg-name=\"\" tvg-logo=\"\" group-title=\"动态扫描发现\",%s_%s_%d[%d][%s]",
+                                    ispPrefix, ip, port, 500 + idx, probe.resolutionFlag);
                             channel = M3uParser.buildChannel(idx, extInf, rawUrl);
                             channel.setDiscoveredByScan(true);
                         }
@@ -449,11 +451,19 @@ public class MulticastScannerEngine {
     }
 
     /**
-     * 探测单个组播地址或 udpxy 代理地址的连通性、MPEG-TS 同步字节及音视频轨道信息
+     * 探测单个组播地址、udpxy 代理地址或 HTTP/HLS 单播地址的连通性、MPEG-TS 同步字节及音视频轨道信息
      */
     private StreamProbeResult probeChannelStream(String ip, int port, IptvChannel knownChannel, int timeoutMs) {
         StreamProbeResult res = new StreamProbeResult();
         if (TextUtils.isEmpty(ip) || port <= 0) {
+            if (knownChannel != null && !TextUtils.isEmpty(knownChannel.getRawUrl())) {
+                String rawUrl = knownChannel.getRawUrl().trim();
+                if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) {
+                    long t0 = System.currentTimeMillis();
+                    res = probeHttpTsStream(rawUrl, knownChannel, timeoutMs);
+                    res.latencyMs = System.currentTimeMillis() - t0;
+                }
+            }
             return res;
         }
         long t0 = System.currentTimeMillis();
@@ -495,9 +505,12 @@ public class MulticastScannerEngine {
                 try (InputStream is = conn.getInputStream()) {
                     byte[] buf = new byte[1316];
                     int read = is.read(buf);
-                    if (read > 0 && containsTsSyncByte(buf, read)) {
-                        result.connected = true;
-                        populateStreamTrackDetails(result, buf, read, knownChannel);
+                    if (read > 0) {
+                        String head = new String(buf, 0, Math.min(read, 128), StandardCharsets.UTF_8);
+                        if (containsTsSyncByte(buf, read) || head.contains("#EXTM3U") || head.contains("#EXT-X-")) {
+                            result.connected = true;
+                            populateStreamTrackDetails(result, buf, read, knownChannel);
+                        }
                     }
                 }
             }

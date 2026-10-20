@@ -95,21 +95,38 @@
                 style="@style/Widget.BjUnicomIptv.HudButton"
                 android:layout_width="wrap_content"
                 android:layout_height="38dp"
+                android:layout_marginEnd="8dp"
                 android:drawableStart="@drawable/ic_flat_menu"
                 android:drawablePadding="6dp"
                 android:focusable="true"
                 android:nextFocusDown="@id/btn_prev_channel"
                 android:nextFocusLeft="@id/btn_reload_stream"
-                android:nextFocusRight="@id/btn_open_scanner"
+                android:nextFocusRight="@id/btn_switch_isp"
                 android:nextFocusUp="@id/btn_prev_channel"
                 android:paddingHorizontal="14dp"
                 android:text="频道列表"
                 android:textSize="13sp" />
 
+            <Button
+                android:id="@+id/btn_switch_isp"
+                style="@style/Widget.BjUnicomIptv.HudButton"
+                android:layout_width="wrap_content"
+                android:layout_height="38dp"
+                android:drawablePadding="6dp"
+                android:focusable="true"
+                android:nextFocusDown="@id/btn_prev_channel"
+                android:nextFocusLeft="@id/btn_toggle_drawer"
+                android:nextFocusRight="@id/btn_open_scanner"
+                android:nextFocusUp="@id/btn_prev_channel"
+                android:paddingHorizontal="14dp"
+                android:text="北京联通"
+                android:textColor="@color/accent_amber"
+                android:textSize="13sp" />
+
             <View
                 android:layout_width="8dp"
                 android:layout_height="8dp"
-                android:layout_marginStart="16dp"
+                android:layout_marginStart="14dp"
                 android:background="@drawable/ic_md_live_dot" />
 
             <TextView
@@ -151,7 +168,7 @@
                 android:drawablePadding="6dp"
                 android:focusable="true"
                 android:nextFocusDown="@id/btn_aspect_ratio"
-                android:nextFocusLeft="@id/btn_toggle_drawer"
+                android:nextFocusLeft="@id/btn_switch_isp"
                 android:nextFocusRight="@id/btn_open_settings"
                 android:nextFocusUp="@id/btn_aspect_ratio"
                 android:paddingHorizontal="14dp"
@@ -452,11 +469,68 @@
                 android:background="@drawable/bg_badge"
                 android:buttonTint="@color/md_theme_dark_primary"
                 android:focusable="true"
-                android:nextFocusDown="@id/et_search_channel"
+                android:nextFocusDown="@id/btn_isp_unicom"
                 android:nextFocusLeft="@id/btn_drawer_numpad"
                 android:paddingHorizontal="8dp"
                 android:text="仅看可用"
                 android:textColor="@color/text_secondary"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <!-- 运营商节目源快捷切换栏：北京联通 / 北京移动 / 北京电信 / 三网聚合 -->
+        <LinearLayout
+            android:id="@+id/layout_drawer_isp_bar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/btn_isp_unicom"
+                style="@style/Widget.BjUnicomIptv.HudButton"
+                android:layout_width="0dp"
+                android:layout_height="32dp"
+                android:layout_marginEnd="6dp"
+                android:layout_weight="1"
+                android:focusable="true"
+                android:paddingHorizontal="6dp"
+                android:text="北京联通"
+                android:textSize="12sp" />
+
+            <Button
+                android:id="@+id/btn_isp_mobile"
+                style="@style/Widget.BjUnicomIptv.HudButton"
+                android:layout_width="0dp"
+                android:layout_height="32dp"
+                android:layout_marginEnd="6dp"
+                android:layout_weight="1"
+                android:focusable="true"
+                android:paddingHorizontal="6dp"
+                android:text="北京移动"
+                android:textSize="12sp" />
+
+            <Button
+                android:id="@+id/btn_isp_telecom"
+                style="@style/Widget.BjUnicomIptv.HudButton"
+                android:layout_width="0dp"
+                android:layout_height="32dp"
+                android:layout_marginEnd="6dp"
+                android:layout_weight="1"
+                android:focusable="true"
+                android:paddingHorizontal="6dp"
+                android:text="北京电信"
+                android:textSize="12sp" />
+
+            <Button
+                android:id="@+id/btn_isp_all"
+                style="@style/Widget.BjUnicomIptv.HudButton"
+                android:layout_width="0dp"
+                android:layout_height="32dp"
+                android:layout_weight="1"
+                android:focusable="true"
+                android:paddingHorizontal="6dp"
+                android:text="三网聚合"
                 android:textSize="12sp" />
         </LinearLayout>
 
@@ -465,17 +539,17 @@
             android:id="@+id/et_search_channel"
             android:layout_width="match_parent"
             android:layout_height="42dp"
-            android:layout_marginTop="12dp"
+            android:layout_marginTop="10dp"
             android:background="@drawable/bg_md3_search_bar"
             android:drawableStart="@drawable/ic_md_search"
             android:drawablePadding="10dp"
             android:focusable="true"
             android:focusableInTouchMode="false"
-            android:hint="搜索频道名 / 台号 / 239.3.1.x..."
+            android:hint="搜索频道名 / 台号 / 组播或单播地址..."
             android:imeOptions="actionSearch"
             android:inputType="text"
             android:nextFocusDown="@id/rv_categories"
-            android:nextFocusUp="@id/cb_only_available"
+            android:nextFocusUp="@id/btn_isp_unicom"
             android:paddingHorizontal="16dp"
             android:singleLine="true"
             android:textColor="@color/text_primary"

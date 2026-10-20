@@ -27,6 +27,7 @@ public final class M3uParser {
     private static final Pattern ATTR_TVG_NAME = Pattern.compile("tvg-name=\"([^\"]*)\"");
     private static final Pattern ATTR_TVG_LOGO = Pattern.compile("tvg-logo=\"([^\"]*)\"");
     private static final Pattern ATTR_GROUP_TITLE = Pattern.compile("group-title=\"([^\"]*)\"");
+    private static final Pattern ATTR_GROUP_TITLE_UNCLOSED = Pattern.compile("group-title=\"([^\",]*)");
     private static final Pattern BRACKET_NUMBER = Pattern.compile("\\[(\\d{1,4})\\]");
     private static final Pattern MULTICAST_ADDR = Pattern.compile("(2(?:2[4-9]|3\\d)\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}):(\\d{1,5})");
 
@@ -89,11 +90,14 @@ public final class M3uParser {
         channel.setTvgName(extractAttr(ATTR_TVG_NAME, extInfLine));
         channel.setTvgLogo(extractAttr(ATTR_TVG_LOGO, extInfLine));
         String groupRaw = extractAttr(ATTR_GROUP_TITLE, extInfLine);
+        if (isEmpty(groupRaw)) {
+            groupRaw = extractAttr(ATTR_GROUP_TITLE_UNCLOSED, extInfLine);
+        }
         channel.setGroupTitleRaw(groupRaw);
 
         // 提取逗号后的频道名
         String rawTitle;
-        int commaIndex = extInfLine.indexOf(',');
+        int commaIndex = extInfLine.lastIndexOf(',');
         if (commaIndex >= 0 && commaIndex < extInfLine.length() - 1) {
             rawTitle = extInfLine.substring(commaIndex + 1).trim();
         } else {
@@ -101,11 +105,16 @@ public final class M3uParser {
         }
         channel.setRawTitle(rawTitle);
 
-        // 提取分辨率标识: [4K], [高清], [标清]
+        // 提取分辨率标识: [4K], [超清], [高清], [标清]
         String resTag = "标清";
-        if (rawTitle.contains("[4K]") || (groupRaw != null && groupRaw.contains("4K"))) {
+        if (rawTitle.contains("[4K]")
+                || rawTitle.contains("[超清]")
+                || rawTitle.toUpperCase().contains("4K")
+                || (groupRaw != null && groupRaw.contains("4K"))) {
             resTag = "4K";
-        } else if (rawTitle.contains("[高清]") || (groupRaw != null && groupRaw.contains("[高清]"))) {
+        } else if (rawTitle.contains("[高清]")
+                || rawTitle.endsWith("HD")
+                || (groupRaw != null && groupRaw.contains("[高清]"))) {
             resTag = "高清";
         } else if (rawTitle.contains("[标清]") || (groupRaw != null && groupRaw.contains("[标清]"))) {
             resTag = "标清";
@@ -124,11 +133,12 @@ public final class M3uParser {
             channel.setChannelNumber(index);
         }
 
-        // 生成干净的频道展示名 (移除 [1], [高清], [4K], [标清] 等后缀)
+        // 生成干净的频道展示名 (移除 [1], [高清], [4K], [超清], [标清] 等后缀)
         String cleanName = rawTitle
                 .replaceAll("\\[\\d{1,4}\\]", "")
                 .replace("[高清]", "")
                 .replace("[4K]", "")
+                .replace("[超清]", "")
                 .replace("[标清]", "")
                 .replace("[其它]", "")
                 .trim();

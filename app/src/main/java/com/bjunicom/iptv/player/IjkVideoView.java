@@ -256,7 +256,9 @@ public class IjkVideoView extends FrameLayout {
         try {
             Uri playbackUri = resolvePlaybackUri(mUri);
             String scheme = playbackUri.getScheme();
+            boolean isHlsStream = isHlsUri(playbackUri) || isHlsUrl(mRawChannelUrl);
             boolean useSeparatedPoolPipeline = (mSettings.getPlayerType() == IptvSettings.PLAYER_IJK)
+                    && !isHlsStream
                     && scheme != null
                     && (scheme.equalsIgnoreCase("http")
                     || scheme.equalsIgnoreCase("https")
@@ -297,8 +299,23 @@ public class IjkVideoView extends FrameLayout {
                 return;
             }
 
-            // 非 IJK 模式 (ExoPlayer / AndroidMediaPlayer) 走常规播放器路径
-            mMediaPlayer = createFallbackPlayer(mSettings.getPlayerType());
+            if (isHlsStream && mSettings.getPlayerType() == IptvSettings.PLAYER_IJK) {
+                TsCodecDescriptor hlsDesc = TsCodecDescriptor.createDefault(false);
+                mActiveCodecDescriptor = hlsDesc;
+                mPooledIjkDecoder = CodecDecoderPool.getInstance().acquireIjkDecoder(hlsDesc, mSettings);
+                IjkMediaPlayer ijkPlayer = mPooledIjkDecoder.player;
+                ijkPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "an", 0);
+                ijkPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "probesize", 512 * 1024L);
+                ijkPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "analyzeduration", 1000000L);
+                if (mSettings.getRenderViewType() == RENDER_TEXTURE_VIEW) {
+                    mMediaPlayer = new TextureMediaPlayer(ijkPlayer);
+                } else {
+                    mMediaPlayer = ijkPlayer;
+                }
+            } else {
+                // 非 IJK 模式 (ExoPlayer / AndroidMediaPlayer) 走常规播放器路径
+                mMediaPlayer = createFallbackPlayer(mSettings.getPlayerType());
+            }
             attachPlayerListeners(mMediaPlayer);
             mMediaPlayer.setDataSource(mAppContext, playbackUri, mHeaders);
             bindSurfaceHolder(mMediaPlayer, mSurfaceHolder);
@@ -385,9 +402,32 @@ public class IjkVideoView extends FrameLayout {
         mp.setOnInfoListener(mInfoListener);
     }
 
+    public static boolean isHlsUri(Uri uri) {
+        return uri != null && isHlsUrl(uri.toString());
+    }
+
+    public static boolean isHlsUrl(String url) {
+        if (TextUtils.isEmpty(url)) {
+            return false;
+        }
+        String lower = url.toLowerCase();
+        return lower.contains(".m3u8");
+    }
+
     public IMediaPlayer createFallbackPlayer(int playerType) {
         IMediaPlayer mediaPlayer;
         switch (playerType) {
+            case IptvSettings.PLAYER_IJK:
+                try {
+                    IjkMediaPlayer ijkPlayer = new IjkMediaPlayer();
+                    CodecDecoderPool.configureIjkOptionsForCodec(
+                            ijkPlayer, TsCodecDescriptor.createDefault(false), mSettings);
+                    mediaPlayer = ijkPlayer;
+                } catch (Throwable t) {
+                    Log.e(TAG, "Failed to init IjkMediaPlayer, falling back to AndroidMediaPlayer", t);
+                    mediaPlayer = new AndroidMediaPlayer();
+                }
+                break;
             case IptvSettings.PLAYER_IJK_EXO:
                 try {
                     mediaPlayer = new IjkExoMediaPlayer(mAppContext);

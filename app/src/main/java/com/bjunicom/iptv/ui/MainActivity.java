@@ -77,8 +77,13 @@ public class MainActivity extends AppCompatActivity {
     private TextView tvOsdGroupName;
     private TextView tvOsdStreamUrl;
     private TextView tvOsdTrackInfo;
+    private Button btnSwitchIsp;
     private Button btnFavoriteChannel;
     private Button btnPrevChannel;
+    private Button btnIspUnicom;
+    private Button btnIspMobile;
+    private Button btnIspTelecom;
+    private Button btnIspAll;
     private View[] hudButtons;
     private int currentHudFocusIndex = 0;
     private boolean longPressCenterHandled = false;
@@ -178,6 +183,7 @@ public class MainActivity extends AppCompatActivity {
         tvOsdGroupName = findViewById(R.id.tv_osd_group_name);
         tvOsdStreamUrl = findViewById(R.id.tv_osd_stream_url);
         tvOsdTrackInfo = findViewById(R.id.tv_osd_track_info);
+        btnSwitchIsp = findViewById(R.id.btn_switch_isp);
         btnFavoriteChannel = findViewById(R.id.btn_favorite_channel);
         btnPrevChannel = findViewById(R.id.btn_prev_channel);
 
@@ -186,6 +192,10 @@ public class MainActivity extends AppCompatActivity {
         etSearchChannel = findViewById(R.id.et_search_channel);
         rvCategories = findViewById(R.id.rv_categories);
         rvChannels = findViewById(R.id.rv_channels);
+        btnIspUnicom = findViewById(R.id.btn_isp_unicom);
+        btnIspMobile = findViewById(R.id.btn_isp_mobile);
+        btnIspTelecom = findViewById(R.id.btn_isp_telecom);
+        btnIspAll = findViewById(R.id.btn_isp_all);
 
         cbOnlyAvailable.setChecked(settings.isOnlyShowAvailable());
         cbOnlyAvailable.setOnCheckedChangeListener((buttonView, isChecked) -> {
@@ -210,6 +220,23 @@ public class MainActivity extends AppCompatActivity {
 
         findViewById(R.id.btn_toggle_drawer).setOnClickListener(v -> toggleChannelDrawer());
 
+        if (btnSwitchIsp != null) {
+            btnSwitchIsp.setOnClickListener(v -> showIspSwitchDialog());
+        }
+
+        if (btnIspUnicom != null) {
+            btnIspUnicom.setOnClickListener(v -> switchIspProvider(IptvSettings.ISP_BEIJING_UNICOM));
+        }
+        if (btnIspMobile != null) {
+            btnIspMobile.setOnClickListener(v -> switchIspProvider(IptvSettings.ISP_BEIJING_MOBILE));
+        }
+        if (btnIspTelecom != null) {
+            btnIspTelecom.setOnClickListener(v -> switchIspProvider(IptvSettings.ISP_BEIJING_TELECOM));
+        }
+        if (btnIspAll != null) {
+            btnIspAll.setOnClickListener(v -> switchIspProvider(IptvSettings.ISP_ALL_MERGED));
+        }
+
         findViewById(R.id.btn_open_scanner).setOnClickListener(v -> openScannerActivity());
 
         findViewById(R.id.btn_open_settings).setOnClickListener(v -> showSettingsDialog());
@@ -231,11 +258,13 @@ public class MainActivity extends AppCompatActivity {
         });
 
         setupButtonFocusEffects();
+        updateIspButtonsVisualState();
     }
 
     private void setupButtonFocusEffects() {
         hudButtons = new View[]{
                 findViewById(R.id.btn_toggle_drawer),
+                findViewById(R.id.btn_switch_isp),
                 findViewById(R.id.btn_open_scanner),
                 findViewById(R.id.btn_open_settings),
                 findViewById(R.id.btn_prev_channel),
@@ -289,8 +318,7 @@ public class MainActivity extends AppCompatActivity {
                         return false;
                     }
                     if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
-                        drawerFocusOnCategories = true;
-                        focusSelectedCategoryTab();
+                        requestFocusCompat(getActiveDrawerIspButton());
                         return true;
                     } else if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT || keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
                         if (v.getId() == R.id.btn_drawer_numpad) {
@@ -298,6 +326,49 @@ public class MainActivity extends AppCompatActivity {
                         } else {
                             requestFocusCompat(findViewById(R.id.btn_drawer_numpad));
                         }
+                        return true;
+                    }
+                    return false;
+                });
+            }
+        }
+
+        final Button[] ispBarBtns = {btnIspUnicom, btnIspMobile, btnIspTelecom, btnIspAll};
+        for (int i = 0; i < ispBarBtns.length; i++) {
+            final int ispIdx = i;
+            Button ispBtn = ispBarBtns[i];
+            if (ispBtn != null) {
+                ispBtn.setFocusable(true);
+                ispBtn.setBackgroundTintList(null);
+                ispBtn.setOnFocusChangeListener((v, hasFocus) -> {
+                    v.animate()
+                            .scaleX(hasFocus ? 1.06f : 1.0f)
+                            .scaleY(hasFocus ? 1.06f : 1.0f)
+                            .setDuration(120)
+                            .start();
+                    updateIspButtonsVisualState();
+                    if (!hasFocus) {
+                        v.setFocusableInTouchMode(false);
+                    }
+                });
+                ispBtn.setOnKeyListener((v, keyCode, event) -> {
+                    if (event.getAction() != KeyEvent.ACTION_DOWN) {
+                        return false;
+                    }
+                    if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                        drawerFocusOnCategories = true;
+                        focusSelectedCategoryTab();
+                        return true;
+                    } else if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+                        requestFocusCompat(findViewById(R.id.btn_drawer_numpad));
+                        return true;
+                    } else if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+                        int prev = (ispIdx - 1 + ispBarBtns.length) % ispBarBtns.length;
+                        requestFocusCompat(ispBarBtns[prev]);
+                        return true;
+                    } else if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                        int next = (ispIdx + 1) % ispBarBtns.length;
+                        requestFocusCompat(ispBarBtns[next]);
                         return true;
                     }
                     return false;
@@ -473,7 +544,7 @@ public class MainActivity extends AppCompatActivity {
                     @Override
                     public void onRequestHeaderFocus() {
                         drawerFocusOnCategories = false;
-                        requestFocusCompat(findViewById(R.id.btn_drawer_numpad));
+                        requestFocusCompat(getActiveDrawerIspButton());
                     }
 
                     @Override
@@ -577,7 +648,7 @@ public class MainActivity extends AppCompatActivity {
         });
 
         videoView.setOnErrorListener((mp, frameworkErr, implErr) -> {
-            if (currentChannel != null && !fallbackToLocalProxyAttempted) {
+            if (currentChannel != null && currentChannel.isMulticastStream() && !fallbackToLocalProxyAttempted) {
                 fallbackToLocalProxyAttempted = true;
                 if (settings.getStreamMode() == IptvSettings.STREAM_MODE_UDPXY) {
                     udpxyUnreachableInSession = true;
@@ -600,7 +671,11 @@ public class MainActivity extends AppCompatActivity {
                 currentChannel.setConnected(false);
                 channelAdapter.notifyDataSetChanged();
             }
-            tvOsdTrackInfo.setText("连接失败 (请按遥控器[菜单]检查 udpxy/内置组播代理设置，或按[绿键]打开「组播动态扫描」)");
+            if (currentChannel != null && !currentChannel.isMulticastStream()) {
+                tvOsdTrackInfo.setText("单播流连接失败 (请检查北京移动 IPTV 专网/网络环境或切换其它频道)");
+            } else {
+                tvOsdTrackInfo.setText("连接失败 (请按遥控器[菜单]检查 udpxy/内置组播代理设置，或按[绿键]打开「组播动态扫描」)");
+            }
             showHudTemporarily();
             return true;
         });
@@ -623,8 +698,9 @@ public class MainActivity extends AppCompatActivity {
         }
         String statsSuffix = availableCount > 0
                 ? String.format(Locale.US, " (%d/%d 可用)", availableCount, all.size())
-                : String.format(Locale.US, " (共%d频道)", all.size());
-        tvDrawerTitle.setText("uTV" + statsSuffix);
+                : String.format(Locale.US, " (%d频道)", all.size());
+        tvDrawerTitle.setText("uTV · " + settings.getIspShortName() + statsSuffix);
+        updateIspButtonsVisualState();
     }
 
     private void playInitialChannel() {
@@ -705,7 +781,9 @@ public class MainActivity extends AppCompatActivity {
         }
         tvOsdGroupName.setText(TextUtils.join(" / ", ch.getGroups()));
 
-        if (settings.getStreamMode() == IptvSettings.STREAM_MODE_DIRECT_RTP) {
+        if (!ch.isMulticastStream()) {
+            tvOsdStreamUrl.setText("HTTP/HLS 单播源: " + ch.getRawUrl());
+        } else if (settings.getStreamMode() == IptvSettings.STREAM_MODE_DIRECT_RTP) {
             tvOsdStreamUrl.setText("RTP 组播直连 (网卡 IGMP): " + ch.getRawUrl());
         } else if (resolvedUrl.equals(ch.getRawUrl())) {
             tvOsdStreamUrl.setText("组播直连: " + ch.getRawUrl());
@@ -890,6 +968,7 @@ public class MainActivity extends AppCompatActivity {
         if (focused != null) {
             int id = focused.getId();
             if (id == R.id.btn_toggle_drawer
+                    || id == R.id.btn_switch_isp
                     || id == R.id.btn_open_scanner
                     || id == R.id.btn_open_settings
                     || id == R.id.btn_prev_channel
@@ -903,6 +982,93 @@ public class MainActivity extends AppCompatActivity {
         }
         View target = getFocusedHudButton();
         return target != null && target.isSelected();
+    }
+
+    private View getActiveDrawerIspButton() {
+        int isp = settings != null ? settings.getIspProvider() : IptvSettings.ISP_BEIJING_UNICOM;
+        if (isp == IptvSettings.ISP_BEIJING_MOBILE && btnIspMobile != null) {
+            return btnIspMobile;
+        } else if (isp == IptvSettings.ISP_BEIJING_TELECOM && btnIspTelecom != null) {
+            return btnIspTelecom;
+        } else if (isp == IptvSettings.ISP_ALL_MERGED && btnIspAll != null) {
+            return btnIspAll;
+        }
+        return btnIspUnicom != null ? btnIspUnicom : findViewById(R.id.btn_drawer_numpad);
+    }
+
+    private void updateIspButtonsVisualState() {
+        if (settings == null) {
+            return;
+        }
+        int activeIsp = settings.getIspProvider();
+        if (btnSwitchIsp != null) {
+            btnSwitchIsp.setText(settings.getIspShortName());
+        }
+        Button[] btns = {btnIspUnicom, btnIspMobile, btnIspTelecom, btnIspAll};
+        int[] ispValues = {
+                IptvSettings.ISP_BEIJING_UNICOM,
+                IptvSettings.ISP_BEIJING_MOBILE,
+                IptvSettings.ISP_BEIJING_TELECOM,
+                IptvSettings.ISP_ALL_MERGED
+        };
+        for (int i = 0; i < btns.length; i++) {
+            Button b = btns[i];
+            if (b == null) {
+                continue;
+            }
+            boolean isCurrent = (activeIsp == ispValues[i]);
+            boolean hasFocus = b.hasFocus();
+            b.setSelected(isCurrent || hasFocus);
+            b.setBackgroundResource((isCurrent || hasFocus)
+                    ? R.drawable.bg_md3_primary_button
+                    : R.drawable.bg_group_tab);
+            b.setBackgroundTintList(null);
+        }
+    }
+
+    public void switchIspProvider(int newIsp) {
+        if (settings == null) {
+            return;
+        }
+        int oldIsp = settings.getIspProvider();
+        String oldDefaultSubnet = IptvSettings.getDefaultScanSubnetForIsp(oldIsp);
+        String currentSubnet = settings.getScanSubnet();
+
+        settings.setIspProvider(newIsp);
+        if (TextUtils.isEmpty(currentSubnet) || oldDefaultSubnet.equals(currentSubnet)) {
+            settings.setScanSubnet(IptvSettings.getDefaultScanSubnetForIsp(newIsp));
+        }
+
+        repository.reloadChannels();
+        if (categoryAdapter != null) {
+            categoryAdapter.setCategories(repository.getCategoryGroups());
+            categoryAdapter.setSelectedCategory(ChannelRepository.GROUP_ALL);
+        }
+        updateIspButtonsVisualState();
+        refreshChannelList();
+        playInitialChannel();
+
+        Toast.makeText(this,
+                "已切换至: " + settings.getIspDisplayName() + " (" + repository.getAllChannels().size() + " 频道)",
+                Toast.LENGTH_SHORT).show();
+    }
+
+    private void showIspSwitchDialog() {
+        String[] ispOptions = {
+                "北京联通 IPTV (wuwentao/bj-unicom-iptv 组播源 rtp://239.3.1.x)",
+                "北京移动 IPTV (wuwentao/bj-mobile-iptv 单播源 http://.../*.m3u8)",
+                "北京电信 IPTV (wuwentao/bj-telecom-iptv 组播源 rtp://225.1.8.x)",
+                "北京三网聚合 (联通 + 移动 + 电信全部频道)"
+        };
+        int currentIsp = settings.getIspProvider();
+        new MaterialAlertDialogBuilder(this)
+                .setTitle("切换北京 IPTV 运营商节目源")
+                .setSingleChoiceItems(ispOptions, currentIsp, (dialog, which) -> {
+                    dialog.dismiss();
+                    switchIspProvider(which);
+                })
+                .setNegativeButton("取消", null)
+                .show();
     }
 
     private void showHudTemporarily() {
@@ -1034,6 +1200,7 @@ public class MainActivity extends AppCompatActivity {
                 : "收藏当前频道 (" + (currentChannel != null ? currentChannel.getDisplayName() : "") + ")";
 
         String[] items = {
+                "切换运营商节目源: 当前 [" + settings.getIspShortName() + "] (联通 / 移动 / 电信 / 三网)",
                 "虚拟数字键盘选台 (按台号直达)",
                 "打开频道分类列表 (左右键切换分类)",
                 favText,
@@ -1048,26 +1215,29 @@ public class MainActivity extends AppCompatActivity {
                 .setItems(items, (dialog, which) -> {
                     switch (which) {
                         case 0:
-                            showVirtualNumpadDialog();
+                            showIspSwitchDialog();
                             break;
                         case 1:
-                            openChannelDrawerAndFocus();
+                            showVirtualNumpadDialog();
                             break;
                         case 2:
-                            toggleCurrentChannelFavorite();
+                            openChannelDrawerAndFocus();
                             break;
                         case 3:
-                            cycleAspectRatio();
+                            toggleCurrentChannelFavorite();
                             break;
                         case 4:
+                            cycleAspectRatio();
+                            break;
+                        case 5:
                             if (currentChannel != null) {
                                 playChannel(currentChannel);
                             }
                             break;
-                        case 5:
+                        case 6:
                             showSettingsDialog();
                             break;
-                        case 6:
+                        case 7:
                             openScannerActivity();
                             break;
                     }
@@ -1078,6 +1248,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void showSettingsDialog() {
         View view = LayoutInflater.from(this).inflate(R.layout.dialog_player_settings, null);
+        RadioGroup rgIspProvider = view.findViewById(R.id.rg_isp_provider);
         RadioGroup rgStreamMode = view.findViewById(R.id.rg_stream_mode);
         EditText etUdpxy = view.findViewById(R.id.et_settings_udpxy);
         RadioGroup rgPlayerCore = view.findViewById(R.id.rg_player_core);
@@ -1086,6 +1257,19 @@ public class MainActivity extends AppCompatActivity {
         CheckBox cbOpenSlEs = view.findViewById(R.id.cb_settings_opensles);
         CheckBox cbTextureView = view.findViewById(R.id.cb_settings_textureview);
         CheckBox cbAllChannels = view.findViewById(R.id.cb_settings_all_channels);
+
+        if (rgIspProvider != null) {
+            int currentIsp = settings.getIspProvider();
+            if (currentIsp == IptvSettings.ISP_BEIJING_MOBILE) {
+                rgIspProvider.check(R.id.rb_isp_mobile);
+            } else if (currentIsp == IptvSettings.ISP_BEIJING_TELECOM) {
+                rgIspProvider.check(R.id.rb_isp_telecom);
+            } else if (currentIsp == IptvSettings.ISP_ALL_MERGED) {
+                rgIspProvider.check(R.id.rb_isp_all);
+            } else {
+                rgIspProvider.check(R.id.rb_isp_unicom);
+            }
+        }
 
         int mode = settings.getStreamMode();
         if (mode == IptvSettings.STREAM_MODE_UDPXY) {
@@ -1151,9 +1335,33 @@ public class MainActivity extends AppCompatActivity {
                     }
 
                     boolean prevAll = settings.isIncludeAllRepoChannels();
+                    int prevIsp = settings.getIspProvider();
+                    int newIsp = prevIsp;
+                    if (rgIspProvider != null) {
+                        int checkedIspId = rgIspProvider.getCheckedRadioButtonId();
+                        if (checkedIspId == R.id.rb_isp_mobile) {
+                            newIsp = IptvSettings.ISP_BEIJING_MOBILE;
+                        } else if (checkedIspId == R.id.rb_isp_telecom) {
+                            newIsp = IptvSettings.ISP_BEIJING_TELECOM;
+                        } else if (checkedIspId == R.id.rb_isp_all) {
+                            newIsp = IptvSettings.ISP_ALL_MERGED;
+                        } else {
+                            newIsp = IptvSettings.ISP_BEIJING_UNICOM;
+                        }
+                    }
+
                     if (prevAll != cbAllChannels.isChecked()) {
                         settings.setIncludeAllRepoChannels(cbAllChannels.isChecked());
+                    }
+
+                    if (newIsp != prevIsp) {
+                        switchIspProvider(newIsp);
+                        return;
+                    } else if (prevAll != cbAllChannels.isChecked()) {
                         repository.reloadChannels();
+                        if (categoryAdapter != null) {
+                            categoryAdapter.setCategories(repository.getCategoryGroups());
+                        }
                     }
 
                     refreshChannelList();
@@ -1269,6 +1477,11 @@ public class MainActivity extends AppCompatActivity {
                     } else if (focusedId == R.id.cb_only_available) {
                         requestFocusCompat(findViewById(R.id.btn_drawer_numpad));
                         return true;
+                    } else if (focusedId == R.id.btn_isp_unicom
+                            || focusedId == R.id.btn_isp_mobile
+                            || focusedId == R.id.btn_isp_telecom
+                            || focusedId == R.id.btn_isp_all) {
+                        return super.dispatchKeyEvent(event);
                     } else if (focusedId == R.id.et_search_channel
                             && etSearchChannel.getText() != null
                             && etSearchChannel.getText().length() > 0) {

@@ -44,6 +44,17 @@ public class CategoryAdapter extends RecyclerView.Adapter<CategoryAdapter.ViewHo
         this.listener = listener;
     }
 
+    public void setCategories(List<String> newCategories) {
+        categories.clear();
+        if (newCategories != null) {
+            categories.addAll(newCategories);
+        }
+        if (!categories.contains(selectedCategory)) {
+            selectedCategory = categories.isEmpty() ? "全部频道" : categories.get(0);
+        }
+        updateSelectionVisuals();
+    }
+
     @Override
     public void onAttachedToRecyclerView(@NonNull RecyclerView recyclerView) {
         super.onAttachedToRecyclerView(recyclerView);

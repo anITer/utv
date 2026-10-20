@@ -37,7 +37,7 @@
             android:layout_marginStart="16dp"
             android:layout_weight="1"
             android:fontFamily="sans-serif-medium"
-            android:text="北京联通组播地址动态扫描 &amp; check_iptv_m3u.sh 节目巡检"
+            android:text="北京 IPTV (联通/移动/电信) 组播扫描 &amp; 节目巡检"
             android:textColor="@color/text_primary"
             android:textSize="17sp"
             android:textStyle="bold" />

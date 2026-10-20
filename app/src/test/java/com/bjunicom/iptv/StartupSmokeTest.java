@@ -110,6 +110,7 @@ public class StartupSmokeTest {
 
             int[] expectedOrder = {
                     R.id.btn_toggle_drawer,
+                    R.id.btn_switch_isp,
                     R.id.btn_open_scanner,
                     R.id.btn_open_settings,
                     R.id.btn_prev_channel,
@@ -180,6 +181,49 @@ public class StartupSmokeTest {
             org.robolectric.shadows.ShadowLooper.idleMainLooper(6000, java.util.concurrent.TimeUnit.MILLISECONDS);
             assertEquals(android.view.View.GONE, activity.findViewById(R.id.channel_drawer_panel).getVisibility());
             assertEquals(android.view.View.GONE, activity.findViewById(R.id.player_hud_overlay).getVisibility());
+        }
+    }
+
+    @Test
+    public void testSwitchIspBetweenUnicomMobileAndTelecom() {
+        try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class)) {
+            MainActivity activity = controller.create().start().resume().visible().get();
+            com.bjunicom.iptv.repository.ChannelRepository repo =
+                    com.bjunicom.iptv.repository.ChannelRepository.getInstance(activity);
+            com.bjunicom.iptv.config.IptvSettings settings =
+                    new com.bjunicom.iptv.config.IptvSettings(activity);
+
+            // 1. Default is Beijing Unicom
+            activity.findViewById(R.id.btn_isp_unicom).performClick();
+            assertEquals(com.bjunicom.iptv.config.IptvSettings.ISP_BEIJING_UNICOM, settings.getIspProvider());
+            assertTrue(repo.getAllChannels().size() >= 100);
+            assertTrue(repo.getAllChannels().get(0).getRawUrl().startsWith("rtp://239.3.1."));
+
+            // 2. Switch to Beijing Mobile IPTV
+            activity.findViewById(R.id.btn_isp_mobile).performClick();
+            assertEquals(com.bjunicom.iptv.config.IptvSettings.ISP_BEIJING_MOBILE, settings.getIspProvider());
+            assertTrue(repo.getAllChannels().size() >= 25);
+            assertTrue(repo.getAllChannels().get(0).isHlsStream());
+            assertTrue(repo.getCategoryGroups().contains(com.bjunicom.iptv.repository.ChannelRepository.GROUP_HD_NEWTV));
+
+            // 3. Switch to Beijing Telecom IPTV
+            activity.findViewById(R.id.btn_isp_telecom).performClick();
+            assertEquals(com.bjunicom.iptv.config.IptvSettings.ISP_BEIJING_TELECOM, settings.getIspProvider());
+            assertEquals(149, repo.getAllChannels().size());
+            assertTrue(repo.getAllChannels().get(0).getRawUrl().startsWith("rtp://225.1.8."));
+            assertEquals("225.1.8", settings.getScanSubnet());
+
+            // 4. Switch to All Merged (Unicom + Mobile + Telecom)
+            activity.findViewById(R.id.btn_isp_all).performClick();
+            assertEquals(com.bjunicom.iptv.config.IptvSettings.ISP_ALL_MERGED, settings.getIspProvider());
+            assertTrue(repo.getAllChannels().size() > 350);
+            assertTrue(repo.getCategoryGroups().contains(com.bjunicom.iptv.repository.ChannelRepository.GROUP_ISP_MOBILE));
+            assertTrue(repo.getCategoryGroups().contains(com.bjunicom.iptv.repository.ChannelRepository.GROUP_ISP_TELECOM));
+
+            // Restore Unicom
+            activity.findViewById(R.id.btn_isp_unicom).performClick();
+            assertEquals("239.3.1", settings.getScanSubnet());
+            Robolectric.flushForegroundThreadScheduler();
         }
     }
 }
