@@ -42,11 +42,14 @@ public class ChannelRepository {
     private static final String CUSTOM_SCANNED_M3U_MOBILE = "modified_iptv_mobile.m3u";
     private static final String CUSTOM_SCANNED_M3U_TELECOM = "modified_iptv_telecom.m3u";
     private static final String CUSTOM_SCANNED_M3U_ALL = "modified_iptv_all.m3u";
+    private static final String CUSTOM_SCANNED_M3U_CUSTOM = "modified_iptv_custom.m3u";
+    public static final String CUSTOM_UPLOADED_M3U_FILE = "custom_uploaded_iptv.m3u";
 
     public static final String GROUP_ALL = "全部频道";
     public static final String GROUP_ISP_UNICOM = "北京联通";
     public static final String GROUP_ISP_MOBILE = "北京移动";
     public static final String GROUP_ISP_TELECOM = "北京电信";
+    public static final String GROUP_ISP_CUSTOM = "自定义源";
     public static final String GROUP_FAVORITES = "收藏频道";
     public static final String GROUP_4K = "4K";
     public static final String GROUP_HD_CCTV = "[高清]央视";
@@ -104,6 +107,11 @@ public class ChannelRepository {
             baseList.addAll(loadFromAssetsWithIsp(unicomAsset, GROUP_ISP_UNICOM, true));
             baseList.addAll(loadFromAssetsWithIsp(mobileAsset, GROUP_ISP_MOBILE, true));
             baseList.addAll(loadFromAssetsWithIsp(ASSET_TELECOM_ALL, GROUP_ISP_TELECOM, true));
+            if (hasCustomUploadedM3u()) {
+                baseList.addAll(loadCustomUploadedWithIsp(true));
+            }
+        } else if (ispProvider == IptvSettings.ISP_CUSTOM_M3U) {
+            baseList.addAll(loadCustomUploadedWithIsp(false));
         } else {
             String assetName = includeAll ? ASSET_UNICOM_ALL : ASSET_UNICOM_LATEST;
             baseList.addAll(loadFromAssetsWithIsp(assetName, GROUP_ISP_UNICOM, false));
@@ -150,10 +158,124 @@ public class ChannelRepository {
                 return CUSTOM_SCANNED_M3U_TELECOM;
             case IptvSettings.ISP_ALL_MERGED:
                 return CUSTOM_SCANNED_M3U_ALL;
+            case IptvSettings.ISP_CUSTOM_M3U:
+                return CUSTOM_SCANNED_M3U_CUSTOM;
             case IptvSettings.ISP_BEIJING_UNICOM:
             default:
                 return CUSTOM_SCANNED_M3U_UNICOM;
         }
+    }
+
+    public File getCustomUploadedM3uFile() {
+        return new File(getScanRootDir(), CUSTOM_UPLOADED_M3U_FILE);
+    }
+
+    public boolean hasCustomUploadedM3u() {
+        File file = getCustomUploadedM3uFile();
+        return file.exists() && file.length() > 0;
+    }
+
+    public String readCustomUploadedM3uContent() {
+        File file = getCustomUploadedM3uFile();
+        if (!file.exists()) {
+            return "";
+        }
+        try (InputStream is = new FileInputStream(file)) {
+            byte[] buf = new byte[(int) file.length()];
+            int read = is.read(buf);
+            if (read > 0) {
+                return new String(buf, 0, read, StandardCharsets.UTF_8);
+            }
+        } catch (IOException ignored) {
+        }
+        return "";
+    }
+
+    private List<IptvChannel> loadCustomUploadedWithIsp(boolean appendIspToDisplay) {
+        File file = getCustomUploadedM3uFile();
+        if (!file.exists()) {
+            return new ArrayList<>();
+        }
+        try (InputStream is = new FileInputStream(file)) {
+            M3uParser.M3uInspectionReport report = M3uParser.inspectAndParse(is, settings.getCustomM3uName());
+            List<IptvChannel> list = report.channels;
+            for (IptvChannel ch : list) {
+                ch.setIspName(GROUP_ISP_CUSTOM);
+                List<String> groups = new ArrayList<>(ch.getGroups());
+                if (!groups.contains(GROUP_ISP_CUSTOM)) {
+                    groups.add(GROUP_ISP_CUSTOM);
+                    ch.setGroups(groups);
+                }
+                if (appendIspToDisplay) {
+                    String disp = ch.getDisplayName();
+                    if (disp != null && !disp.contains("(自定义)")) {
+                        ch.setDisplayName(disp + " (自定义)");
+                    }
+                }
+            }
+            return list;
+        } catch (IOException e) {
+            return new ArrayList<>();
+        }
+    }
+
+    /**
+     * 解析、校验并导入用户自定义上传的 M3U 内容
+     *
+     * @param m3uContent           M3U 文本内容
+     * @param fileName             文件名标识 (如 custom.m3u)
+     * @param switchToCustomSource true=切换为独立「自定义源」模式；false=合并到当前频道列表
+     * @return 解析与内容检测报告
+     */
+    public synchronized M3uParser.M3uInspectionReport importCustomM3uContent(String m3uContent,
+                                                                              String fileName,
+                                                                              boolean switchToCustomSource) {
+        String safeName = TextUtils.isEmpty(fileName) ? "custom.m3u" : fileName.trim();
+        M3uParser.M3uInspectionReport report = M3uParser.inspectAndParse(m3uContent, safeName);
+        if (!report.isValid()) {
+            return report;
+        }
+
+        // 持久化用户上传的原始 M3U 文件
+        try {
+            File customFile = getCustomUploadedM3uFile();
+            try (FileOutputStream fos = new FileOutputStream(customFile)) {
+                fos.write(m3uContent.getBytes(StandardCharsets.UTF_8));
+            }
+            File staleScanned = new File(getScanRootDir(), CUSTOM_SCANNED_M3U_CUSTOM);
+            if (staleScanned.exists()) {
+                staleScanned.delete();
+            }
+        } catch (IOException ignored) {
+        }
+
+        settings.setCustomM3uName(safeName);
+        if (!report.multicastSubnets.isEmpty()) {
+            String firstSubnet = report.multicastSubnets.iterator().next();
+            if (!TextUtils.isEmpty(firstSubnet)) {
+                settings.setScanSubnet(firstSubnet);
+            }
+        }
+
+        if (switchToCustomSource) {
+            settings.setIspProvider(IptvSettings.ISP_CUSTOM_M3U);
+            reloadChannels();
+            if (report.probedCount > 0) {
+                mergeScanResults(report.channels, true);
+            }
+        } else {
+            for (IptvChannel ch : report.channels) {
+                ch.setIspName(GROUP_ISP_CUSTOM);
+                List<String> groups = new ArrayList<>(ch.getGroups());
+                if (!groups.contains(GROUP_ISP_CUSTOM)) {
+                    groups.add(GROUP_ISP_CUSTOM);
+                    ch.setGroups(groups);
+                }
+            }
+            mergeScanResults(report.channels, true);
+        }
+
+        return report;
     }
 
     private List<IptvChannel> loadFromAssetsWithIsp(String fileName, String ispName, boolean appendIspToDisplay) {
@@ -306,15 +428,27 @@ public class ChannelRepository {
     public synchronized List<String> getCategoryGroups() {
         List<String> categories = new ArrayList<>();
         categories.add(GROUP_ALL);
-        if (settings.getIspProvider() == IptvSettings.ISP_ALL_MERGED) {
+        int isp = settings.getIspProvider();
+        if (isp == IptvSettings.ISP_ALL_MERGED) {
             categories.add(GROUP_ISP_UNICOM);
             categories.add(GROUP_ISP_MOBILE);
             categories.add(GROUP_ISP_TELECOM);
+            if (hasAnyChannelInGroup(GROUP_ISP_CUSTOM)) {
+                categories.add(GROUP_ISP_CUSTOM);
+            }
         }
-        categories.add(GROUP_HD_CCTV);
-        categories.add(GROUP_HD_SATELLITE);
-        categories.add(GROUP_HD_BJ);
-        categories.add(GROUP_HD_IPTV);
+        if (isp != IptvSettings.ISP_CUSTOM_M3U || hasAnyChannelInGroup(GROUP_HD_CCTV)) {
+            categories.add(GROUP_HD_CCTV);
+        }
+        if (isp != IptvSettings.ISP_CUSTOM_M3U || hasAnyChannelInGroup(GROUP_HD_SATELLITE)) {
+            categories.add(GROUP_HD_SATELLITE);
+        }
+        if (isp != IptvSettings.ISP_CUSTOM_M3U || hasAnyChannelInGroup(GROUP_HD_BJ)) {
+            categories.add(GROUP_HD_BJ);
+        }
+        if (isp != IptvSettings.ISP_CUSTOM_M3U || hasAnyChannelInGroup(GROUP_HD_IPTV)) {
+            categories.add(GROUP_HD_IPTV);
+        }
         if (hasAnyChannelInGroup(GROUP_HD_NEWTV)) {
             categories.add(GROUP_HD_NEWTV);
         }
@@ -324,8 +458,32 @@ public class ChannelRepository {
         if (hasAnyChannelInGroup(GROUP_HD_SHOPPING)) {
             categories.add(GROUP_HD_SHOPPING);
         }
+
+        // 动态添加自定义 M3U 中的自定义分组
+        for (IptvChannel ch : allChannels) {
+            for (String g : ch.getGroups()) {
+                if (TextUtils.isEmpty(g)
+                        || GROUP_ISP_UNICOM.equals(g)
+                        || GROUP_ISP_MOBILE.equals(g)
+                        || GROUP_ISP_TELECOM.equals(g)
+                        || (isp == IptvSettings.ISP_CUSTOM_M3U && GROUP_ISP_CUSTOM.equals(g))
+                        || GROUP_4K.equals(g)
+                        || GROUP_KIDS.equals(g)
+                        || GROUP_SD_ALL.equals(g)
+                        || GROUP_DISCOVERED.equals(g)
+                        || GROUP_FAVORITES.equals(g)) {
+                    continue;
+                }
+                if (!categories.contains(g)) {
+                    categories.add(g);
+                }
+            }
+        }
+
         categories.add(GROUP_4K);
-        categories.add(GROUP_KIDS);
+        if (isp != IptvSettings.ISP_CUSTOM_M3U || hasAnyChannelInGroup(GROUP_KIDS)) {
+            categories.add(GROUP_KIDS);
+        }
         categories.add(GROUP_SD_ALL);
         categories.add(GROUP_DISCOVERED);
         categories.add(GROUP_FAVORITES);

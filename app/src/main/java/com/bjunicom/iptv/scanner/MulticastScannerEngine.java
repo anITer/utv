@@ -132,6 +132,81 @@ public class MulticastScannerEngine {
     }
 
     /**
+     * 对用户上传的自定义 M3U 解析结果执行在线流连通性与音视频轨道检测
+     */
+    public void startCustomReportCheck(M3uParser.M3uInspectionReport report,
+                                       int timeoutMs,
+                                       ScanCallback callback) {
+        if (report == null || report.channels.isEmpty()) {
+            if (callback != null) {
+                callback.onError("没有可检测的频道条目");
+            }
+            return;
+        }
+        cancel();
+        cancelled.set(false);
+        workerPool = Executors.newSingleThreadExecutor();
+        workerPool.execute(() -> {
+            try {
+                long startEpoch = System.currentTimeMillis() / 1000L;
+                File runDir = createRunDirectory();
+                ScanStatistics stats = initStats(runDir);
+                List<IptvChannel> channels = report.channels;
+                int total = channels.size();
+                report.probedCount = 0;
+                report.reachableCount = 0;
+                report.unreachableCount = 0;
+
+                StringBuilder scriptLog = new StringBuilder();
+                StringBuilder mismatchLog = new StringBuilder("Resolution Mismatch Log\n-----------------------\n");
+                emitLog(callback, scriptLog, String.format(Locale.US,
+                        "[%s] Starting custom M3U inspection (%s). Total channels: %d",
+                        nowTimeStr(), report.sourceName, total));
+
+                int counter = 1;
+                for (IptvChannel ch : channels) {
+                    if (cancelled.get()) {
+                        emitLog(callback, scriptLog, "[" + nowTimeStr() + "] Custom M3U check cancelled.");
+                        break;
+                    }
+                    StreamProbeResult probe = probeChannelStream(
+                            ch.getMulticastIp(), ch.getMulticastPort(), ch, timeoutMs);
+                    applyProbeResultToChannel(counter, ch, probe, stats, mismatchLog, scriptLog, callback);
+                    report.probedCount++;
+                    if (probe.connected) {
+                        report.reachableCount++;
+                    } else {
+                        report.unreachableCount++;
+                    }
+                    if (callback != null) {
+                        callback.onChannelProbed(ch);
+                        callback.onProgress(counter, total, ch.getDisplayName() + " (" + ch.getRawUrl() + ")", stats);
+                    }
+                    counter++;
+                }
+
+                stats.durationSeconds = Math.max(1L, (System.currentTimeMillis() / 1000L) - startEpoch);
+                writeTextFile(stats.resultsCsvFile, M3uParser.toResultsCsvContent(channels));
+                writeTextFile(stats.modifiedM3uFile, M3uParser.toM3uContent(channels, true, null));
+                writeTextFile(stats.mismatchLogFile, mismatchLog.toString());
+                writeTextFile(stats.scriptLogFile, scriptLog + "\n" + stats.toSummaryText() + "\n");
+
+                if (callback != null) {
+                    callback.onCompleted(channels, stats);
+                }
+            } catch (Exception e) {
+                if (!cancelled.get() && callback != null) {
+                    callback.onError("检测异常: " + e.getMessage());
+                }
+            } finally {
+                if (workerPool != null) {
+                    workerPool.shutdown();
+                }
+            }
+        });
+    }
+
+    /**
      * 模式 1：按照 check_iptv_m3u.sh 的完整逻辑巡检现有全部频道
      */
     private void runCheckPlaylistMode(int timeoutMs, ScanCallback callback) throws IOException {

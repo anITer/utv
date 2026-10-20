@@ -1,0 +1,191 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@drawable/bg_md3_dialog_surface"
+    android:padding="18dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <!-- 1. 文件上传与选择入口卡片 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_md3_card_container"
+            android:orientation="vertical"
+            android:padding="14dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:fontFamily="sans-serif-medium"
+                    android:text="1. 上传或选择自定义 M3U 播放列表文件"
+                    android:textColor="@color/md_theme_dark_primary"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tv_custom_m3u_filename"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/bg_channel_num_pill"
+                    android:fontFamily="monospace"
+                    android:paddingHorizontal="10dp"
+                    android:paddingVertical="3dp"
+                    android:text="未选择文件"
+                    android:textColor="@color/accent_amber"
+                    android:textSize="11sp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/btn_pick_m3u_file"
+                    style="@style/Widget.BjUnicomIptv.PrimaryButton"
+                    android:layout_width="0dp"
+                    android:layout_height="38dp"
+                    android:layout_marginEnd="8dp"
+                    android:layout_weight="1.2"
+                    android:drawableStart="@drawable/ic_flat_upload"
+                    android:drawablePadding="6dp"
+                    android:focusable="true"
+                    android:paddingHorizontal="12dp"
+                    android:text="选择本地 M3U 文件"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+
+                <Button
+                    android:id="@+id/btn_scan_local_m3u_files"
+                    style="@style/Widget.BjUnicomIptv.HudButton"
+                    android:layout_width="0dp"
+                    android:layout_height="38dp"
+                    android:layout_marginEnd="8dp"
+                    android:layout_weight="1"
+                    android:focusable="true"
+                    android:paddingHorizontal="10dp"
+                    android:text="扫描设备 M3U"
+                    android:textSize="12sp" />
+
+                <Button
+                    android:id="@+id/btn_load_sample_m3u"
+                    style="@style/Widget.BjUnicomIptv.HudButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="38dp"
+                    android:focusable="true"
+                    android:paddingHorizontal="12dp"
+                    android:text="已存/示例"
+                    android:textSize="12sp" />
+            </LinearLayout>
+
+            <EditText
+                android:id="@+id/et_custom_m3u_content"
+                android:layout_width="match_parent"
+                android:layout_height="110dp"
+                android:layout_marginTop="10dp"
+                android:background="@drawable/bg_badge"
+                android:focusable="true"
+                android:fontFamily="monospace"
+                android:gravity="top|start"
+                android:hint="选择本地 .m3u/.m3u8 文件上传，或在此处直接粘贴 M3U 文本内容 / 输入本地文件路径 (如 /sdcard/Download/iptv.m3u)..."
+                android:inputType="textMultiLine|textNoSuggestions"
+                android:minLines="4"
+                android:padding="10dp"
+                android:scrollbars="vertical"
+                android:textColor="@color/text_primary"
+                android:textColorHint="@color/text_muted"
+                android:textSize="11sp" />
+        </LinearLayout>
+
+        <!-- 2. 内容解析与流连通性检测卡片 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:background="@drawable/bg_md3_card_container"
+            android:orientation="vertical"
+            android:padding="14dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:fontFamily="sans-serif-medium"
+                    android:text="2. 解析并检测 M3U 文件内容与频道可用性"
+                    android:textColor="@color/md_theme_dark_primary"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <Button
+                    android:id="@+id/btn_inspect_m3u_content"
+                    style="@style/Widget.BjUnicomIptv.HudButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="34dp"
+                    android:layout_marginEnd="8dp"
+                    android:focusable="true"
+                    android:paddingHorizontal="12dp"
+                    android:text="解析并校验内容"
+                    android:textColor="@color/md_theme_dark_primary"
+                    android:textSize="12sp" />
+
+                <Button
+                    android:id="@+id/btn_probe_m3u_streams"
+                    style="@style/Widget.BjUnicomIptv.HudButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="34dp"
+                    android:drawableStart="@drawable/ic_flat_radar"
+                    android:drawablePadding="5dp"
+                    android:focusable="true"
+                    android:paddingHorizontal="12dp"
+                    android:text="检测流连通性"
+                    android:textColor="@color/accent_green"
+                    android:textSize="12sp" />
+            </LinearLayout>
+
+            <ProgressBar
+                android:id="@+id/pb_custom_m3u_probe"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="6dp"
+                android:layout_marginTop="8dp"
+                android:max="100"
+                android:progress="0"
+                android:progressTint="@color/md_theme_dark_primary"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/tv_custom_m3u_report"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:background="@drawable/bg_badge"
+                android:fontFamily="monospace"
+                android:lineSpacingExtra="3dp"
+                android:padding="12dp"
+                android:text="请点击上方「选择本地 M3U 文件」上传，或粘贴内容后点击「解析并校验内容」查看详细检测报告。"
+                android:textColor="@color/accent_green"
+                android:textSize="11sp" />
+        </LinearLayout>
+
+    </LinearLayout>
+</ScrollView>

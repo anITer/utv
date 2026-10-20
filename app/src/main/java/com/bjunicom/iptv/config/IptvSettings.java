@@ -15,6 +15,7 @@ public class IptvSettings {
     public static final int ISP_BEIJING_MOBILE = 1;         // 北京移动 IPTV (http://otttv.bj.chinamobile.com/.../index.m3u8)
     public static final int ISP_BEIJING_TELECOM = 2;        // 北京电信 IPTV (rtp://225.1.8.x:port)
     public static final int ISP_ALL_MERGED = 3;             // 北京三网聚合 (联通 + 移动 + 电信)
+    public static final int ISP_CUSTOM_M3U = 4;             // 用户上传的自定义 M3U 播放列表
 
     // 流播放传输模式
     public static final int STREAM_MODE_UDPXY = 0;          // 路由器/软路由 udpxy 组播转单播 (如 http://192.168.2.1:8012/rtp/...)
@@ -27,6 +28,7 @@ public class IptvSettings {
     public static final int PLAYER_IJK_EXO = 2;             // IjkExoMediaPlayer
 
     private static final String KEY_ISP_PROVIDER = "isp_provider";
+    private static final String KEY_CUSTOM_M3U_NAME = "custom_m3u_name";
     private static final String KEY_STREAM_MODE = "stream_mode";
     private static final String KEY_UDPXY_ADDR = "udpxy_addr";
     private static final String KEY_PLAYER_TYPE = "player_type";
@@ -55,13 +57,25 @@ public class IptvSettings {
     }
 
     public void setIspProvider(int ispProvider) {
-        if (ispProvider < ISP_BEIJING_UNICOM || ispProvider > ISP_ALL_MERGED) {
+        if (ispProvider < ISP_BEIJING_UNICOM || ispProvider > ISP_CUSTOM_M3U) {
             ispProvider = ISP_BEIJING_UNICOM;
         }
         prefs.edit().putInt(KEY_ISP_PROVIDER, ispProvider).apply();
     }
 
+    public String getCustomM3uName() {
+        String name = prefs.getString(KEY_CUSTOM_M3U_NAME, "");
+        return TextUtils.isEmpty(name) ? "custom.m3u" : name.trim();
+    }
+
+    public void setCustomM3uName(String fileName) {
+        prefs.edit().putString(KEY_CUSTOM_M3U_NAME, fileName != null ? fileName.trim() : "custom.m3u").apply();
+    }
+
     public String getIspDisplayName() {
+        if (getIspProvider() == ISP_CUSTOM_M3U) {
+            return "自定义 M3U (" + getCustomM3uName() + ")";
+        }
         return getIspDisplayName(getIspProvider());
     }
 
@@ -73,6 +87,8 @@ public class IptvSettings {
                 return "北京电信 IPTV";
             case ISP_ALL_MERGED:
                 return "北京三网聚合";
+            case ISP_CUSTOM_M3U:
+                return "自定义 M3U";
             case ISP_BEIJING_UNICOM:
             default:
                 return "北京联通 IPTV";
@@ -91,6 +107,8 @@ public class IptvSettings {
                 return "北京电信";
             case ISP_ALL_MERGED:
                 return "三网聚合";
+            case ISP_CUSTOM_M3U:
+                return "自定义源";
             case ISP_BEIJING_UNICOM:
             default:
                 return "北京联通";

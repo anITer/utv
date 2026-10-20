@@ -43,6 +43,23 @@
             android:textStyle="bold" />
 
         <Button
+            android:id="@+id/btn_import_m3u"
+            style="@style/Widget.BjUnicomIptv.HudButton"
+            android:layout_width="wrap_content"
+            android:layout_height="38dp"
+            android:layout_marginEnd="8dp"
+            android:drawableStart="@drawable/ic_flat_upload"
+            android:drawablePadding="6dp"
+            android:focusable="true"
+            android:nextFocusDown="@id/rb_mode_check_playlist"
+            android:nextFocusLeft="@id/btn_scanner_back"
+            android:nextFocusRight="@id/btn_export_m3u"
+            android:paddingHorizontal="14dp"
+            android:text="上传/检测 M3U"
+            android:textColor="@color/accent_amber"
+            android:textSize="13sp" />
+
+        <Button
             android:id="@+id/btn_export_m3u"
             style="@style/Widget.BjUnicomIptv.HudButton"
             android:layout_width="wrap_content"
@@ -51,7 +68,7 @@
             android:drawablePadding="6dp"
             android:focusable="true"
             android:nextFocusDown="@id/sv_scan_log"
-            android:nextFocusLeft="@id/btn_scanner_back"
+            android:nextFocusLeft="@id/btn_import_m3u"
             android:paddingHorizontal="16dp"
             android:text="导出 M3U / CSV"
             android:textColor="@color/md_theme_dark_primary"

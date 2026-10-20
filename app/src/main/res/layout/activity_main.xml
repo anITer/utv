@@ -159,6 +159,23 @@
                 android:textStyle="bold" />
 
             <Button
+                android:id="@+id/btn_upload_m3u"
+                style="@style/Widget.BjUnicomIptv.HudButton"
+                android:layout_width="wrap_content"
+                android:layout_height="38dp"
+                android:layout_marginEnd="8dp"
+                android:drawableStart="@drawable/ic_flat_upload"
+                android:drawablePadding="6dp"
+                android:focusable="true"
+                android:nextFocusDown="@id/btn_favorite_channel"
+                android:nextFocusLeft="@id/btn_switch_isp"
+                android:nextFocusRight="@id/btn_open_scanner"
+                android:nextFocusUp="@id/btn_favorite_channel"
+                android:paddingHorizontal="14dp"
+                android:text="上传M3U"
+                android:textSize="13sp" />
+
+            <Button
                 android:id="@+id/btn_open_scanner"
                 style="@style/Widget.BjUnicomIptv.HudButton"
                 android:layout_width="wrap_content"
@@ -168,7 +185,7 @@
                 android:drawablePadding="6dp"
                 android:focusable="true"
                 android:nextFocusDown="@id/btn_aspect_ratio"
-                android:nextFocusLeft="@id/btn_switch_isp"
+                android:nextFocusLeft="@id/btn_upload_m3u"
                 android:nextFocusRight="@id/btn_open_settings"
                 android:nextFocusUp="@id/btn_aspect_ratio"
                 android:paddingHorizontal="14dp"
@@ -447,17 +464,34 @@
                 android:textStyle="bold" />
 
             <Button
+                android:id="@+id/btn_drawer_upload_m3u"
+                style="@style/Widget.BjUnicomIptv.HudButton"
+                android:layout_width="wrap_content"
+                android:layout_height="32dp"
+                android:layout_marginEnd="6dp"
+                android:drawableStart="@drawable/ic_flat_upload"
+                android:drawablePadding="4dp"
+                android:focusable="true"
+                android:nextFocusDown="@id/btn_isp_unicom"
+                android:nextFocusRight="@id/btn_drawer_numpad"
+                android:paddingHorizontal="10dp"
+                android:text="上传M3U"
+                android:textColor="@color/md_theme_dark_primary"
+                android:textSize="12sp" />
+
+            <Button
                 android:id="@+id/btn_drawer_numpad"
                 style="@style/Widget.BjUnicomIptv.HudButton"
                 android:layout_width="wrap_content"
                 android:layout_height="32dp"
-                android:layout_marginEnd="8dp"
+                android:layout_marginEnd="6dp"
                 android:drawableStart="@drawable/ic_flat_dialpad"
                 android:drawablePadding="5dp"
                 android:focusable="true"
-                android:nextFocusDown="@id/et_search_channel"
+                android:nextFocusDown="@id/btn_isp_unicom"
+                android:nextFocusLeft="@id/btn_drawer_upload_m3u"
                 android:nextFocusRight="@id/cb_only_available"
-                android:paddingHorizontal="12dp"
+                android:paddingHorizontal="10dp"
                 android:text="数字选台"
                 android:textColor="@color/accent_amber"
                 android:textSize="12sp" />
@@ -477,7 +511,7 @@
                 android:textSize="12sp" />
         </LinearLayout>
 
-        <!-- 运营商节目源快捷切换栏：北京联通 / 北京移动 / 北京电信 / 三网聚合 -->
+        <!-- 运营商节目源快捷切换栏：北京联通 / 北京移动 / 北京电信 / 三网聚合 / 自定义源 -->
         <LinearLayout
             android:id="@+id/layout_drawer_isp_bar"
             android:layout_width="match_parent"
@@ -491,47 +525,59 @@
                 style="@style/Widget.BjUnicomIptv.HudButton"
                 android:layout_width="0dp"
                 android:layout_height="32dp"
-                android:layout_marginEnd="6dp"
+                android:layout_marginEnd="5dp"
                 android:layout_weight="1"
                 android:focusable="true"
-                android:paddingHorizontal="6dp"
+                android:paddingHorizontal="4dp"
                 android:text="北京联通"
-                android:textSize="12sp" />
+                android:textSize="11sp" />
 
             <Button
                 android:id="@+id/btn_isp_mobile"
                 style="@style/Widget.BjUnicomIptv.HudButton"
                 android:layout_width="0dp"
                 android:layout_height="32dp"
-                android:layout_marginEnd="6dp"
+                android:layout_marginEnd="5dp"
                 android:layout_weight="1"
                 android:focusable="true"
-                android:paddingHorizontal="6dp"
+                android:paddingHorizontal="4dp"
                 android:text="北京移动"
-                android:textSize="12sp" />
+                android:textSize="11sp" />
 
             <Button
                 android:id="@+id/btn_isp_telecom"
                 style="@style/Widget.BjUnicomIptv.HudButton"
                 android:layout_width="0dp"
                 android:layout_height="32dp"
-                android:layout_marginEnd="6dp"
+                android:layout_marginEnd="5dp"
                 android:layout_weight="1"
                 android:focusable="true"
-                android:paddingHorizontal="6dp"
+                android:paddingHorizontal="4dp"
                 android:text="北京电信"
-                android:textSize="12sp" />
+                android:textSize="11sp" />
 
             <Button
                 android:id="@+id/btn_isp_all"
                 style="@style/Widget.BjUnicomIptv.HudButton"
                 android:layout_width="0dp"
                 android:layout_height="32dp"
+                android:layout_marginEnd="5dp"
                 android:layout_weight="1"
                 android:focusable="true"
-                android:paddingHorizontal="6dp"
+                android:paddingHorizontal="4dp"
                 android:text="三网聚合"
-                android:textSize="12sp" />
+                android:textSize="11sp" />
+
+            <Button
+                android:id="@+id/btn_isp_custom"
+                style="@style/Widget.BjUnicomIptv.HudButton"
+                android:layout_width="0dp"
+                android:layout_height="32dp"
+                android:layout_weight="1"
+                android:focusable="true"
+                android:paddingHorizontal="4dp"
+                android:text="自定义源"
+                android:textSize="11sp" />
         </LinearLayout>
 
         <!-- Material 3 Pill Search Bar -->

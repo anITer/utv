@@ -111,6 +111,7 @@ public class StartupSmokeTest {
             int[] expectedOrder = {
                     R.id.btn_toggle_drawer,
                     R.id.btn_switch_isp,
+                    R.id.btn_upload_m3u,
                     R.id.btn_open_scanner,
                     R.id.btn_open_settings,
                     R.id.btn_prev_channel,
@@ -223,6 +224,43 @@ public class StartupSmokeTest {
             // Restore Unicom
             activity.findViewById(R.id.btn_isp_unicom).performClick();
             assertEquals("239.3.1", settings.getScanSubnet());
+            Robolectric.flushForegroundThreadScheduler();
+        }
+    }
+
+    @Test
+    public void testUploadAndApplyCustomM3uPlaylist() {
+        try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class)) {
+            MainActivity activity = controller.create().start().resume().visible().get();
+            com.bjunicom.iptv.repository.ChannelRepository repo =
+                    com.bjunicom.iptv.repository.ChannelRepository.getInstance(activity);
+            com.bjunicom.iptv.config.IptvSettings settings =
+                    new com.bjunicom.iptv.config.IptvSettings(activity);
+
+            String customM3u = "#EXTM3U\n" +
+                    "#EXTINF:-1 tvg-id=\"1\" tvg-name=\"CCTV1\" group-title=\"自选央视频道\",CCTV-1综合[1][高清]\n" +
+                    "rtp://239.3.1.129:8008\n" +
+                    "#EXTINF:-1 tvg-id=\"85\" tvg-name=\"CCTV4K\" group-title=\"自选4K专区;4K\",CCTV-4K超高清[85][4K]\n" +
+                    "rtp://239.3.1.244:2000\n";
+
+            com.bjunicom.iptv.parser.M3uParser.M3uInspectionReport report =
+                    repo.importCustomM3uContent(customM3u, "user_iptv.m3u", true);
+            assertTrue(report.isValid());
+            assertEquals(2, report.validChannelCount);
+            assertEquals(com.bjunicom.iptv.config.IptvSettings.ISP_CUSTOM_M3U, settings.getIspProvider());
+            assertEquals("user_iptv.m3u", settings.getCustomM3uName());
+            assertTrue(repo.hasCustomUploadedM3u());
+            assertEquals(2, repo.getAllChannels().size());
+            assertTrue(repo.getCategoryGroups().contains("自选央视频道"));
+            assertTrue(repo.getCategoryGroups().contains("自选4K专区"));
+
+            // Click custom ISP button in drawer and verify it stays in custom ISP mode
+            activity.findViewById(R.id.btn_isp_custom).performClick();
+            assertEquals(com.bjunicom.iptv.config.IptvSettings.ISP_CUSTOM_M3U, settings.getIspProvider());
+
+            // Restore Unicom
+            activity.findViewById(R.id.btn_isp_unicom).performClick();
+            assertEquals(com.bjunicom.iptv.config.IptvSettings.ISP_BEIJING_UNICOM, settings.getIspProvider());
             Robolectric.flushForegroundThreadScheduler();
         }
     }

@@ -84,7 +84,34 @@
                     android:text="北京三网聚合 (同时加载联通 + 移动 + 电信全部频道)"
                     android:textColor="@color/text_primary"
                     android:textSize="13sp" />
+
+                <RadioButton
+                    android:id="@+id/rb_isp_custom"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:background="@drawable/bg_badge"
+                    android:buttonTint="@color/md_theme_dark_primary"
+                    android:focusable="true"
+                    android:paddingHorizontal="8dp"
+                    android:text="自定义 M3U 播放列表 (支持上传本地文件与内容检测)"
+                    android:textColor="@color/text_primary"
+                    android:textSize="13sp" />
             </RadioGroup>
+
+            <Button
+                android:id="@+id/btn_settings_upload_m3u"
+                style="@style/Widget.BjUnicomIptv.HudButton"
+                android:layout_width="match_parent"
+                android:layout_height="38dp"
+                android:layout_marginTop="8dp"
+                android:drawableStart="@drawable/ic_flat_upload"
+                android:drawablePadding="6dp"
+                android:focusable="true"
+                android:paddingHorizontal="14dp"
+                android:text="上传并检测自定义 M3U 播放列表文件..."
+                android:textColor="@color/md_theme_dark_primary"
+                android:textSize="13sp" />
         </LinearLayout>
 
         <!-- Section 1: 网络转发模式卡片 -->
