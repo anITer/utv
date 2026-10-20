@@ -126,6 +126,12 @@ public class StreamDownloaderPool {
         private static final Pattern MCAST_URI_PATTERN = Pattern.compile("(?:rtp|udp)://@?([0-9.]+):(\\d+)");
         private static final Pattern UDPXY_PATH_PATTERN = Pattern.compile("/(?:rtp|udp)/([0-9.]+):(\\d+)");
         private static final long KEYFRAME_ALIGN_MAX_WAIT_MS = 420L;
+        // 组播接收超时与冷启动首包宽限：
+        // 冷启动时部分路由器/交换机的 IGMP 组播转发需要数秒才能建立，默认 4 秒超时窗口内首包可能尚未到达，
+        // 导致每次冷启动后的首次连接必然失败；将首包等待宽限延长到 15 秒，期间周期性补发 IGMP 加入报告。
+        private static final long MCAST_RECEIVE_TIMEOUT_MS = 4000L;
+        private static final long MCAST_FIRST_PACKET_GRACE_MS = 15000L;
+        private static final int MCAST_MAX_CONSECUTIVE_TIMEOUTS = 3;
 
         private final StreamDownloaderPool ownerPool;
         private final byte[] ringBuffer;
@@ -439,29 +445,43 @@ public class StreamDownloaderPool {
                     socket.bind(new InetSocketAddress(mcastPort));
                 }
                 socket.setReceiveBufferSize(768 * 1024);
-                socket.setSoTimeout(4000);
+                socket.setSoTimeout((int) MCAST_RECEIVE_TIMEOUT_MS);
 
                 mcastIf = LocalMulticastProxyServer.findPreferredMulticastInterface();
-                if (mcastIf != null) {
-                    try {
-                        socket.setNetworkInterface(mcastIf);
-                    } catch (Exception ignored) {
-                    }
-                    try {
-                        socket.joinGroup(new InetSocketAddress(groupAddr, mcastPort), mcastIf);
-                        joinedWithIf = true;
-                    } catch (Exception ignored) {
-                    }
-                }
-                if (!joinedWithIf) {
-                    socket.joinGroup(groupAddr);
-                }
+                joinedWithIf = joinMulticastGroup(socket, groupAddr, mcastPort, mcastIf);
 
                 byte[] udpBuf = new byte[2048];
                 DatagramPacket packet = new DatagramPacket(udpBuf, udpBuf.length);
 
+                long joinTimeMs = System.currentTimeMillis();
+                boolean receivedAnyPacket = false;
+                int consecutiveTimeouts = 0;
+
                 while (isTokenValid(token)) {
-                    socket.receive(packet);
+                    try {
+                        socket.receive(packet);
+                    } catch (java.net.SocketTimeoutException timeoutEx) {
+                        // 组播接收超时处理：
+                        // 1) 尚未收到首包（冷启动阶段）：IGMP 组播转发建立耗时可能超过单次超时窗口，
+                        //    将首包等待宽限延长至 MCAST_FIRST_PACKET_GRACE_MS，期间周期性补发 IGMP 加入报告，
+                        //    加速交换机/路由器建立组播转发，根治冷启动首次连接必然失败的问题；
+                        // 2) 已收到首包：容忍偶发的组播空洞，连续超时超过上限才判定频道中断。
+                        if (!receivedAnyPacket) {
+                            long sinceJoinMs = System.currentTimeMillis() - joinTimeMs;
+                            if (sinceJoinMs >= MCAST_FIRST_PACKET_GRACE_MS) {
+                                throw timeoutEx;
+                            }
+                            joinMulticastGroup(socket, groupAddr, mcastPort, mcastIf);
+                        } else {
+                            consecutiveTimeouts++;
+                            if (consecutiveTimeouts >= MCAST_MAX_CONSECUTIVE_TIMEOUTS) {
+                                throw timeoutEx;
+                            }
+                        }
+                        continue;
+                    }
+                    consecutiveTimeouts = 0;
+                    receivedAnyPacket = true;
                     int len = packet.getLength();
                     int offset = packet.getOffset();
                     if (len < 188) {
@@ -522,6 +542,34 @@ public class StreamDownloaderPool {
                     }
                 }
             }
+        }
+
+        /**
+         * 加入组播组（可重复调用，用于冷启动阶段周期性补发 IGMP 加入报告）。
+         * 优先绑定具体组播网卡加入，失败则退化为默认网卡加入。
+         *
+         * @return 是否成功通过指定网卡加入
+         */
+        private static boolean joinMulticastGroup(MulticastSocket socket,
+                                                  InetAddress groupAddr,
+                                                  int mcastPort,
+                                                  NetworkInterface mcastIf) {
+            try {
+                if (mcastIf != null) {
+                    try {
+                        socket.setNetworkInterface(mcastIf);
+                    } catch (Exception ignored) {
+                    }
+                    try {
+                        socket.joinGroup(new InetSocketAddress(groupAddr, mcastPort), mcastIf);
+                        return true;
+                    } catch (Exception ignored) {
+                    }
+                }
+                socket.joinGroup(groupAddr);
+            } catch (Exception ignored) {
+            }
+            return false;
         }
 
         private void recordDownloadedBytes(int bytes) {

@@ -1341,6 +1341,9 @@ public class MainActivity extends AppCompatActivity {
                     Toast.makeText(this, "再按一次返回键退出 uTV", Toast.LENGTH_SHORT).show();
                     return true;
                 }
+                // 第二次按返回键：彻底退出应用，停止播放器与内置流媒体代理服务并结束进程
+                exitAppGracefully();
+                return true;
             }
         } else if (event.getAction() == KeyEvent.ACTION_UP) {
             int keyCode = event.getKeyCode();
@@ -1417,6 +1420,26 @@ public class MainActivity extends AppCompatActivity {
     protected void onPause() {
         mainHandler.removeCallbacks(telemetryTickRunnable);
         super.onPause();
+    }
+
+    /**
+     * 彻底退出应用：
+     * 1. 停止播放器并释放解码器/下载器资源；
+     * 2. 停止 Application 级的本地组播代理网关、关闭活动组播会话并释放组播锁；
+     * 3. 结束任务并杀死进程，确保流媒体服务不残留（Application.onTerminate 在真机上永远不会回调，
+     *    仅靠 finish() 退出会导致本地代理线程与 IGMP 组播组继续运行）。
+     */
+    private void exitAppGracefully() {
+        mainHandler.removeCallbacksAndMessages(null);
+        if (videoView != null) {
+            videoView.stopPlayback();
+        }
+        if (getApplication() instanceof IptvApplication) {
+            ((IptvApplication) getApplication()).shutdownStreamingService();
+        }
+        finishAndRemoveTask();
+        android.os.Process.killProcess(android.os.Process.myPid());
+        System.exit(0);
     }
 
     @Override

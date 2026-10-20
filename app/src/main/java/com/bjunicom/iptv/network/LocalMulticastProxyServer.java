@@ -93,6 +93,11 @@ public class LocalMulticastProxyServer {
 
     public synchronized void stop() {
         running.set(false);
+        // 关闭所有活动会话的组播 Socket 与客户端连接，避免退出后组播组残留继续收流占用带宽
+        for (ActiveSession session : activeSessions) {
+            session.closeQuietly();
+        }
+        activeSessions.clear();
         if (serverSocket != null) {
             try {
                 serverSocket.close();

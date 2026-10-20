@@ -78,6 +78,29 @@ public class IptvApplication extends Application {
         }
     }
 
+    private void releaseMulticastLock() {
+        if (multicastLock != null) {
+            try {
+                if (multicastLock.isHeld()) {
+                    multicastLock.release();
+                }
+            } catch (Throwable ignored) {
+            }
+            multicastLock = null;
+        }
+    }
+
+    /**
+     * 彻底退出播放时调用：停止本地组播代理网关并释放组播锁，
+     * 确保退出应用后流媒体服务、IGMP 组播组与后台线程完全回收，不再残留占用带宽。
+     */
+    public void shutdownStreamingService() {
+        if (localProxyServer != null) {
+            localProxyServer.stop();
+        }
+        releaseMulticastLock();
+    }
+
     public int getLocalProxyPort() {
         if (localProxyServer != null) {
             int port = localProxyServer.getListenPort();
@@ -91,12 +114,7 @@ public class IptvApplication extends Application {
 
     @Override
     public void onTerminate() {
-        if (localProxyServer != null) {
-            localProxyServer.stop();
-        }
-        if (multicastLock != null && multicastLock.isHeld()) {
-            multicastLock.release();
-        }
+        shutdownStreamingService();
         try {
             IjkMediaPlayer.native_profileEnd();
         } catch (Throwable ignored) {
