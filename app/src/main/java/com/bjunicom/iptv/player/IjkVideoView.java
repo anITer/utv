@@ -105,9 +105,11 @@ public class IjkVideoView extends FrameLayout {
     private OnHevcSoftwareDecodeListener mOnHevcSoftwareDecodeListener;
     // 4K HEVC 硬件解码不可用（厂商解码器配置失败降级软解）时，强制走系统播放器内核
     private boolean mForceFallbackPlayer = false;
-    // 同一频道播放期间只允许一次"全新实例重试"：MTK OMX HEVC 解码器
-    // 在旧实例尚未拆除完毕时配置必失败 (err -1010/-22)，重建干净实例即可恢复硬解
-    private boolean mHevcFreshRetryAttempted = false;
+    // 同一频道播放期间允许的 HEVC 全新实例重试次数：MTK OMX HEVC 在旧实例未拆除完毕
+    // 或组播加入初期丢包损坏首 IDR 时配置失败 (err -1010/-22)，重建干净实例再等一个
+    // 完好 IDR 即可恢复硬解；重试耗尽后才一次性回退系统播放器，任何切台都重新优先 IJK
+    private int mHevcFreshRetryCount = 0;
+    private static final int MAX_HEVC_FRESH_RETRIES = 2;
 
     /**
      * HEVC 硬件解码静默降级为软件解码的回调（如索尼/联发科 OMX.MTK.VIDEO.DECODER.HEVC
@@ -247,7 +249,7 @@ public class IjkVideoView extends FrameLayout {
     public void setVideoURI(Uri uri, Map<String, String> headers) {
         mUri = uri;
         mHeaders = headers;
-        mHevcFreshRetryAttempted = false;
+        mHevcFreshRetryCount = 0;
         openVideo();
         requestLayout();
         invalidate();
@@ -954,11 +956,11 @@ public class IjkVideoView extends FrameLayout {
             if (raw instanceof IjkMediaPlayer) {
                 int vdec = ((IjkMediaPlayer) raw).getVideoDecoder();
                 if (vdec != IjkMediaPlayer.FFP_PROPV_DECODER_MEDIACODEC) {
-                    if (!mHevcFreshRetryAttempted) {
+                    if (mHevcFreshRetryCount < MAX_HEVC_FRESH_RETRIES) {
                         retryHevcHardwareDecodeWithFreshInstance();
                     } else {
-                        Log.w(TAG, "HEVC hardware decode unavailable again after fresh retry (vdec="
-                                + vdec + "), falling back to system player");
+                        Log.w(TAG, "HEVC hardware decode unavailable after " + mHevcFreshRetryCount
+                                + " fresh retries (vdec=" + vdec + "), falling back to system player");
                         mOnHevcSoftwareDecodeListener.onHevcSoftwareDecodeDetected();
                     }
                 }
@@ -975,8 +977,9 @@ public class IjkVideoView extends FrameLayout {
      * 再用全新实例重新初始化——干净环境下硬解必成；仍失败才回调外部走系统播放器兜底。
      */
     private void retryHevcHardwareDecodeWithFreshInstance() {
-        mHevcFreshRetryAttempted = true;
-        Log.w(TAG, "HEVC hw decode fell back to software; retrying once with a fresh decoder instance");
+        mHevcFreshRetryCount++;
+        Log.w(TAG, "HEVC hw decode fell back to software; fresh retry "
+                + mHevcFreshRetryCount + "/" + MAX_HEVC_FRESH_RETRIES);
         TsCodecDescriptor descriptorBeforeTeardown = mActiveCodecDescriptor;
         release(false, true);
         // 池中可能还有之前正常回收的同 Profile 实例，一并清空，确保重试用的是全新实例
@@ -987,9 +990,9 @@ public class IjkVideoView extends FrameLayout {
             if (tokenAfterTeardown != mPlaybackSessionToken.get() || mForceFallbackPlayer) {
                 return; // 期间用户已切台或兜底已触发
             }
-            Log.i(TAG, "Fresh HEVC decode retry: re-opening stream");
+            Log.i(TAG, "Fresh HEVC decode retry " + mHevcFreshRetryCount + ": re-opening stream");
             openVideo();
-        }, 700);
+        }, 800);
     }
 
     private final IMediaPlayer.OnCompletionListener mCompletionListener = new IMediaPlayer.OnCompletionListener() {
