@@ -142,6 +142,41 @@ public class StartupSmokeTest {
             activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_LEFT));
             assertEquals(R.id.btn_reload_stream, activity.getFocusedHudButton().getId());
             assertTrue(activity.getFocusedHudButton().isSelected());
+
+            // Hide HUD via BACK key -> both HUD and drawer should be GONE
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK));
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BACK));
+            assertEquals(android.view.View.GONE, activity.findViewById(R.id.player_hud_overlay).getVisibility());
+            assertEquals(android.view.View.GONE, activity.findViewById(R.id.channel_drawer_panel).getVisibility());
+
+            // In full-screen playback (both GONE), pressing OK brings up the info page (HUD), NOT channel drawer
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER));
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_CENTER));
+            assertEquals(android.view.View.VISIBLE, activity.findViewById(R.id.player_hud_overlay).getVisibility());
+            assertEquals(android.view.View.GONE, activity.findViewById(R.id.channel_drawer_panel).getVisibility());
+
+            // Hide HUD again via BACK key
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK));
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BACK));
+            assertEquals(android.view.View.GONE, activity.findViewById(R.id.player_hud_overlay).getVisibility());
+
+            // In full-screen playback (both GONE), pressing DPAD_LEFT brings up channel drawer, NOT HUD
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_LEFT));
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_LEFT));
+            assertEquals(android.view.View.VISIBLE, activity.findViewById(R.id.channel_drawer_panel).getVisibility());
+            assertEquals(android.view.View.GONE, activity.findViewById(R.id.player_hud_overlay).getVisibility());
+
+            // Close channel drawer via BACK key -> both GONE (does not pop up HUD)
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK));
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BACK));
+            assertEquals(android.view.View.GONE, activity.findViewById(R.id.channel_drawer_panel).getVisibility());
+            assertEquals(android.view.View.GONE, activity.findViewById(R.id.player_hud_overlay).getVisibility());
+
+            // In full-screen playback (both GONE), pressing DPAD_RIGHT also brings up channel drawer, NOT HUD
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_RIGHT));
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_RIGHT));
+            assertEquals(android.view.View.VISIBLE, activity.findViewById(R.id.channel_drawer_panel).getVisibility());
+            assertEquals(android.view.View.GONE, activity.findViewById(R.id.player_hud_overlay).getVisibility());
         }
     }
 
@@ -151,9 +186,10 @@ public class StartupSmokeTest {
             MainActivity activity = controller.create().start().resume().visible().get();
             activity.onWindowFocusChanged(true);
 
-            // Click the toggle drawer button to open the channel list drawer
+            // Click the toggle drawer button to open the channel list drawer (and hide HUD so they are not shown together)
             activity.findViewById(R.id.btn_toggle_drawer).performClick();
             assertEquals(android.view.View.VISIBLE, activity.findViewById(R.id.channel_drawer_panel).getVisibility());
+            assertEquals(android.view.View.GONE, activity.findViewById(R.id.player_hud_overlay).getVisibility());
 
             androidx.recyclerview.widget.RecyclerView rvCategories = activity.findViewById(R.id.rv_categories);
             com.bjunicom.iptv.ui.adapter.CategoryAdapter adapter =
@@ -195,34 +231,34 @@ public class StartupSmokeTest {
                     new com.bjunicom.iptv.config.IptvSettings(activity);
 
             // 1. Default is Beijing Unicom
-            activity.findViewById(R.id.btn_isp_unicom).performClick();
+            activity.switchIspProvider(com.bjunicom.iptv.config.IptvSettings.ISP_BEIJING_UNICOM);
             assertEquals(com.bjunicom.iptv.config.IptvSettings.ISP_BEIJING_UNICOM, settings.getIspProvider());
             assertTrue(repo.getAllChannels().size() >= 100);
             assertTrue(repo.getAllChannels().get(0).getRawUrl().startsWith("rtp://239.3.1."));
 
             // 2. Switch to Beijing Mobile IPTV
-            activity.findViewById(R.id.btn_isp_mobile).performClick();
+            activity.switchIspProvider(com.bjunicom.iptv.config.IptvSettings.ISP_BEIJING_MOBILE);
             assertEquals(com.bjunicom.iptv.config.IptvSettings.ISP_BEIJING_MOBILE, settings.getIspProvider());
             assertTrue(repo.getAllChannels().size() >= 25);
             assertTrue(repo.getAllChannels().get(0).isHlsStream());
             assertTrue(repo.getCategoryGroups().contains(com.bjunicom.iptv.repository.ChannelRepository.GROUP_HD_NEWTV));
 
             // 3. Switch to Beijing Telecom IPTV
-            activity.findViewById(R.id.btn_isp_telecom).performClick();
+            activity.switchIspProvider(com.bjunicom.iptv.config.IptvSettings.ISP_BEIJING_TELECOM);
             assertEquals(com.bjunicom.iptv.config.IptvSettings.ISP_BEIJING_TELECOM, settings.getIspProvider());
             assertEquals(149, repo.getAllChannels().size());
             assertTrue(repo.getAllChannels().get(0).getRawUrl().startsWith("rtp://225.1.8."));
             assertEquals("225.1.8", settings.getScanSubnet());
 
             // 4. Switch to All Merged (Unicom + Mobile + Telecom)
-            activity.findViewById(R.id.btn_isp_all).performClick();
+            activity.switchIspProvider(com.bjunicom.iptv.config.IptvSettings.ISP_ALL_MERGED);
             assertEquals(com.bjunicom.iptv.config.IptvSettings.ISP_ALL_MERGED, settings.getIspProvider());
             assertTrue(repo.getAllChannels().size() > 350);
             assertTrue(repo.getCategoryGroups().contains(com.bjunicom.iptv.repository.ChannelRepository.GROUP_ISP_MOBILE));
             assertTrue(repo.getCategoryGroups().contains(com.bjunicom.iptv.repository.ChannelRepository.GROUP_ISP_TELECOM));
 
             // Restore Unicom
-            activity.findViewById(R.id.btn_isp_unicom).performClick();
+            activity.switchIspProvider(com.bjunicom.iptv.config.IptvSettings.ISP_BEIJING_UNICOM);
             assertEquals("239.3.1", settings.getScanSubnet());
             Robolectric.flushForegroundThreadScheduler();
         }
@@ -254,14 +290,57 @@ public class StartupSmokeTest {
             assertTrue(repo.getCategoryGroups().contains("自选央视频道"));
             assertTrue(repo.getCategoryGroups().contains("自选4K专区"));
 
-            // Click custom ISP button in drawer and verify it stays in custom ISP mode
-            activity.findViewById(R.id.btn_isp_custom).performClick();
+            // Switch to custom ISP mode via MainActivity and verify it stays in custom ISP mode
+            activity.switchIspProvider(com.bjunicom.iptv.config.IptvSettings.ISP_CUSTOM_M3U);
             assertEquals(com.bjunicom.iptv.config.IptvSettings.ISP_CUSTOM_M3U, settings.getIspProvider());
 
             // Restore Unicom
-            activity.findViewById(R.id.btn_isp_unicom).performClick();
+            activity.switchIspProvider(com.bjunicom.iptv.config.IptvSettings.ISP_BEIJING_UNICOM);
             assertEquals(com.bjunicom.iptv.config.IptvSettings.ISP_BEIJING_UNICOM, settings.getIspProvider());
             Robolectric.flushForegroundThreadScheduler();
         }
+    }
+
+    @Test
+    public void testAppUpdateManagerVersionComparisonAndReleaseParsing() {
+        try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class)) {
+            MainActivity activity = controller.create().get();
+            assertEquals("1.0.0", com.bjunicom.iptv.update.AppUpdateManager.getCurrentVersionName(activity));
+        }
+        assertEquals("1.0.0", com.bjunicom.iptv.update.AppUpdateManager.CURRENT_VERSION_NAME);
+        assertTrue(com.bjunicom.iptv.update.AppUpdateManager.isNewerVersion("v1.1.0", "1.0.0"));
+        assertTrue(com.bjunicom.iptv.update.AppUpdateManager.isNewerVersion("1.0.1", "1.0.0"));
+        assertTrue(com.bjunicom.iptv.update.AppUpdateManager.isNewerVersion("2.0", "1.9.9"));
+        assertFalse(com.bjunicom.iptv.update.AppUpdateManager.isNewerVersion("1.0.0", "1.0.0"));
+        assertFalse(com.bjunicom.iptv.update.AppUpdateManager.isNewerVersion("v0.9.5", "1.0.0"));
+
+        String sampleApiJson = "[\n" +
+                "  {\n" +
+                "    \"tag_name\": \"v1.2.0\",\n" +
+                "    \"name\": \"uTV v1.2.0 Release\",\n" +
+                "    \"draft\": false,\n" +
+                "    \"body\": \"Fix playback and add update checker\",\n" +
+                "    \"assets\": [\n" +
+                "      {\n" +
+                "        \"name\": \"utv-v1.2.0-release.apk\",\n" +
+                "        \"size\": 13109007,\n" +
+                "        \"browser_download_url\": \"https://github.com/anITer/utv/releases/download/v1.2.0/utv-v1.2.0-release.apk\"\n" +
+                "      }\n" +
+                "    ]\n" +
+                "  }\n" +
+                "]";
+        com.bjunicom.iptv.update.AppUpdateManager.ReleaseInfo apiInfo =
+                com.bjunicom.iptv.update.AppUpdateManager.parseReleasesApiJson(sampleApiJson);
+        assertNotNull(apiInfo);
+        assertEquals("1.2.0", apiInfo.versionName);
+        assertEquals("utv-v1.2.0-release.apk", apiInfo.apkFileName);
+        assertEquals("https://github.com/anITer/utv/releases/download/v1.2.0/utv-v1.2.0-release.apk", apiInfo.apkDownloadUrl);
+
+        String sampleHtml = "<a href=\"/anITer/utv/releases/download/v1.3.0/bj-unicom-iptv-release-signed.apk\">Download APK</a>";
+        com.bjunicom.iptv.update.AppUpdateManager.ReleaseInfo htmlInfo =
+                com.bjunicom.iptv.update.AppUpdateManager.parseReleasesHtml(sampleHtml);
+        assertNotNull(htmlInfo);
+        assertEquals("1.3.0", htmlInfo.versionName);
+        assertEquals("https://github.com/anITer/utv/releases/download/v1.3.0/bj-unicom-iptv-release-signed.apk", htmlInfo.apkDownloadUrl);
     }
 }

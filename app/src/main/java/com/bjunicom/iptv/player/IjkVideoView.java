@@ -22,7 +22,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
-import tv.danmaku.ijk.media.exo.IjkExoMediaPlayer;
 import tv.danmaku.ijk.media.player.AndroidMediaPlayer;
 import tv.danmaku.ijk.media.player.IMediaPlayer;
 import tv.danmaku.ijk.media.player.IjkMediaMeta;
@@ -428,14 +427,6 @@ public class IjkVideoView extends FrameLayout {
                     mediaPlayer = new AndroidMediaPlayer();
                 }
                 break;
-            case IptvSettings.PLAYER_IJK_EXO:
-                try {
-                    mediaPlayer = new IjkExoMediaPlayer(mAppContext);
-                } catch (Throwable t) {
-                    Log.e(TAG, "Failed to init IjkExoMediaPlayer, falling back to AndroidMediaPlayer", t);
-                    mediaPlayer = new AndroidMediaPlayer();
-                }
-                break;
             case IptvSettings.PLAYER_ANDROID_MEDIA:
             default:
                 mediaPlayer = new AndroidMediaPlayer();
@@ -637,12 +628,6 @@ public class IjkVideoView extends FrameLayout {
                 return "AndroidMediaPlayer / " + hwAudio;
             }
             return "AndroidMediaPlayer (系统硬解)";
-        } else if (playerType == IptvSettings.PLAYER_IJK_EXO) {
-            String hwAudio = mHwAudioCompanion.getActiveCodecLabel();
-            if (!TextUtils.isEmpty(hwAudio)) {
-                return "IjkExoMediaPlayer / " + hwAudio;
-            }
-            return "IjkExoMediaPlayer (Exo硬解)";
         }
 
         boolean pooledHit = (mPooledIjkDecoder != null && mPooledIjkDecoder.reusedFromPool);

@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- 全局统一的圆角矩形曲率半径 -->
+    <dimen name="ui_corner_radius">8dp</dimen>
+
     <!-- Material Design 3 Dark Theme for TV & Touch -->
     <style name="Theme.BjUnicomIptv" parent="Theme.Material3.Dark.NoActionBar">
         <item name="colorPrimary">@color/md_theme_dark_primary</item>
@@ -28,6 +31,11 @@
         <item name="alertDialogTheme">@style/ThemeOverlay.BjUnicomIptv.MaterialAlertDialog</item>
     </style>
 
+    <style name="ShapeAppearance.BjUnicomIptv.RoundedRect" parent="">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">@dimen/ui_corner_radius</item>
+    </style>
+
     <style name="ThemeOverlay.BjUnicomIptv.MaterialAlertDialog" parent="ThemeOverlay.Material3.MaterialAlertDialog">
         <item name="colorSurface">@color/md_theme_dark_surfaceContainer</item>
         <item name="colorOnSurface">@color/text_primary</item>
@@ -35,6 +43,7 @@
         <item name="colorPrimary">@color/md_theme_dark_primary</item>
         <item name="android:background">@drawable/bg_md3_dialog_surface</item>
         <item name="android:windowBackground">@drawable/bg_md3_dialog_surface</item>
+        <item name="shapeAppearanceOverlay">@style/ShapeAppearance.BjUnicomIptv.RoundedRect</item>
     </style>
 
     <!-- Material 3 Tonal Action Chip Button (HUD & Top Bar) -->

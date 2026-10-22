@@ -25,7 +25,6 @@ public class IptvSettings {
     // 播放器内核模式 (参考 ijkplayer Settings)
     public static final int PLAYER_IJK = 0;                 // IjkMediaPlayer (推荐，支持 MPEG-TS/RTP/HLS/HEVC 4K)
     public static final int PLAYER_ANDROID_MEDIA = 1;       // AndroidMediaPlayer
-    public static final int PLAYER_IJK_EXO = 2;             // IjkExoMediaPlayer
 
     private static final String KEY_ISP_PROVIDER = "isp_provider";
     private static final String KEY_CUSTOM_M3U_NAME = "custom_m3u_name";
@@ -143,7 +142,8 @@ public class IptvSettings {
     }
 
     public int getPlayerType() {
-        return prefs.getInt(KEY_PLAYER_TYPE, PLAYER_IJK);
+        int type = prefs.getInt(KEY_PLAYER_TYPE, PLAYER_IJK);
+        return type == PLAYER_ANDROID_MEDIA ? PLAYER_ANDROID_MEDIA : PLAYER_IJK;
     }
 
     public void setPlayerType(int playerType) {
