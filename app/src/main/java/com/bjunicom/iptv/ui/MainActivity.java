@@ -1274,6 +1274,8 @@ public class MainActivity extends AppCompatActivity {
         int playerCore = settings.getPlayerType();
         if (playerCore == IptvSettings.PLAYER_ANDROID_MEDIA) {
             rgPlayerCore.check(R.id.rb_core_android);
+        } else if (playerCore == IptvSettings.PLAYER_EXO) {
+            rgPlayerCore.check(R.id.rb_core_exo);
         } else {
             rgPlayerCore.check(R.id.rb_core_ijk);
         }
@@ -1303,6 +1305,8 @@ public class MainActivity extends AppCompatActivity {
                     int checkedCore = rgPlayerCore.getCheckedRadioButtonId();
                     if (checkedCore == R.id.rb_core_android) {
                         settings.setPlayerType(IptvSettings.PLAYER_ANDROID_MEDIA);
+                    } else if (checkedCore == R.id.rb_core_exo) {
+                        settings.setPlayerType(IptvSettings.PLAYER_EXO);
                     } else {
                         settings.setPlayerType(IptvSettings.PLAYER_IJK);
                     }

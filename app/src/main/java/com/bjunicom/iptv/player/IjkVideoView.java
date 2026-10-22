@@ -316,7 +316,15 @@ public class IjkVideoView extends FrameLayout {
                 mMediaPlayer = createFallbackPlayer(mSettings.getPlayerType());
             }
             attachPlayerListeners(mMediaPlayer);
-            mMediaPlayer.setDataSource(mAppContext, playbackUri, mHeaders);
+            // AndroidMediaPlayer 的 Context 重载只解析 content:// 与 file://，对 http(s) 会抛
+            // "No content provider"。HTTP 流必须用 String 重载，否则 4K 频道永远停在连接中。
+            if (mMediaPlayer instanceof AndroidMediaPlayer
+                    && scheme != null
+                    && (scheme.equalsIgnoreCase("http") || scheme.equalsIgnoreCase("https"))) {
+                ((AndroidMediaPlayer) mMediaPlayer).setDataSource(playbackUri.toString());
+            } else {
+                mMediaPlayer.setDataSource(mAppContext, playbackUri, mHeaders);
+            }
             bindSurfaceHolder(mMediaPlayer, mSurfaceHolder);
             mMediaPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
             mMediaPlayer.setScreenOnWhilePlaying(true);
@@ -426,6 +434,11 @@ public class IjkVideoView extends FrameLayout {
                     Log.e(TAG, "Failed to init IjkMediaPlayer, falling back to AndroidMediaPlayer", t);
                     mediaPlayer = new AndroidMediaPlayer();
                 }
+                break;
+            case IptvSettings.PLAYER_EXO:
+                // 4K HEVC 专用：MediaCodec 硬解 + DefaultLoadControl 大缓冲
+                mediaPlayer = new ExoPlayerWrapper(
+                        mAppContext != null ? mAppContext : getContext());
                 break;
             case IptvSettings.PLAYER_ANDROID_MEDIA:
             default:

@@ -25,6 +25,7 @@ public class IptvSettings {
     // 播放器内核模式 (参考 ijkplayer Settings)
     public static final int PLAYER_IJK = 0;                 // IjkMediaPlayer (推荐，支持 MPEG-TS/RTP/HLS/HEVC 4K)
     public static final int PLAYER_ANDROID_MEDIA = 1;       // AndroidMediaPlayer
+    public static final int PLAYER_EXO = 2;                 // Media3 ExoPlayer (4K HEVC 硬解 + 大缓冲)
 
     private static final String KEY_ISP_PROVIDER = "isp_provider";
     private static final String KEY_CUSTOM_M3U_NAME = "custom_m3u_name";
@@ -122,7 +123,8 @@ public class IptvSettings {
     }
 
     public int getStreamMode() {
-        return prefs.getInt(KEY_STREAM_MODE, STREAM_MODE_UDPXY);
+        // 默认走内置本地组播代理：不依赖外部 udpxy（子路由 192.168.2.1 在跨网段时不可达）。
+        return prefs.getInt(KEY_STREAM_MODE, STREAM_MODE_LOCAL_PROXY);
     }
 
     public void setStreamMode(int mode) {
@@ -142,8 +144,13 @@ public class IptvSettings {
     }
 
     public int getPlayerType() {
-        int type = prefs.getInt(KEY_PLAYER_TYPE, PLAYER_IJK);
-        return type == PLAYER_ANDROID_MEDIA ? PLAYER_ANDROID_MEDIA : PLAYER_IJK;
+        // 默认 ExoPlayer：MediaCodec 直连 HEVC 硬解 + DefaultLoadControl 可调大缓冲，
+        // 实测 4K HEVC 频道零 rebuffer、无马赛克、秒切台；IJK 的 libijkffmpeg 未编译
+        // hevc_mediacodec 只能软解，AndroidMediaPlayer 的 NuPlayer 缓冲策略不可调。
+        int type = prefs.getInt(KEY_PLAYER_TYPE, PLAYER_EXO);
+        if (type == PLAYER_ANDROID_MEDIA) return PLAYER_ANDROID_MEDIA;
+        if (type == PLAYER_IJK) return PLAYER_IJK;
+        return PLAYER_EXO;
     }
 
     public void setPlayerType(int playerType) {
