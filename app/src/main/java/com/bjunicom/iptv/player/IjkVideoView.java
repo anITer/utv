@@ -316,7 +316,16 @@ public class IjkVideoView extends FrameLayout {
                 mMediaPlayer = createFallbackPlayer(mSettings.getPlayerType());
             }
             attachPlayerListeners(mMediaPlayer);
-            mMediaPlayer.setDataSource(mAppContext, playbackUri, mHeaders);
+            // AndroidMediaPlayer 的 Context 重载只解析 content:// 与 file://，
+            // 对 http(s) 地址会抛 "No content provider" 导致连接失败（见 issue #5）。
+            // HTTP 流必须走 String 重载。
+            if (mMediaPlayer instanceof AndroidMediaPlayer
+                    && scheme != null
+                    && (scheme.equalsIgnoreCase("http") || scheme.equalsIgnoreCase("https"))) {
+                ((AndroidMediaPlayer) mMediaPlayer).setDataSource(playbackUri.toString());
+            } else {
+                mMediaPlayer.setDataSource(mAppContext, playbackUri, mHeaders);
+            }
             bindSurfaceHolder(mMediaPlayer, mSurfaceHolder);
             mMediaPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
             mMediaPlayer.setScreenOnWhilePlaying(true);
