@@ -216,34 +216,47 @@
                 android:textSize="14sp"
                 android:textStyle="bold" />
 
+            <!-- 竖排布局：三个内核选项各占一行，避免长文本把第三项挤出可视区 -->
             <RadioGroup
                 android:id="@+id/rg_player_core"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
-                android:orientation="horizontal">
+                android:orientation="vertical">
 
                 <RadioButton
                     android:id="@+id/rb_core_ijk"
-                    android:layout_width="wrap_content"
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginEnd="12dp"
+                    android:layout_marginBottom="4dp"
                     android:background="@drawable/bg_badge"
                     android:buttonTint="@color/md_theme_dark_primary"
                     android:focusable="true"
                     android:paddingHorizontal="8dp"
-                    android:text="IjkMediaPlayer (池化)"
+                    android:text="IjkMediaPlayer (池化，兼容性最好)"
                     android:textColor="@color/text_primary" />
 
                 <RadioButton
                     android:id="@+id/rb_core_android"
-                    android:layout_width="wrap_content"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="4dp"
+                    android:background="@drawable/bg_badge"
+                    android:buttonTint="@color/md_theme_dark_primary"
+                    android:focusable="true"
+                    android:paddingHorizontal="8dp"
+                    android:text="AndroidMediaPlayer (系统播放器)"
+                    android:textColor="@color/text_primary" />
+
+                <RadioButton
+                    android:id="@+id/rb_core_exo"
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:background="@drawable/bg_badge"
                     android:buttonTint="@color/md_theme_dark_primary"
                     android:focusable="true"
                     android:paddingHorizontal="8dp"
-                    android:text="AndroidMediaPlayer"
+                    android:text="ExoPlayer (4K HEVC 硬解，推荐)"
                     android:textColor="@color/text_primary" />
             </RadioGroup>
 
