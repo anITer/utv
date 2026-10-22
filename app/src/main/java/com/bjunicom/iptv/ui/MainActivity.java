@@ -102,7 +102,6 @@ public class MainActivity extends AppCompatActivity {
 
     private IptvChannel currentChannel;
     private boolean fallbackToLocalProxyAttempted = false;
-    private boolean udpxyUnreachableInSession = false;
     private long lastBackPressTimeMs = 0L;
     private final StringBuilder remoteNumberBuffer = new StringBuilder();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -648,9 +647,6 @@ public class MainActivity extends AppCompatActivity {
         videoView.setOnErrorListener((mp, frameworkErr, implErr) -> {
             if (currentChannel != null && currentChannel.isMulticastStream() && !fallbackToLocalProxyAttempted) {
                 fallbackToLocalProxyAttempted = true;
-                if (settings.getStreamMode() == IptvSettings.STREAM_MODE_UDPXY) {
-                    udpxyUnreachableInSession = true;
-                }
                 int localProxyPort = (getApplication() instanceof IptvApplication)
                         ? ((IptvApplication) getApplication()).getLocalProxyPort()
                         : -1;
@@ -733,16 +729,7 @@ public class MainActivity extends AppCompatActivity {
             localProxyPort = ((IptvApplication) getApplication()).getLocalProxyPort();
         }
 
-        String resolvedUrl;
-        if (settings.getStreamMode() == IptvSettings.STREAM_MODE_UDPXY
-                && udpxyUnreachableInSession
-                && localProxyPort > 0) {
-            // 若当前会话已检测到外部 udpxy 不可达，切台时直接走本地网卡组播直连，避免每次切台等待 udpxy 超时
-            fallbackToLocalProxyAttempted = true;
-            resolvedUrl = StreamUrlResolver.toUdpxyUrl(channel.getRawUrl(), "127.0.0.1:" + localProxyPort);
-        } else {
-            resolvedUrl = StreamUrlResolver.resolvePlaybackUrl(channel, settings, localProxyPort);
-        }
+        String resolvedUrl = StreamUrlResolver.resolvePlaybackUrl(channel, settings, localProxyPort);
         loadingOverlay.setVisibility(View.VISIBLE);
         tvLoadingHint.setText(String.format(Locale.US, "正在连接 [%s] %s...",
                 channel.getChannelNumberDisplay(), channel.getDisplayName()));
@@ -1298,7 +1285,6 @@ public class MainActivity extends AppCompatActivity {
                     }
 
                     settings.setUdpxyAddress(etUdpxy.getText().toString());
-                    udpxyUnreachableInSession = false;
 
                     int checkedCore = rgPlayerCore.getCheckedRadioButtonId();
                     if (checkedCore == R.id.rb_core_android) {
