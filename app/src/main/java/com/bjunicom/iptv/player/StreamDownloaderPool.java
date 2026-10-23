@@ -934,9 +934,17 @@ public class StreamDownloaderPool {
             synchronized (bufferLock) {
                 long unread = writePos - readPos;
                 if (unread + 188 > capacity) {
-                    // 若环形缓冲满，推进 readPos 保持 188 字节对齐丢弃最旧包，确保实时直播零积压
+                    // 若环形缓冲满，推进 readPos 保持 188 字节对齐丢弃最旧包，确保实时直播零积压。
+                    // 消费者（ijk 读取线程）落后于生产者时，让出 CPU 避免写线程全速空转
+                    // 抢锁导致读线程饿死（多实例并发时曾造成主线程 ANR/整机负载 33+）
                     long dropPackets = ((unread + 188 - capacity) / 188) + 64;
                     readPos += dropPackets * 188L;
+                    try {
+                        Thread.sleep(2L);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
                 }
                 int writeIdx = (int) (writePos % capacity);
                 int firstPart = Math.min(188, capacity - writeIdx);

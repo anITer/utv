@@ -896,6 +896,9 @@ public class IjkVideoView extends FrameLayout {
             try {
                 IMediaPlayer internal = unwrapPlayer(slot.player);
                 internal.setSurface(null);
+                // 与 releaseSlotPlayerOnly 同理：先停组播下载器再 reset，
+                // 否则 reset 会死等阻塞在 readAt 的 ijk 读取线程（ANR）
+                releaseSlotDownloader(slot);
                 slot.player.reset();
                 if (internal instanceof IjkMediaPlayer) {
                     configureIjkOptions((IjkMediaPlayer) internal, rawUrl);
@@ -960,25 +963,27 @@ public class IjkVideoView extends FrameLayout {
                 (useMediaCodec || enableHevcHw) ? 1 : 0);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-handle-resolution-change",
                 (useMediaCodec || enableHevcHw) ? 1 : 0);
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-sync", 0);
+        // mediacodec-sync=1：同步输入模式（旧版实测值）；上游改为 0 后 4K@50 输出掉到 25fps
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-sync", 1);
 
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "opensles", useOpenSlEs ? 1 : 0);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "overlay-format", IjkMediaPlayer.SDL_FCC_RV32);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "sync-av-start", 1);
-        // framedrop=2：直播流追同步时激进丢帧（1 会在 4K@50 高码率下积累延迟导致卡顿感）
+        // framedrop=2：直播流追同步时激进丢帧（旧版实测值）
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "framedrop", 2);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "start-on-prepared", 1);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "fast", 1);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "infbuf", 1);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "packet-buffering", 0);
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "min-frames", 15);
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "max-buffer-size", 8 * 1024 * 1024L);
+        // min-frames/max-buffer 恢复旧版实测值（5 / 2MB）；上游的 15 / 8MB 在 4K@50 下输出掉到 25fps
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "min-frames", 5);
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "max-buffer-size", 2 * 1024 * 1024L);
 
-        // 探测窗口一律加大到 1.5MB/1.5s：旧架构由下载器做 PAT+PMT+IDR 对齐可用 96KB 小探针，
-        // 新架构直接读本地代理转发的原始 TS，Wi-Fi 组播加入初期的丢包会损坏首个 IDR，
-        // 探针太小 FFmpeg 探测不到视频参数 (unspecified size) → MTK 硬解以 0x0 配置失败
+        // 探测窗口一律加大到 1.5MB/1.5s：Wi-Fi 组播加入初期丢包会损坏首个 IDR，
+        // 探针太小 FFmpeg 可能探测不到视频参数 (unspecified size) → MTK 硬解以 0x0 配置失败
         // (err -1010) → ijk 静默降级软解，4K@50fps 软解帧率仅个位数。
-        // 不能用 URL 后缀判断 4K（北京联通 4K 频道是 :3002/:8001 等非 :2000 端口）。
+        // 不能用 URL 后缀判断 4K（北京联通 4K 频道是 :3002/:8001 等非 :2000 端口），
+        // 虽然下载器已做 IDR 对齐，探针留足余量兜住对齐前的裸流场景。
         // 代价是所有频道起播多等约 1 秒，由三实例离屏预加载抵消。
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "probesize", 1536 * 1024L);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "analyzeduration", 1500000L);
@@ -1183,7 +1188,13 @@ public class IjkVideoView extends FrameLayout {
     }
 
     private void releaseSlotPlayerOnly(PlayerSlot slot) {
-        if (slot == null || slot.player == null) {
+        if (slot == null) {
+            return;
+        }
+        // 必须先停组播下载器：ijk shutdown 会等待其读取线程退出，
+        // 而 readAt 阻塞在下载器环形缓冲上——先 reset/release 会造成死等（ANR）
+        releaseSlotDownloader(slot);
+        if (slot.player == null) {
             return;
         }
         IMediaPlayer mp = slot.player;
@@ -1213,7 +1224,6 @@ public class IjkVideoView extends FrameLayout {
             mp.release();
         } catch (Throwable ignored) {
         }
-        releaseSlotDownloader(slot);
     }
 
     public void release(boolean cleartargetstate) {
