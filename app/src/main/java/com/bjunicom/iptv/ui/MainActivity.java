@@ -739,16 +739,7 @@ public class MainActivity extends AppCompatActivity {
             localProxyPort = ((IptvApplication) getApplication()).getLocalProxyPort();
         }
 
-        String resolvedUrl;
-        if (settings.getStreamMode() == IptvSettings.STREAM_MODE_UDPXY
-                && udpxyUnreachableInSession
-                && localProxyPort > 0) {
-            // 若当前会话已检测到外部 udpxy 不可达，切台时直接走本地网卡组播直连，避免每次切台等待 udpxy 超时
-            fallbackToLocalProxyAttempted = true;
-            resolvedUrl = StreamUrlResolver.toUdpxyUrl(channel.getRawUrl(), "127.0.0.1:" + localProxyPort);
-        } else {
-            resolvedUrl = StreamUrlResolver.resolvePlaybackUrl(channel, settings, localProxyPort);
-        }
+        String resolvedUrl = resolveChannelUrl(channel, localProxyPort);
         loadingOverlay.setVisibility(View.VISIBLE);
         tvLoadingHint.setText(String.format(Locale.US, "正在连接 [%s] %s...",
                 channel.getChannelNumberDisplay(), channel.getDisplayName()));
@@ -759,6 +750,68 @@ public class MainActivity extends AppCompatActivity {
         videoView.setRawChannelUrl(channel.getRawUrl());
         videoView.setVideoPath(resolvedUrl);
         videoView.start();
+
+        // 同步更新另外两个 Player 实例离屏播放【上一个】和【下一个】相邻频道
+        updateOffscreenAdjacentPlayers(channel, localProxyPort);
+    }
+
+    private String resolveChannelUrl(IptvChannel ch, int localProxyPort) {
+        if (ch == null) {
+            return "";
+        }
+        if (settings.getStreamMode() == IptvSettings.STREAM_MODE_UDPXY
+                && udpxyUnreachableInSession
+                && localProxyPort > 0
+                && ch.isMulticastStream()) {
+            return StreamUrlResolver.toUdpxyUrl(ch.getRawUrl(), "127.0.0.1:" + localProxyPort);
+        }
+        return StreamUrlResolver.resolvePlaybackUrl(ch, settings, localProxyPort);
+    }
+
+    /**
+     * 三实例级池化调度：计算当前频道的【上一个】与【下一个】频道，交由 IjkVideoView 的另外两个实例在离屏状态播放
+     */
+    private void updateOffscreenAdjacentPlayers(IptvChannel activeChannel, int localProxyPort) {
+        if (activeChannel == null || videoView == null) {
+            return;
+        }
+        List<IptvChannel> list = channelAdapter != null ? channelAdapter.getChannels() : null;
+        if (list == null || list.isEmpty()) {
+            list = repository.getAllChannels();
+        }
+        if (list == null || list.size() <= 1) {
+            return;
+        }
+        int curIdx = -1;
+        for (int i = 0; i < list.size(); i++) {
+            if (list.get(i).getRawUrl().equals(activeChannel.getRawUrl())) {
+                curIdx = i;
+                break;
+            }
+        }
+        if (curIdx < 0) {
+            return;
+        }
+        int prevIdx = (curIdx - 1 + list.size()) % list.size();
+        int nextIdx = (curIdx + 1) % list.size();
+        IptvChannel prevCh = list.get(prevIdx);
+        IptvChannel nextCh = list.get(nextIdx);
+
+        String prevResolved = (prevCh != null && !prevCh.getRawUrl().equals(activeChannel.getRawUrl()))
+                ? resolveChannelUrl(prevCh, localProxyPort)
+                : null;
+        String prevRaw = (prevCh != null && !prevCh.getRawUrl().equals(activeChannel.getRawUrl()))
+                ? prevCh.getRawUrl()
+                : null;
+
+        String nextResolved = (nextCh != null && !nextCh.getRawUrl().equals(activeChannel.getRawUrl()))
+                ? resolveChannelUrl(nextCh, localProxyPort)
+                : null;
+        String nextRaw = (nextCh != null && !nextCh.getRawUrl().equals(activeChannel.getRawUrl()))
+                ? nextCh.getRawUrl()
+                : null;
+
+        videoView.setAdjacentChannelPaths(prevResolved, prevRaw, nextResolved, nextRaw);
     }
 
     private void updateOsdWithChannel(IptvChannel ch) {
@@ -1753,6 +1806,9 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onPause() {
         mainHandler.removeCallbacks(telemetryTickRunnable);
+        if (videoView != null) {
+            videoView.stopOffscreenPlayers();
+        }
         super.onPause();
     }
 

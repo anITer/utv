@@ -38,9 +38,11 @@ import java.util.regex.Pattern;
 public class LocalMulticastProxyServer {
     private static final String TAG = "LocalMulticastProxy";
     private static final Pattern PATH_PATTERN = Pattern.compile("/(rtp|udp)/([0-9.]+):(\\d+)");
+    private static final int MAX_CONCURRENT_SESSIONS = 3; // 对应三实例播放器池 (当前播放 + 上一个离屏 + 下一个离屏)
 
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final List<ActiveSession> activeSessions = new CopyOnWriteArrayList<>();
+    private final Object sessionGateLock = new Object();
     private ServerSocket serverSocket;
     private ExecutorService executorService;
     private int listenPort = -1;
@@ -49,14 +51,26 @@ public class LocalMulticastProxyServer {
         final String groupKey;
         final Socket client;
         final MulticastSocket multicastSocket;
+        final InetAddress groupAddr;
+        final int mcastPort;
+        final List<NetworkInterface> joinedInterfaces;
 
-        ActiveSession(String groupKey, Socket client, MulticastSocket multicastSocket) {
+        ActiveSession(String groupKey,
+                      Socket client,
+                      MulticastSocket multicastSocket,
+                      InetAddress groupAddr,
+                      int mcastPort,
+                      List<NetworkInterface> joinedInterfaces) {
             this.groupKey = groupKey;
             this.client = client;
             this.multicastSocket = multicastSocket;
+            this.groupAddr = groupAddr;
+            this.mcastPort = mcastPort;
+            this.joinedInterfaces = joinedInterfaces;
         }
 
         void closeQuietly() {
+            leaveMulticastOnAllInterfaces(multicastSocket, groupAddr, mcastPort, joinedInterfaces);
             try {
                 multicastSocket.close();
             } catch (Exception ignored) {
@@ -94,6 +108,10 @@ public class LocalMulticastProxyServer {
 
     public synchronized void stop() {
         running.set(false);
+        for (ActiveSession session : activeSessions) {
+            session.closeQuietly();
+        }
+        activeSessions.clear();
         if (serverSocket != null) {
             try {
                 serverSocket.close();
@@ -162,24 +180,33 @@ public class LocalMulticastProxyServer {
             mcastPort = Integer.parseInt(matcher.group(3));
             String groupKey = mcastIp + ":" + mcastPort;
 
-            // 切台时立即关闭其它频道残留的组播连接，避免同端口(如8000/8008)旧频道串流或占用带宽
-            for (ActiveSession session : activeSessions) {
-                if (!groupKey.equals(session.groupKey)) {
-                    activeSessions.remove(session);
-                    session.closeQuietly();
+            synchronized (sessionGateLock) {
+                // 清理已断开或相同组播地址的旧连接，并保持最多 MAX_CONCURRENT_SESSIONS (3) 路并发组播流
+                for (ActiveSession session : activeSessions) {
+                    if (session.client.isClosed() || groupKey.equals(session.groupKey)) {
+                        activeSessions.remove(session);
+                        session.closeQuietly();
+                    }
                 }
+                while (activeSessions.size() >= MAX_CONCURRENT_SESSIONS) {
+                    ActiveSession oldest = activeSessions.remove(0);
+                    if (oldest != null) {
+                        oldest.closeQuietly();
+                    }
+                }
+
+                groupAddr = InetAddress.getByName(mcastIp);
+                multicastSocket = new MulticastSocket(null);
+                multicastSocket.setReuseAddress(true);
+                bindMulticastSocketWithGroupFilter(multicastSocket, groupAddr, mcastPort);
+                multicastSocket.setReceiveBufferSize(1024 * 1024);
+                multicastSocket.setSoTimeout(5000);
+                joinedInterfaces = joinMulticastOnAllInterfaces(multicastSocket, groupAddr, mcastPort);
+
+                currentSession = new ActiveSession(
+                        groupKey, client, multicastSocket, groupAddr, mcastPort, joinedInterfaces);
+                activeSessions.add(currentSession);
             }
-
-            groupAddr = InetAddress.getByName(mcastIp);
-            multicastSocket = new MulticastSocket(null);
-            multicastSocket.setReuseAddress(true);
-            multicastSocket.bind(new InetSocketAddress(mcastPort));
-            multicastSocket.setReceiveBufferSize(1024 * 1024);
-            multicastSocket.setSoTimeout(5000);
-            joinedInterfaces = joinMulticastOnAllInterfaces(multicastSocket, groupAddr, mcastPort);
-
-            currentSession = new ActiveSession(groupKey, client, multicastSocket);
-            activeSessions.add(currentSession);
 
             OutputStream out = client.getOutputStream();
             String responseHeaders = "HTTP/1.1 200 OK\r\n"
@@ -195,6 +222,7 @@ public class LocalMulticastProxyServer {
             boolean isRtp = "rtp".equalsIgnoreCase(proto);
 
             while (running.get() && !client.isClosed()) {
+                packet.setLength(buffer.length);
                 multicastSocket.receive(packet);
                 int len = packet.getLength();
                 int offset = packet.getOffset();
@@ -265,16 +293,33 @@ public class LocalMulticastProxyServer {
     }
 
     /**
-     * 获取所有可能承载 IPTV 组播流的候选网卡列表（按优先级排序：有线 eth0/eth1 -> USB网卡 -> Wi-Fi wlan0 -> 其它支持组播的网卡）
-     * 解决多网卡设备（如同时插了光猫 IPTV 网线 eth0 与家庭路由器 Wi-Fi wlan0）绑定单一网卡导致组播探测或播放超时的问题。
+     * 优先将 MulticastSocket 绑定到具体的组播地址 (groupAddr:mcastPort)：
+     * 在 Linux/Android 内核中，绑定具体组播 IP 可在内核层直接过滤掉同端口其它组播组的报文（规避 IP_MULTICAST_ALL=1 引起的同端口串流）；
+     * 若宿主内核不支持绑定组播 IP，则平滑回退至绑定通配端口 (0.0.0.0:mcastPort)。
+     */
+    public static void bindMulticastSocketWithGroupFilter(
+            MulticastSocket socket, InetAddress groupAddr, int mcastPort) throws IOException {
+        if (groupAddr != null && groupAddr.isMulticastAddress()) {
+            try {
+                socket.bind(new InetSocketAddress(groupAddr, mcastPort));
+                return;
+            } catch (IOException ignored) {
+            }
+        }
+        socket.bind(new InetSocketAddress(mcastPort));
+    }
+
+    /**
+     * 获取所有可能承载 IPTV 组播流的候选网卡列表（按优先级排序：有线 eth0.3964 / eth0 / eth1 -> USB网卡 -> Wi-Fi wlan0 -> 其它支持组播的网卡）
+     * 解决多网卡设备（如同时插了光猫 IPTV 网线 eth0 (VLAN 3964) 与家庭路由器 Wi-Fi wlan0）绑定单一网卡导致组播探测或播放超时的问题。
      */
     public static List<NetworkInterface> getCandidateMulticastInterfaces() {
         List<NetworkInterface> list = new ArrayList<>();
         try {
-            String[] preferredNames = {"eth0", "eth1", "usb0", "rndis0", "wlan0"};
+            String[] preferredNames = {"eth0.3964", "eth0", "eth1", "usb0", "rndis0", "wlan0"};
             for (String name : preferredNames) {
                 NetworkInterface nif = NetworkInterface.getByName(name);
-                if (nif != null && nif.isUp() && !nif.isLoopback() && hasIpv4Address(nif)) {
+                if (nif != null && nif.isUp() && !nif.isLoopback() && nif.supportsMulticast() && hasIpv4Address(nif)) {
                     list.add(nif);
                 }
             }
@@ -301,21 +346,28 @@ public class LocalMulticastProxyServer {
     }
 
     /**
-     * 将组播 Socket 同时加入所有候选网卡的 IGMP 组播组，确保无论组播流从有线口还是 Wi-Fi 进入均可接收
+     * 按优先级在首选 IPTV 网卡上加入 IGMP 组播组：
+     * - 若高优先级有线网卡 (eth0.3964 / eth0 / eth1 / usb0) 成功 Join，则不再向低优先级 Wi-Fi 重复 Join，避免多网卡桥接时收到双倍重复组播包；
+     * - 若首选网卡 Join 失败则自动尝试下一候选网卡；
+     * - 返回实际成功 Join 的网卡列表，供 Leave 时精确退组。
      */
     public static List<NetworkInterface> joinMulticastOnAllInterfaces(
             MulticastSocket socket, InetAddress groupAddr, int mcastPort) {
         List<NetworkInterface> joinedInterfaces = new ArrayList<>();
         List<NetworkInterface> candidates = getCandidateMulticastInterfaces();
         if (!candidates.isEmpty()) {
-            try {
-                socket.setNetworkInterface(candidates.get(0));
-            } catch (Exception ignored) {
-            }
             for (NetworkInterface nif : candidates) {
                 try {
+                    if (joinedInterfaces.isEmpty()) {
+                        socket.setNetworkInterface(nif);
+                    }
                     socket.joinGroup(new InetSocketAddress(groupAddr, mcastPort), nif);
                     joinedInterfaces.add(nif);
+                    String name = nif.getName();
+                    if (name != null && (name.startsWith("eth") || name.startsWith("usb") || name.startsWith("rndis"))) {
+                        // 有线 IPTV 专口已成功加入，不再重复加入无线网卡以避免重复流
+                        break;
+                    }
                 } catch (Exception ignored) {
                 }
             }

@@ -1,14 +1,17 @@
 package com.bjunicom.iptv.player;
 
 import android.content.Context;
+import android.graphics.SurfaceTexture;
 import android.media.AudioManager;
 import android.media.MediaPlayer;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.text.TextUtils;
 import android.util.AttributeSet;
 import android.util.Log;
 import android.view.Gravity;
+import android.view.Surface;
 import android.view.View;
 import android.widget.FrameLayout;
 
@@ -20,7 +23,6 @@ import com.bjunicom.iptv.network.StreamUrlResolver;
 
 import java.util.Locale;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicLong;
 
 import tv.danmaku.ijk.media.player.AndroidMediaPlayer;
 import tv.danmaku.ijk.media.player.IMediaPlayer;
@@ -33,30 +35,33 @@ import tv.danmaku.ijk.media.player.misc.ITrackInfo;
 import tv.danmaku.ijk.media.player.misc.IjkMediaFormat;
 
 /**
- * 基于 bilibili/ijkplayer 深度定制的北京联通 IPTV 播放器核心视图
+ * 基于 bilibili/ijkplayer 的三实例级池化播放器视图 (3-Instance Player Pool)
  *
- * 架构特性（下载与解码分离 + 双缓冲池化 + 消除切台慢放）：
- * 1. 下载模块池化 (StreamDownloaderPool)：
- *    切台时从池中获取预分配环形缓冲区的 PooledStreamDownloader，独立连接 HTTP-TS 或 IGMP 组播流，
- *    实时解复用 PAT/PMT 提取视频与音频编码格式 (TsCodecDescriptor)，并丢弃首个 IDR 关键帧之前的
- *    残留 P/B 帧与超前音频包，实现「PAT+PMT+IDR关键帧+同PTS音频」精准起播对齐，彻底解决切台前几秒 0.5x 慢放问题。
- * 2. 解码器模块池化 (CodecDecoderPool)：
- *    根据下载模块 parse 出来的 TsCodecDescriptor (如 H264+MP2、HEVC+EAC3)，从 CodecDecoderPool 按编码规格
- *    匹配复用或创建对应的 IjkMediaPlayer 与硬件音频 MediaCodec，切台时异步 reset 归还池中，避免每次销毁重建。
+ * 池化策略（准备 3 个 Player 实例）：
+ * 1. 实例 1 (mActiveSlot)：绑定主屏幕 SurfaceHolder，正常音量播放当前频道资源；
+ * 2. 实例 2 (mPrevSlot)：绑定独立离屏 Surface，静音在后台离屏播放【上一个】相邻频道；
+ * 3. 实例 3 (mNextSlot)：绑定独立离屏 Surface，静音在后台离屏播放【下一个】相邻频道；
+ *
+ * 切台流转机制：
+ * - 当用户切换到上一个或下一个频道时，若命中对应的离屏 Player 实例，立即将原当前实例切换至其离屏 Surface 并静音（降级为新的相邻离屏实例），
+ *   同时将命中的离屏实例直接绑定到主屏幕 Surface 并恢复音量（升级为新的当前播放实例），仅需重置剩下的第 3 个实例去离屏加载新的相邻频道。
  */
 public class IjkVideoView extends FrameLayout {
     private static final String TAG = "IjkVideoView";
 
+    public static final int PLAYER_POOL_SIZE = 3;
+    public static final long OFFSCREEN_IDLE_STOP_MS = 3000L; // 切台 3 秒后若未继续切台，自动停止后台离屏播放器
+
     public static final int RENDER_SURFACE_VIEW = 0;
     public static final int RENDER_TEXTURE_VIEW = 1;
 
-    private static final int STATE_ERROR = -1;
-    private static final int STATE_IDLE = 0;
-    private static final int STATE_PREPARING = 1;
-    private static final int STATE_PREPARED = 2;
-    private static final int STATE_PLAYING = 3;
-    private static final int STATE_PAUSED = 4;
-    private static final int STATE_PLAYBACK_COMPLETED = 5;
+    public static final int STATE_ERROR = -1;
+    public static final int STATE_IDLE = 0;
+    public static final int STATE_PREPARING = 1;
+    public static final int STATE_PREPARED = 2;
+    public static final int STATE_PLAYING = 3;
+    public static final int STATE_PAUSED = 4;
+    public static final int STATE_PLAYBACK_COMPLETED = 5;
 
     private static final int[] s_allAspectRatio = {
             IRenderView.AR_ASPECT_FIT_PARENT,
@@ -66,16 +71,143 @@ public class IjkVideoView extends FrameLayout {
             IRenderView.AR_4_3_FIT_PARENT
     };
 
+    /**
+     * 单个 Player 实例槽位：持有独立的 IMediaPlayer (IjkMediaPlayer 或 AndroidMediaPlayer) 与专属离屏 Surface
+     */
+    public static final class PlayerSlot {
+        public final int slotIndex;
+        public IMediaPlayer player;
+        public int playerType = -1;
+        public Uri uri;
+        public String rawChannelUrl;
+        public int state = STATE_IDLE;
+        public int videoWidth;
+        public int videoHeight;
+        public int videoSarNum;
+        public int videoSarDen;
+        public int videoRotationDegree;
+        public long prepareStartTime;
+        public long prepareEndTime;
+        public boolean promotedFromOffscreen;
+
+        private SurfaceTexture offscreenTexture;
+        private Surface offscreenSurface;
+
+        PlayerSlot(int slotIndex) {
+            this.slotIndex = slotIndex;
+        }
+
+        synchronized Surface ensureOffscreenSurface() {
+            if (offscreenSurface != null && offscreenSurface.isValid()) {
+                return offscreenSurface;
+            }
+            releaseOffscreenSurface();
+            try {
+                offscreenTexture = new SurfaceTexture(0);
+                offscreenTexture.setDefaultBufferSize(16, 16);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN) {
+                    try {
+                        offscreenTexture.detachFromGLContext();
+                    } catch (Throwable ignored) {
+                    }
+                }
+                offscreenSurface = new Surface(offscreenTexture);
+            } catch (Throwable t) {
+                Log.w(TAG, "Failed to create offscreen surface for slot " + slotIndex + ": " + t.getMessage());
+            }
+            return offscreenSurface;
+        }
+
+        void bindToOffscreenSurface() {
+            if (player == null) {
+                return;
+            }
+            try {
+                IMediaPlayer rawPlayer = unwrapPlayer(player);
+                Surface offscreen = ensureOffscreenSurface();
+                if (offscreen != null && offscreen.isValid()) {
+                    // 直接将底层 IjkMediaPlayer 或 AndroidMediaPlayer (MediaPlayer) 切换至离屏 Surface，
+                    // 避免先 setDisplay(null) 导致 AndroidMediaPlayer 在 PREPARING/PLAYING 状态触发空 Surface 异常
+                    rawPlayer.setSurface(offscreen);
+                } else {
+                    rawPlayer.setDisplay(null);
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+
+        void setMuted(boolean muted) {
+            if (player == null) {
+                return;
+            }
+            try {
+                float vol = muted ? 0.0f : 1.0f;
+                player.setVolume(vol, vol);
+            } catch (Throwable ignored) {
+            }
+        }
+
+        boolean matchesStream(Uri targetUri, String targetRawUrl) {
+            if (state == STATE_IDLE || player == null) {
+                return false;
+            }
+            if (targetUri != null && uri != null && targetUri.equals(uri)) {
+                return true;
+            }
+            if (!TextUtils.isEmpty(targetRawUrl)
+                    && !TextUtils.isEmpty(rawChannelUrl)
+                    && targetRawUrl.equals(rawChannelUrl)) {
+                return true;
+            }
+            return false;
+        }
+
+        void resetMetadata() {
+            uri = null;
+            rawChannelUrl = null;
+            state = STATE_IDLE;
+            videoWidth = 0;
+            videoHeight = 0;
+            videoSarNum = 0;
+            videoSarDen = 0;
+            videoRotationDegree = 0;
+            prepareStartTime = 0L;
+            prepareEndTime = 0L;
+            promotedFromOffscreen = false;
+        }
+
+        synchronized void releaseOffscreenSurface() {
+            if (offscreenSurface != null) {
+                try {
+                    offscreenSurface.release();
+                } catch (Throwable ignored) {
+                }
+                offscreenSurface = null;
+            }
+            if (offscreenTexture != null) {
+                try {
+                    offscreenTexture.release();
+                } catch (Throwable ignored) {
+                }
+                offscreenTexture = null;
+            }
+        }
+    }
+
+    private final PlayerSlot[] mPlayerSlots = new PlayerSlot[PLAYER_POOL_SIZE];
+    private PlayerSlot mActiveSlot = null;
+    private PlayerSlot mPrevSlot = null;
+    private PlayerSlot mNextSlot = null;
+    private final Runnable mStopOffscreenRunnable = this::stopOffscreenPlayers;
+
     private Uri mUri;
     private String mRawChannelUrl;
+    private Uri mPendingPrevUri;
+    private String mPendingPrevRawUrl;
+    private Uri mPendingNextUri;
+    private String mPendingNextRawUrl;
     private Map<String, String> mHeaders;
     private final TsHardwareAudioCompanion mHwAudioCompanion = new TsHardwareAudioCompanion();
-
-    // 下载模块与解码模块的池化句柄
-    private final AtomicLong mPlaybackSessionToken = new AtomicLong(0);
-    private StreamDownloaderPool.PooledStreamDownloader mActiveDownloader = null;
-    private CodecDecoderPool.PooledIjkDecoder mPooledIjkDecoder = null;
-    private volatile TsCodecDescriptor mActiveCodecDescriptor = null;
 
     private int mCurrentState = STATE_IDLE;
     private int mTargetState = STATE_IDLE;
@@ -125,10 +257,14 @@ public class IjkVideoView extends FrameLayout {
         mSettings = new IptvSettings(mAppContext);
         mCurrentAspectRatio = mSettings.getAspectRatio();
 
-        setRender(mSettings.getRenderViewType());
+        for (int i = 0; i < PLAYER_POOL_SIZE; i++) {
+            mPlayerSlots[i] = new PlayerSlot(i);
+        }
+        mActiveSlot = mPlayerSlots[0];
+        mPrevSlot = mPlayerSlots[1];
+        mNextSlot = mPlayerSlots[2];
 
-        // 预热常用 Codec 规格的解码器池
-        CodecDecoderPool.getInstance().prewarmCommonDecoders(mSettings);
+        setRender(mSettings.getRenderViewType());
 
         mVideoWidth = 0;
         mVideoHeight = 0;
@@ -136,6 +272,85 @@ public class IjkVideoView extends FrameLayout {
         setFocusableInTouchMode(false);
         mCurrentState = STATE_IDLE;
         mTargetState = STATE_IDLE;
+    }
+
+    public int getPlayerPoolSize() {
+        return PLAYER_POOL_SIZE;
+    }
+
+    public PlayerSlot[] getPlayerSlots() {
+        return mPlayerSlots;
+    }
+
+    public PlayerSlot getActiveSlot() {
+        return mActiveSlot;
+    }
+
+    public PlayerSlot getPrevSlot() {
+        return mPrevSlot;
+    }
+
+    public PlayerSlot getNextSlot() {
+        return mNextSlot;
+    }
+
+    public boolean isActivePlayerPromotedFromPool() {
+        return mActiveSlot != null && mActiveSlot.promotedFromOffscreen;
+    }
+
+    public boolean areOffscreenPlayersStopped() {
+        for (PlayerSlot slot : mPlayerSlots) {
+            if (slot != null && slot != mActiveSlot && slot.state != STATE_IDLE) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * 当用户切台 3 秒后没有继续切台时调用：
+     * 停止并重置除当前主屏实例 (mActiveSlot) 以外的两个后台离屏播放器 (mPrevSlot 与 mNextSlot)，
+     * 断开其后台流连接并释放硬件解码资源。
+     */
+    public void stopOffscreenPlayers() {
+        removeCallbacks(mStopOffscreenRunnable);
+        for (PlayerSlot slot : mPlayerSlots) {
+            if (slot != null && slot != mActiveSlot) {
+                stopAndResetOffscreenSlot(slot);
+            }
+        }
+        Log.i(TAG, "Stopped off-screen background players after " + OFFSCREEN_IDLE_STOP_MS + "ms idle");
+    }
+
+    private void scheduleStopOffscreenPlayers() {
+        removeCallbacks(mStopOffscreenRunnable);
+        postDelayed(mStopOffscreenRunnable, OFFSCREEN_IDLE_STOP_MS);
+    }
+
+    private void stopAndResetOffscreenSlot(PlayerSlot slot) {
+        if (slot == null) {
+            return;
+        }
+        if (slot.player != null && slot.state != STATE_IDLE) {
+            IMediaPlayer rawPlayer = unwrapPlayer(slot.player);
+            // AndroidMediaPlayer 在 STATE_PREPARING 状态直接调 stop() 会抛 IllegalStateException，
+            // 仅在已进入 PREPARED/PLAYING/PAUSED 时调用 stop()，随后统一 reset()
+            if (slot.state == STATE_PREPARED || slot.state == STATE_PLAYING || slot.state == STATE_PAUSED) {
+                try {
+                    slot.player.stop();
+                } catch (Throwable ignored) {
+                }
+            }
+            try {
+                rawPlayer.setSurface(null);
+            } catch (Throwable ignored) {
+            }
+            try {
+                slot.player.reset();
+            } catch (Throwable ignored) {
+            }
+        }
+        slot.resetMetadata();
     }
 
     public void setRenderView(IRenderView renderView) {
@@ -226,201 +441,328 @@ public class IjkVideoView extends FrameLayout {
         invalidate();
     }
 
+    /**
+     * 设置并更新上一个、下一个频道的离屏播放实例 (mPrevSlot 与 mNextSlot)，
+     * 并启动/重置 3 秒无切台自动停止后台播放器的计时器。
+     */
+    public void setAdjacentChannelPaths(String prevPath,
+                                        String prevRawUrl,
+                                        String nextPath,
+                                        String nextRawUrl) {
+        mPendingPrevUri = !TextUtils.isEmpty(prevPath) ? resolvePlaybackUri(Uri.parse(prevPath)) : null;
+        mPendingPrevRawUrl = prevRawUrl;
+        mPendingNextUri = !TextUtils.isEmpty(nextPath) ? resolvePlaybackUri(Uri.parse(nextPath)) : null;
+        mPendingNextRawUrl = nextRawUrl;
+
+        if (mSurfaceHolder != null) {
+            syncOffscreenAdjacentSlots();
+        }
+        scheduleStopOffscreenPlayers();
+    }
+
     public void stopPlayback() {
-        release(true);
+        releaseAllSlots(true);
     }
 
     /**
-     * 核心切台流程（下载模块与解码模块解耦）：
-     * 1. 先从 StreamDownloaderPool 获取池化下载器启动新频道下载，实时解析 PAT/PMT 获取 TsCodecDescriptor 并对齐首个 IDR 关键帧；
-     * 2. 下载器回调 onCodecParsed(descriptor) 后，根据解析出的编码规格从 CodecDecoderPool 获取（或创建）匹配的解码器；
-     * 3. 通过 IMediaDataSource 零拷贝环形缓冲区将已对齐关键帧的 TS 流喂给池化解码器，避免每次重建解码器并彻底消除切台慢放。
+     * 核心切台与三实例池化调度逻辑：
+     * 1. 检查目标频道是否已由离屏实例 (mPrevSlot 或 mNextSlot) 在后台离屏播放/准备中；
+     * 2. 若命中离屏实例：
+     *    - 先将旧 mActiveSlot 切换绑定至其专属离屏 Surface 并静音（保留其播放状态直接作为新的相邻离屏实例）；
+     *    - 再将命中的离屏实例绑定至主屏幕 SurfaceHolder 并恢复音量 1.0f，实现毫秒级无缝切台；
+     * 3. 若未命中（如首次启动或数字键跨台）：
+     *    - 在 mActiveSlot 中重置并加载当前频道，同时由 mPrevSlot 与 mNextSlot 在后台离屏播放上/下一频道。
      */
     private void openVideo() {
         if (mUri == null || mSurfaceHolder == null) {
             return;
         }
-        release(false);
-
-        final long sessionToken = mPlaybackSessionToken.incrementAndGet();
+        mHwAudioCompanion.stop();
+        ensureAllSlotsMatchPlayerType(mSettings.getPlayerType());
 
         AudioManager am = (AudioManager) mAppContext.getSystemService(Context.AUDIO_SERVICE);
         if (am != null) {
             am.requestAudioFocus(null, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN);
         }
 
+        Uri playbackUri = resolvePlaybackUri(mUri);
+        PlayerSlot hitSlot = findMatchingSlot(playbackUri, mRawChannelUrl);
+
+        if (hitSlot != null && hitSlot != mActiveSlot) {
+            promoteOffscreenSlotToActive(hitSlot);
+            return;
+        }
+
+        if (hitSlot != null && hitSlot == mActiveSlot
+                && (hitSlot.state == STATE_PLAYING || hitSlot.state == STATE_PREPARED || hitSlot.state == STATE_PREPARING)) {
+            bindSurfaceHolder(hitSlot.player, mSurfaceHolder);
+            hitSlot.setMuted(false);
+            if (mTargetState == STATE_PLAYING && hitSlot.state != STATE_PREPARING) {
+                start();
+            }
+            return;
+        }
+
+        if (mActiveSlot == null) {
+            mActiveSlot = mPlayerSlots[0];
+        } else if (mActiveSlot.state != STATE_IDLE
+                && mActiveSlot.state != STATE_ERROR
+                && mActiveSlot.player != null
+                && !TextUtils.equals(mActiveSlot.rawChannelUrl, mRawChannelUrl)) {
+            // 若用户超过 3 秒后再次切台（后台离屏实例已停止），将当前正在播放的主屏实例退居离屏作为上一频道缓存，
+            // 并启用空闲槽位加载新频道
+            PlayerSlot oldActive = mActiveSlot;
+            oldActive.setMuted(true);
+            oldActive.bindToOffscreenSurface();
+            PlayerSlot nextActive = (mNextSlot != null && mNextSlot != oldActive)
+                    ? mNextSlot
+                    : (mPrevSlot != null && mPrevSlot != oldActive ? mPrevSlot : mPlayerSlots[0]);
+            mActiveSlot = nextActive;
+        }
+        rebalancePrevNextPointers();
+
         mPrepareStartTime = System.currentTimeMillis();
         mCurrentState = STATE_PREPARING;
+        loadSlotWithStream(mActiveSlot, playbackUri, mRawChannelUrl, true);
+        scheduleStopOffscreenPlayers();
+    }
 
-        try {
-            Uri playbackUri = resolvePlaybackUri(mUri);
-            String scheme = playbackUri.getScheme();
-            boolean isHlsStream = isHlsUri(playbackUri) || isHlsUrl(mRawChannelUrl);
-            boolean useSeparatedPoolPipeline = (mSettings.getPlayerType() == IptvSettings.PLAYER_IJK)
-                    && !isHlsStream
-                    && scheme != null
-                    && (scheme.equalsIgnoreCase("http")
-                    || scheme.equalsIgnoreCase("https")
-                    || scheme.equalsIgnoreCase("rtp")
-                    || scheme.equalsIgnoreCase("udp"));
-
-            if (useSeparatedPoolPipeline) {
-                final StreamDownloaderPool.PooledStreamDownloader downloader =
-                        StreamDownloaderPool.getInstance().acquire();
-                mActiveDownloader = downloader;
-
-                downloader.startDownload(playbackUri, mRawChannelUrl, new StreamDownloaderPool.OnStreamEventsListener() {
-                    @Override
-                    public void onCodecParsed(final TsCodecDescriptor descriptor,
-                                              final StreamDownloaderPool.PooledStreamDownloader activeDl) {
-                        post(() -> {
-                            if (sessionToken != mPlaybackSessionToken.get()) {
-                                return;
-                            }
-                            attachPooledDecoderForParsedStream(sessionToken, descriptor, activeDl);
-                        });
-                    }
-
-                    @Override
-                    public void onStreamError(final String reason,
-                                              final StreamDownloaderPool.PooledStreamDownloader activeDl) {
-                        post(() -> {
-                            if (sessionToken != mPlaybackSessionToken.get()) {
-                                return;
-                            }
-                            Log.w(TAG, "StreamDownloader error for " + mUri + ": " + reason);
-                            mCurrentState = STATE_ERROR;
-                            mTargetState = STATE_ERROR;
-                            mErrorListener.onError(mMediaPlayer, MediaPlayer.MEDIA_ERROR_UNKNOWN, 0);
-                        });
-                    }
-                });
-                return;
+    private PlayerSlot findMatchingSlot(Uri playbackUri, String rawChannelUrl) {
+        for (PlayerSlot slot : mPlayerSlots) {
+            if (slot != null && slot.matchesStream(playbackUri, rawChannelUrl)) {
+                return slot;
             }
+        }
+        return null;
+    }
 
-            if (isHlsStream && mSettings.getPlayerType() == IptvSettings.PLAYER_IJK) {
-                TsCodecDescriptor hlsDesc = TsCodecDescriptor.createDefault(false);
-                mActiveCodecDescriptor = hlsDesc;
-                mPooledIjkDecoder = CodecDecoderPool.getInstance().acquireIjkDecoder(hlsDesc, mSettings);
-                IjkMediaPlayer ijkPlayer = mPooledIjkDecoder.player;
-                ijkPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "an", 0);
-                ijkPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "probesize", 512 * 1024L);
-                ijkPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "analyzeduration", 1000000L);
-                if (mSettings.getRenderViewType() == RENDER_TEXTURE_VIEW) {
-                    mMediaPlayer = new TextureMediaPlayer(ijkPlayer);
-                } else {
-                    mMediaPlayer = ijkPlayer;
-                }
-            } else {
-                // 非 IJK 模式 (ExoPlayer / AndroidMediaPlayer) 走常规播放器路径
-                mMediaPlayer = createFallbackPlayer(mSettings.getPlayerType());
+    /**
+     * 将命中的离屏实例 (mPrevSlot 或 mNextSlot) 直接转正为主屏幕播放实例
+     */
+    private void promoteOffscreenSlotToActive(PlayerSlot promotedSlot) {
+        PlayerSlot oldActive = mActiveSlot;
+        if (oldActive != null && oldActive != promotedSlot && oldActive.player != null) {
+            // 先将旧主屏实例切到其专属离屏 Surface 并静音，释放主屏 Surface 独占锁，同时保留其播放流作为新相邻频道
+            oldActive.setMuted(true);
+            oldActive.bindToOffscreenSurface();
+        }
+
+        mActiveSlot = promotedSlot;
+        mActiveSlot.promotedFromOffscreen = true;
+        mMediaPlayer = mActiveSlot.player;
+        rebalancePrevNextPointers();
+
+        // 绑定主屏 Surface 并恢复音量
+        bindSurfaceHolder(mMediaPlayer, mSurfaceHolder);
+        mActiveSlot.setMuted(false);
+
+        mVideoWidth = mActiveSlot.videoWidth;
+        mVideoHeight = mActiveSlot.videoHeight;
+        mVideoSarNum = mActiveSlot.videoSarNum;
+        mVideoSarDen = mActiveSlot.videoSarDen;
+        mVideoRotationDegree = mActiveSlot.videoRotationDegree;
+        mPrepareStartTime = mActiveSlot.prepareStartTime;
+
+        Log.i(TAG, "Promoted off-screen player slot #" + promotedSlot.slotIndex
+                + " (state=" + promotedSlot.state + ") to active main screen for " + mUri);
+
+        if (mActiveSlot.state == STATE_PREPARED || mActiveSlot.state == STATE_PLAYING) {
+            mPrepareEndTime = System.currentTimeMillis();
+            mCurrentState = STATE_PREPARED;
+            if (mVideoWidth > 0 && mVideoHeight > 0 && mRenderView != null) {
+                mRenderView.setVideoSize(mVideoWidth, mVideoHeight);
+                mRenderView.setVideoSampleAspectRatio(mVideoSarNum, mVideoSarDen);
             }
-            attachPlayerListeners(mMediaPlayer);
-            mMediaPlayer.setDataSource(mAppContext, playbackUri, mHeaders);
-            bindSurfaceHolder(mMediaPlayer, mSurfaceHolder);
-            mMediaPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
-            mMediaPlayer.setScreenOnWhilePlaying(true);
-            mMediaPlayer.prepareAsync();
-        } catch (Throwable ex) {
-            Log.w(TAG, "Unable to open IPTV stream: " + mUri, ex);
-            mCurrentState = STATE_ERROR;
-            mTargetState = STATE_ERROR;
-            mErrorListener.onError(mMediaPlayer, MediaPlayer.MEDIA_ERROR_UNKNOWN, 0);
+            checkAndStartHwAudioIfNeeded();
+            if (mOnPreparedListener != null) {
+                mOnPreparedListener.onPrepared(mMediaPlayer);
+            }
+            if (mTargetState == STATE_PLAYING) {
+                start();
+            }
+        } else if (mActiveSlot.state == STATE_ERROR) {
+            // 若离屏预播放期间曾发生错误（如网络闪断或非真机环境），转正到主屏后立即在该槽位重新尝试连接
+            mPrepareStartTime = System.currentTimeMillis();
+            mCurrentState = STATE_PREPARING;
+            loadSlotWithStream(mActiveSlot, resolvePlaybackUri(mUri), mRawChannelUrl, true);
+            mActiveSlot.promotedFromOffscreen = true;
+        } else {
+            mCurrentState = STATE_PREPARING;
         }
     }
 
     /**
-     * 当下载模块完成 MPEG-TS 的 PAT/PMT Codec 解析与首个关键帧对齐后，
-     * 根据 TsCodecDescriptor 从 CodecDecoderPool 中选择（或创建）对应规格的解码器并绑定数据源。
+     * 重新分配除 mActiveSlot 外的另外两个实例作为 mPrevSlot 和 mNextSlot，
+     * 优先保留已经在播放目标相邻频道的实例（例如刚从主屏退居离屏的上一频道实例）。
      */
-    private void attachPooledDecoderForParsedStream(
-            long sessionToken,
-            TsCodecDescriptor descriptor,
-            StreamDownloaderPool.PooledStreamDownloader downloader) {
-        if (sessionToken != mPlaybackSessionToken.get() || mSurfaceHolder == null) {
-            return;
-        }
-        try {
-            mActiveCodecDescriptor = descriptor;
-            mPooledIjkDecoder = CodecDecoderPool.getInstance().acquireIjkDecoder(descriptor, mSettings);
-            IjkMediaPlayer ijkPlayer = mPooledIjkDecoder.player;
-
-            if (mSettings.getRenderViewType() == RENDER_TEXTURE_VIEW) {
-                mMediaPlayer = new TextureMediaPlayer(ijkPlayer);
-            } else {
-                mMediaPlayer = ijkPlayer;
-            }
-
-            attachPlayerListeners(mMediaPlayer);
-            // 将池化下载器作为 IMediaDataSource 直接绑定给池化解码器
-            ijkPlayer.setDataSource(downloader);
-            bindSurfaceHolder(mMediaPlayer, mSurfaceHolder);
-            mMediaPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
-            mMediaPlayer.setScreenOnWhilePlaying(true);
-            mMediaPlayer.prepareAsync();
-
-            Log.i(TAG, "Bound pooled decoder [reused=" + mPooledIjkDecoder.reusedFromPool
-                    + ", profile=" + mPooledIjkDecoder.profileKey
-                    + "] to pooled downloader for codec=" + descriptor);
-        } catch (Throwable ex) {
-            Log.w(TAG, "Failed to bind pooled decoder for stream: " + mUri, ex);
-            mCurrentState = STATE_ERROR;
-            mTargetState = STATE_ERROR;
-            mErrorListener.onError(mMediaPlayer, MediaPlayer.MEDIA_ERROR_UNKNOWN, 0);
-        }
-    }
-
-    private Uri resolvePlaybackUri(Uri sourceUri) {
-        if (sourceUri == null) {
-            return null;
-        }
-        String scheme = sourceUri.getScheme();
-        if (scheme != null && (scheme.equalsIgnoreCase("rtp") || scheme.equalsIgnoreCase("udp"))) {
-            // StreamDownloaderPool 内置了直连 IGMP 组播 Socket 的能力，可直接处理 rtp:// / udp://；
-            // 若用户切换到 ExoPlayer / AndroidMediaPlayer，则通过 LocalMulticastProxyServer 转换。
-            if (mSettings.getPlayerType() != IptvSettings.PLAYER_IJK && mAppContext instanceof IptvApplication) {
-                int proxyPort = ((IptvApplication) mAppContext).getLocalProxyPort();
-                if (proxyPort > 0) {
-                    String localUrl = StreamUrlResolver.toUdpxyUrl(
-                            sourceUri.toString(), "127.0.0.1:" + proxyPort);
-                    return Uri.parse(localUrl);
+    private void rebalancePrevNextPointers() {
+        PlayerSlot candidateA = null;
+        PlayerSlot candidateB = null;
+        for (PlayerSlot s : mPlayerSlots) {
+            if (s != mActiveSlot) {
+                if (candidateA == null) {
+                    candidateA = s;
+                } else {
+                    candidateB = s;
                 }
             }
         }
-        return sourceUri;
-    }
-
-    private void attachPlayerListeners(IMediaPlayer mp) {
-        if (mp == null) {
+        if (candidateA == null || candidateB == null) {
             return;
         }
-        mp.setOnPreparedListener(mPreparedListener);
-        mp.setOnVideoSizeChangedListener(mSizeChangedListener);
-        mp.setOnCompletionListener(mCompletionListener);
-        mp.setOnErrorListener(mErrorListener);
-        mp.setOnInfoListener(mInfoListener);
-    }
-
-    public static boolean isHlsUri(Uri uri) {
-        return uri != null && isHlsUrl(uri.toString());
-    }
-
-    public static boolean isHlsUrl(String url) {
-        if (TextUtils.isEmpty(url)) {
-            return false;
+        if (mPendingPrevUri != null && candidateA.matchesStream(mPendingPrevUri, mPendingPrevRawUrl)) {
+            mPrevSlot = candidateA;
+            mNextSlot = candidateB;
+        } else if (mPendingPrevUri != null && candidateB.matchesStream(mPendingPrevUri, mPendingPrevRawUrl)) {
+            mPrevSlot = candidateB;
+            mNextSlot = candidateA;
+        } else if (mPendingNextUri != null && candidateA.matchesStream(mPendingNextUri, mPendingNextRawUrl)) {
+            mNextSlot = candidateA;
+            mPrevSlot = candidateB;
+        } else if (mPendingNextUri != null && candidateB.matchesStream(mPendingNextUri, mPendingNextRawUrl)) {
+            mNextSlot = candidateB;
+            mPrevSlot = candidateA;
+        } else {
+            mPrevSlot = candidateA;
+            mNextSlot = candidateB;
         }
-        String lower = url.toLowerCase();
-        return lower.contains(".m3u8");
+    }
+
+    /**
+     * 同步驱动 mPrevSlot 与 mNextSlot 在后台离屏播放上一个和下一个频道
+     */
+    private void syncOffscreenAdjacentSlots() {
+        rebalancePrevNextPointers();
+
+        if (mPrevSlot != null && mPendingPrevUri != null && !mPendingPrevUri.equals(mActiveSlot != null ? mActiveSlot.uri : null)) {
+            if (!mPrevSlot.matchesStream(mPendingPrevUri, mPendingPrevRawUrl)) {
+                loadSlotWithStream(mPrevSlot, mPendingPrevUri, mPendingPrevRawUrl, false);
+            } else {
+                mPrevSlot.setMuted(true);
+                mPrevSlot.bindToOffscreenSurface();
+            }
+        }
+
+        if (mNextSlot != null && mPendingNextUri != null
+                && !mPendingNextUri.equals(mActiveSlot != null ? mActiveSlot.uri : null)
+                && !mPendingNextUri.equals(mPendingPrevUri)) {
+            if (!mNextSlot.matchesStream(mPendingNextUri, mPendingNextRawUrl)) {
+                loadSlotWithStream(mNextSlot, mPendingNextUri, mPendingNextRawUrl, false);
+            } else {
+                mNextSlot.setMuted(true);
+                mNextSlot.bindToOffscreenSurface();
+            }
+        }
+    }
+
+    /**
+     * 在指定 PlayerSlot 中重置/创建播放器实例并加载流（支持主屏播放与离屏静音预播放）
+     */
+    private void loadSlotWithStream(final PlayerSlot slot,
+                                    final Uri playbackUri,
+                                    final String rawUrl,
+                                    final boolean isMainScreen) {
+        if (slot == null || playbackUri == null) {
+            return;
+        }
+        slot.uri = playbackUri;
+        slot.rawChannelUrl = rawUrl;
+        slot.state = STATE_PREPARING;
+        slot.prepareStartTime = System.currentTimeMillis();
+        slot.prepareEndTime = 0L;
+        slot.promotedFromOffscreen = false;
+        try {
+            resetOrCreateSlotPlayer(slot, rawUrl);
+            slot.uri = playbackUri;
+            slot.rawChannelUrl = rawUrl;
+            slot.state = STATE_PREPARING;
+            slot.prepareStartTime = System.currentTimeMillis();
+            slot.prepareEndTime = 0L;
+            slot.promotedFromOffscreen = false;
+
+            IMediaPlayer mp = slot.player;
+            attachSlotListeners(slot, mp);
+            mp.setDataSource(mAppContext, playbackUri, mHeaders);
+
+            if (isMainScreen) {
+                mMediaPlayer = mp;
+                bindSurfaceHolder(mp, mSurfaceHolder);
+                slot.setMuted(false);
+                mp.setScreenOnWhilePlaying(true);
+            } else {
+                slot.bindToOffscreenSurface();
+                slot.setMuted(true);
+            }
+
+            mp.setAudioStreamType(AudioManager.STREAM_MUSIC);
+            mp.prepareAsync();
+        } catch (Throwable ex) {
+            Log.w(TAG, "Unable to open stream in slot #" + slot.slotIndex + ": " + playbackUri, ex);
+            if (isMainScreen && slot == mActiveSlot) {
+                slot.state = STATE_ERROR;
+                mCurrentState = STATE_ERROR;
+                mTargetState = STATE_ERROR;
+                if (mOnErrorListener != null) {
+                    mOnErrorListener.onError(slot.player, MediaPlayer.MEDIA_ERROR_UNKNOWN, 0);
+                }
+            }
+        }
+    }
+
+    /**
+     * 当用户在设置中切换播放器内核 (IjkMediaPlayer <-> AndroidMediaPlayer) 时，
+     * 立即清理不匹配的旧内核实例，确保全部 3 个槽位均使用当前所选的播放器内核。
+     */
+    private void ensureAllSlotsMatchPlayerType(int desiredPlayerType) {
+        for (PlayerSlot slot : mPlayerSlots) {
+            if (slot != null && slot.player != null && slot.playerType != desiredPlayerType) {
+                releaseSlotPlayerOnly(slot);
+                slot.resetMetadata();
+            }
+        }
+    }
+
+    private void resetOrCreateSlotPlayer(PlayerSlot slot, String rawUrl) {
+        int desiredPlayerType = mSettings.getPlayerType();
+        boolean canReuseExisting = slot.player != null
+                && slot.playerType == desiredPlayerType
+                && slot.state != STATE_ERROR;
+        if (slot.player instanceof TextureMediaPlayer && mCurrentRender != RENDER_TEXTURE_VIEW) {
+            canReuseExisting = false;
+        }
+        if (canReuseExisting) {
+            try {
+                IMediaPlayer internal = unwrapPlayer(slot.player);
+                internal.setSurface(null);
+                slot.player.reset();
+                if (internal instanceof IjkMediaPlayer) {
+                    configureIjkOptions((IjkMediaPlayer) internal, rawUrl);
+                }
+                slot.resetMetadata();
+                slot.playerType = desiredPlayerType;
+                return;
+            } catch (Throwable t) {
+                Log.w(TAG, "Slot #" + slot.slotIndex + " reset() failed, recreating player: " + t.getMessage());
+            }
+        }
+        releaseSlotPlayerOnly(slot);
+        slot.resetMetadata();
+        slot.player = createConfiguredPlayer(desiredPlayerType, rawUrl);
+        slot.playerType = desiredPlayerType;
     }
 
     public IMediaPlayer createFallbackPlayer(int playerType) {
+        return createConfiguredPlayer(playerType, mRawChannelUrl);
+    }
+
+    private IMediaPlayer createConfiguredPlayer(int playerType, String rawUrl) {
         IMediaPlayer mediaPlayer;
         switch (playerType) {
             case IptvSettings.PLAYER_IJK:
                 try {
                     IjkMediaPlayer ijkPlayer = new IjkMediaPlayer();
-                    CodecDecoderPool.configureIjkOptionsForCodec(
-                            ijkPlayer, TsCodecDescriptor.createDefault(false), mSettings);
+                    IjkMediaPlayer.native_setLogLevel(IjkMediaPlayer.IJK_LOG_INFO);
+                    configureIjkOptions(ijkPlayer, rawUrl);
                     mediaPlayer = ijkPlayer;
                 } catch (Throwable t) {
                     Log.e(TAG, "Failed to init IjkMediaPlayer, falling back to AndroidMediaPlayer", t);
@@ -438,6 +780,213 @@ public class IjkVideoView extends FrameLayout {
         return mediaPlayer;
     }
 
+    private void configureIjkOptions(IjkMediaPlayer ijkMediaPlayer, String rawUrl) {
+        boolean useMediaCodec = mSettings == null || mSettings.isMediaCodecEnabled();
+        boolean enableHevcHw = mSettings == null || mSettings.isMediaCodecHevcEnabled();
+        boolean useOpenSlEs = mSettings != null && mSettings.isOpenSlEsEnabled();
+        boolean likely4K = !TextUtils.isEmpty(rawUrl) && rawUrl.endsWith(":2000");
+
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec", useMediaCodec ? 1 : 0);
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-avc", useMediaCodec ? 1 : 0);
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-hevc", enableHevcHw ? 1 : 0);
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-mpeg2", useMediaCodec ? 1 : 0);
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-mpeg4", useMediaCodec ? 1 : 0);
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-all-videos",
+                (useMediaCodec && enableHevcHw) ? 1 : 0);
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-auto-rotate",
+                (useMediaCodec || enableHevcHw) ? 1 : 0);
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-handle-resolution-change",
+                (useMediaCodec || enableHevcHw) ? 1 : 0);
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-sync", 0);
+
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "opensles", useOpenSlEs ? 1 : 0);
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "overlay-format", IjkMediaPlayer.SDL_FCC_RV32);
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "sync-av-start", 1);
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "framedrop", 1);
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "start-on-prepared", 1);
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "fast", 1);
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "infbuf", 1);
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "packet-buffering", 0);
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "min-frames", likely4K ? 15 : 5);
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "max-buffer-size",
+                likely4K ? (8 * 1024 * 1024L) : (2 * 1024 * 1024L));
+
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "probesize",
+                likely4K ? (1536 * 1024L) : (512 * 1024L));
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "analyzeduration",
+                likely4K ? 800000L : 400000L);
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "fpsprobesize", 0);
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "flush_packets", 1L);
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "fflags", "fastseek+discardcorrupt");
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "http-detect-range-support", 0);
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "reconnect", 1);
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "timeout", 8000000L);
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_CODEC, "skip_loop_filter",
+                (useMediaCodec || enableHevcHw) ? 0 : 48);
+    }
+
+    private void attachSlotListeners(final PlayerSlot slot, IMediaPlayer mp) {
+        if (mp == null) {
+            return;
+        }
+        mp.setOnPreparedListener(player -> {
+            slot.prepareEndTime = System.currentTimeMillis();
+            slot.state = STATE_PREPARED;
+            slot.videoWidth = player.getVideoWidth();
+            slot.videoHeight = player.getVideoHeight();
+            slot.videoSarNum = player.getVideoSarNum();
+            slot.videoSarDen = player.getVideoSarDen();
+
+            if (slot != mActiveSlot) {
+                // 离屏实例准备就绪：保持静音并在离屏 Surface 上开始播放
+                slot.setMuted(true);
+                try {
+                    player.start();
+                    slot.state = STATE_PLAYING;
+                } catch (Throwable ignored) {
+                }
+                return;
+            }
+
+            mPrepareEndTime = slot.prepareEndTime;
+            mCurrentState = STATE_PREPARED;
+            slot.setMuted(false);
+            checkAndStartHwAudioIfNeeded();
+
+            mVideoWidth = slot.videoWidth;
+            mVideoHeight = slot.videoHeight;
+            mVideoSarNum = slot.videoSarNum;
+            mVideoSarDen = slot.videoSarDen;
+
+            if (mOnPreparedListener != null) {
+                mOnPreparedListener.onPrepared(mMediaPlayer);
+            }
+
+            if (mVideoWidth != 0 && mVideoHeight != 0) {
+                if (mRenderView != null) {
+                    mRenderView.setVideoSize(mVideoWidth, mVideoHeight);
+                    mRenderView.setVideoSampleAspectRatio(mVideoSarNum, mVideoSarDen);
+                    if (!mRenderView.shouldWaitForResize()
+                            || (mSurfaceWidth == mVideoWidth && mSurfaceHeight == mVideoHeight)
+                            || mSettings.getPlayerType() != IptvSettings.PLAYER_IJK) {
+                        if (mTargetState == STATE_PLAYING) {
+                            start();
+                        }
+                    }
+                }
+            } else {
+                if (mTargetState == STATE_PLAYING) {
+                    start();
+                }
+            }
+        });
+
+        mp.setOnVideoSizeChangedListener((player, width, height, sarNum, sarDen) -> {
+            slot.videoWidth = player.getVideoWidth();
+            slot.videoHeight = player.getVideoHeight();
+            slot.videoSarNum = player.getVideoSarNum();
+            slot.videoSarDen = player.getVideoSarDen();
+
+            if (slot != mActiveSlot) {
+                return;
+            }
+
+            mVideoWidth = slot.videoWidth;
+            mVideoHeight = slot.videoHeight;
+            mVideoSarNum = slot.videoSarNum;
+            mVideoSarDen = slot.videoSarDen;
+            if (mVideoWidth != 0 && mVideoHeight != 0) {
+                if (mRenderView != null) {
+                    mRenderView.setVideoSize(mVideoWidth, mVideoHeight);
+                    mRenderView.setVideoSampleAspectRatio(mVideoSarNum, mVideoSarDen);
+                    if (!mRenderView.shouldWaitForResize() || (mSurfaceWidth == mVideoWidth && mSurfaceHeight == mVideoHeight)) {
+                        if (mTargetState == STATE_PLAYING && !isPlaying()) {
+                            start();
+                        }
+                    } else if (mTargetState == STATE_PLAYING && isInPlaybackState() && !isPlaying()) {
+                        start();
+                    }
+                }
+                requestLayout();
+            }
+        });
+
+        mp.setOnCompletionListener(player -> {
+            slot.state = STATE_PLAYBACK_COMPLETED;
+            if (slot == mActiveSlot) {
+                mCurrentState = STATE_PLAYBACK_COMPLETED;
+                mTargetState = STATE_PLAYBACK_COMPLETED;
+                if (mOnCompletionListener != null) {
+                    mOnCompletionListener.onCompletion(mMediaPlayer);
+                }
+            }
+        });
+
+        mp.setOnInfoListener((player, arg1, arg2) -> {
+            if (arg1 == IMediaPlayer.MEDIA_INFO_VIDEO_ROTATION_CHANGED) {
+                slot.videoRotationDegree = arg2;
+            }
+            if (slot != mActiveSlot) {
+                return true;
+            }
+            if (mOnInfoListener != null) {
+                mOnInfoListener.onInfo(mMediaPlayer, arg1, arg2);
+            }
+            if (arg1 == IMediaPlayer.MEDIA_INFO_VIDEO_ROTATION_CHANGED) {
+                mVideoRotationDegree = arg2;
+                if (mRenderView != null) {
+                    mRenderView.setVideoRotation(arg2);
+                }
+            }
+            return true;
+        });
+
+        mp.setOnErrorListener((player, frameworkErr, implErr) -> {
+            slot.state = STATE_ERROR;
+            if (slot != mActiveSlot) {
+                Log.d(TAG, "Off-screen slot #" + slot.slotIndex + " error ignored: " + frameworkErr + ", " + implErr);
+                return true;
+            }
+            Log.e(TAG, "Playback error on active slot: " + frameworkErr + ", " + implErr);
+            mCurrentState = STATE_ERROR;
+            mTargetState = STATE_ERROR;
+            if (mOnErrorListener != null) {
+                return mOnErrorListener.onError(mMediaPlayer, frameworkErr, implErr);
+            }
+            return true;
+        });
+    }
+
+    private Uri resolvePlaybackUri(Uri sourceUri) {
+        if (sourceUri == null) {
+            return null;
+        }
+        String scheme = sourceUri.getScheme();
+        if (scheme != null && (scheme.equalsIgnoreCase("rtp") || scheme.equalsIgnoreCase("udp"))) {
+            if (mAppContext instanceof IptvApplication) {
+                int proxyPort = ((IptvApplication) mAppContext).getLocalProxyPort();
+                if (proxyPort > 0) {
+                    String localUrl = StreamUrlResolver.toUdpxyUrl(
+                            sourceUri.toString(), "127.0.0.1:" + proxyPort);
+                    return Uri.parse(localUrl);
+                }
+            }
+        }
+        return sourceUri;
+    }
+
+    public static boolean isHlsUri(Uri uri) {
+        return uri != null && isHlsUrl(uri.toString());
+    }
+
+    public static boolean isHlsUrl(String url) {
+        if (TextUtils.isEmpty(url)) {
+            return false;
+        }
+        String lower = url.toLowerCase(Locale.US);
+        return lower.contains(".m3u8");
+    }
+
     private void bindSurfaceHolder(IMediaPlayer mp, IRenderView.ISurfaceHolder holder) {
         if (mp == null) {
             return;
@@ -449,55 +998,52 @@ public class IjkVideoView extends FrameLayout {
         holder.bindToMediaPlayer(mp);
     }
 
-    /**
-     * 释放或回收当前播放会话：
-     * - 下载模块对象归还至 StreamDownloaderPool；
-     * - 解码模块对象归还至 CodecDecoderPool（后台异步 reset 复用，不销毁重建）。
-     */
+    private void releaseSlotPlayerOnly(PlayerSlot slot) {
+        if (slot == null || slot.player == null) {
+            return;
+        }
+        IMediaPlayer mp = slot.player;
+        slot.player = null;
+        slot.playerType = -1;
+        if (mp instanceof TextureMediaPlayer) {
+            try {
+                ((TextureMediaPlayer) mp).releaseSurfaceTexture();
+            } catch (Throwable ignored) {
+            }
+        }
+        try {
+            mp.setDisplay(null);
+            mp.setSurface(null);
+        } catch (Throwable ignored) {
+        }
+        try {
+            mp.reset();
+        } catch (Throwable ignored) {
+        }
+        try {
+            mp.release();
+        } catch (Throwable ignored) {
+        }
+    }
+
     public void release(boolean cleartargetstate) {
-        mPlaybackSessionToken.incrementAndGet();
+        releaseAllSlots(cleartargetstate);
+    }
+
+    /**
+     * 释放全部 3 个 Player 实例槽位及其离屏 Surface
+     */
+    public void releaseAllSlots(boolean cleartargetstate) {
+        removeCallbacks(mStopOffscreenRunnable);
         mHwAudioCompanion.stop();
-
-        if (mActiveDownloader != null) {
-            StreamDownloaderPool.getInstance().release(mActiveDownloader);
-            mActiveDownloader = null;
+        for (PlayerSlot slot : mPlayerSlots) {
+            if (slot != null) {
+                releaseSlotPlayerOnly(slot);
+                slot.releaseOffscreenSurface();
+                slot.resetMetadata();
+            }
         }
-        mActiveCodecDescriptor = null;
-
-        if (mPooledIjkDecoder != null) {
-            boolean healthy = (mCurrentState != STATE_ERROR);
-            if (mMediaPlayer instanceof TextureMediaPlayer) {
-                try {
-                    ((TextureMediaPlayer) mMediaPlayer).releaseSurfaceTexture();
-                } catch (Throwable ignored) {
-                }
-            }
-            CodecDecoderPool.getInstance().releaseIjkDecoder(mPooledIjkDecoder, mSettings, healthy);
-            mPooledIjkDecoder = null;
-            mMediaPlayer = null;
-        } else if (mMediaPlayer != null) {
-            if (mMediaPlayer instanceof TextureMediaPlayer) {
-                try {
-                    ((TextureMediaPlayer) mMediaPlayer).releaseSurfaceTexture();
-                } catch (Throwable ignored) {
-                }
-            }
-            try {
-                mMediaPlayer.setDisplay(null);
-                mMediaPlayer.setSurface(null);
-            } catch (Throwable ignored) {
-            }
-            try {
-                mMediaPlayer.reset();
-            } catch (Throwable ignored) {
-            }
-            try {
-                mMediaPlayer.release();
-            } catch (Throwable ignored) {
-            }
-            mMediaPlayer = null;
-        }
-
+        mMediaPlayer = null;
         mCurrentState = STATE_IDLE;
         if (cleartargetstate) {
             mTargetState = STATE_IDLE;
@@ -513,6 +1059,9 @@ public class IjkVideoView extends FrameLayout {
             try {
                 mMediaPlayer.start();
                 mCurrentState = STATE_PLAYING;
+                if (mActiveSlot != null) {
+                    mActiveSlot.state = STATE_PLAYING;
+                }
             } catch (Throwable t) {
                 Log.w(TAG, "start() failed", t);
             }
@@ -526,6 +1075,9 @@ public class IjkVideoView extends FrameLayout {
                 if (mMediaPlayer.isPlaying()) {
                     mMediaPlayer.pause();
                     mCurrentState = STATE_PAUSED;
+                    if (mActiveSlot != null) {
+                        mActiveSlot.state = STATE_PAUSED;
+                    }
                 }
             } catch (Throwable t) {
                 Log.w(TAG, "pause() failed", t);
@@ -576,17 +1128,7 @@ public class IjkVideoView extends FrameLayout {
         return mPrepareEndTime > mPrepareStartTime ? (mPrepareEndTime - mPrepareStartTime) : 0;
     }
 
-    /**
-     * 获取实时网络下载速度 (Bytes/sec)
-     * 优先从分离的池化下载模块获取精确实时速率（同时支持 IGMP 组播与 HTTP-TS）
-     */
     public long getTcpSpeed() {
-        if (mActiveDownloader != null) {
-            long dlSpeed = mActiveDownloader.getDownloadSpeedBytesPerSec();
-            if (dlSpeed > 0) {
-                return dlSpeed;
-            }
-        }
         if (!isInPlaybackState()) {
             return 0;
         }
@@ -600,9 +1142,6 @@ public class IjkVideoView extends FrameLayout {
         return 0;
     }
 
-    /**
-     * 获取实时渲染帧率
-     */
     public float getVideoOutputFramesPerSecond() {
         if (!isInPlaybackState()) {
             return 0f;
@@ -617,26 +1156,19 @@ public class IjkVideoView extends FrameLayout {
         return 0f;
     }
 
-    /**
-     * 获取当前解码器名称与池化状态
-     */
     public String getDecoderName() {
         int playerType = mSettings.getPlayerType();
+        String poolTag = isActivePlayerPromotedFromPool() ? "三实例离屏秒切" : "三实例池化";
         if (playerType == IptvSettings.PLAYER_ANDROID_MEDIA) {
+            String baseName = "AndroidMediaPlayer (" + poolTag + "系统硬解)";
             String hwAudio = mHwAudioCompanion.getActiveCodecLabel();
             if (!TextUtils.isEmpty(hwAudio)) {
-                return "AndroidMediaPlayer / " + hwAudio;
+                return baseName + " / " + hwAudio;
             }
-            return "AndroidMediaPlayer (系统硬解)";
+            return baseName;
         }
 
-        boolean pooledHit = (mPooledIjkDecoder != null && mPooledIjkDecoder.reusedFromPool);
-        String poolTag = pooledHit ? "池化复用" : "池化";
-        boolean isHevc = mActiveCodecDescriptor != null && mActiveCodecDescriptor.isHevc();
-        boolean hwEnabledForCurrent = isHevc
-                ? mSettings.isMediaCodecHevcEnabled()
-                : mSettings.isMediaCodecEnabled();
-        String videoDecoder = hwEnabledForCurrent ? "MediaCodec" : "FFmpeg";
+        String videoDecoder = mSettings.isMediaCodecEnabled() ? "MediaCodec" : "FFmpeg";
         if (isInPlaybackState()) {
             try {
                 IMediaPlayer mp = unwrapIjkMediaPlayer();
@@ -667,16 +1199,11 @@ public class IjkVideoView extends FrameLayout {
         return videoDecoder;
     }
 
-    /**
-     * 提取符合 check_iptv_m3u.sh 格式的视频轨道描述，如 "#1 h264, 1920x1080,25fps"
-     */
     public String getFormattedVideoTrackInfo() {
         if (!isInPlaybackState()) {
             return "";
         }
-        String codec = (mActiveCodecDescriptor != null && !TextUtils.isEmpty(mActiveCodecDescriptor.videoCodec))
-                ? mActiveCodecDescriptor.videoCodec
-                : "h264";
+        String codec = "h264";
         int fps = Math.round(getVideoOutputFramesPerSecond());
         if (fps <= 0) {
             fps = (mVideoWidth >= 3840) ? 50 : 25;
@@ -721,16 +1248,11 @@ public class IjkVideoView extends FrameLayout {
         return "";
     }
 
-    /**
-     * 提取符合 check_iptv_m3u.sh 格式的音频轨道描述，如 "#1 mp2,2ch,48khz"
-     */
     public String getFormattedAudioTrackInfo() {
         if (!isInPlaybackState()) {
             return "";
         }
-        String codec = (mActiveCodecDescriptor != null && !TextUtils.isEmpty(mActiveCodecDescriptor.audioCodec))
-                ? mActiveCodecDescriptor.audioCodec
-                : "mp2";
+        String codec = "mp2";
         int sampleRate = 48000;
         try {
             IMediaPlayer mp = unwrapIjkMediaPlayer();
@@ -776,9 +1298,6 @@ public class IjkVideoView extends FrameLayout {
         return String.format(Locale.US, "#1 %s,2ch,%dkhz", codec, sampleRate / 1000);
     }
 
-    /**
-     * 按照 check_iptv_m3u.sh 规则判定当前视频流分辨率标记 ("高清", "4K", "标清", "其它")
-     */
     public String getDetectedResolutionFlag() {
         if (mVideoWidth == 1920 && mVideoHeight == 1080) {
             return "高清";
@@ -793,10 +1312,14 @@ public class IjkVideoView extends FrameLayout {
     }
 
     private IMediaPlayer unwrapIjkMediaPlayer() {
-        if (mMediaPlayer instanceof TextureMediaPlayer) {
-            return ((TextureMediaPlayer) mMediaPlayer).getInternalMediaPlayer();
+        return unwrapPlayer(mMediaPlayer);
+    }
+
+    private static IMediaPlayer unwrapPlayer(IMediaPlayer mp) {
+        if (mp instanceof TextureMediaPlayer) {
+            return ((TextureMediaPlayer) mp).getInternalMediaPlayer();
         }
-        return mMediaPlayer;
+        return mp;
     }
 
     public void setOnPreparedListener(IMediaPlayer.OnPreparedListener l) {
@@ -815,85 +1338,8 @@ public class IjkVideoView extends FrameLayout {
         mOnInfoListener = l;
     }
 
-    private final IMediaPlayer.OnVideoSizeChangedListener mSizeChangedListener =
-            new IMediaPlayer.OnVideoSizeChangedListener() {
-                @Override
-                public void onVideoSizeChanged(IMediaPlayer mp, int width, int height, int sarNum, int sarDen) {
-                    mVideoWidth = mp.getVideoWidth();
-                    mVideoHeight = mp.getVideoHeight();
-                    mVideoSarNum = mp.getVideoSarNum();
-                    mVideoSarDen = mp.getVideoSarDen();
-                    if (mVideoWidth != 0 && mVideoHeight != 0) {
-                        if (mRenderView != null) {
-                            mRenderView.setVideoSize(mVideoWidth, mVideoHeight);
-                            mRenderView.setVideoSampleAspectRatio(mVideoSarNum, mVideoSarDen);
-                            if (!mRenderView.shouldWaitForResize() || (mSurfaceWidth == mVideoWidth && mSurfaceHeight == mVideoHeight)) {
-                                if (mTargetState == STATE_PLAYING && !isPlaying()) {
-                                    start();
-                                }
-                            } else if (mTargetState == STATE_PLAYING && isInPlaybackState() && !isPlaying()) {
-                                // AndroidMediaPlayer 播放 MPEG-TS 时若 Surface 尺寸已就绪，兜底立即启动播放，防止因等待 resize 导致卡在 PREPARED 黑屏
-                                start();
-                            }
-                        }
-                        requestLayout();
-                    }
-                }
-            };
-
-    private final IMediaPlayer.OnPreparedListener mPreparedListener = new IMediaPlayer.OnPreparedListener() {
-        @Override
-        public void onPrepared(IMediaPlayer mp) {
-            mPrepareEndTime = System.currentTimeMillis();
-            mCurrentState = STATE_PREPARED;
-
-            try {
-                mp.setVolume(1.0f, 1.0f);
-            } catch (Throwable ignored) {
-            }
-            checkAndStartHwAudioIfNeeded();
-
-            mVideoWidth = mp.getVideoWidth();
-            mVideoHeight = mp.getVideoHeight();
-
-            if (mOnPreparedListener != null) {
-                mOnPreparedListener.onPrepared(mMediaPlayer);
-            }
-
-            if (mVideoWidth != 0 && mVideoHeight != 0) {
-                if (mRenderView != null) {
-                    mRenderView.setVideoSize(mVideoWidth, mVideoHeight);
-                    mRenderView.setVideoSampleAspectRatio(mVideoSarNum, mVideoSarDen);
-                    if (!mRenderView.shouldWaitForResize()
-                            || (mSurfaceWidth == mVideoWidth && mSurfaceHeight == mVideoHeight)
-                            || mSettings.getPlayerType() != IptvSettings.PLAYER_IJK) {
-                        if (mTargetState == STATE_PLAYING) {
-                            start();
-                        }
-                    }
-                }
-            } else {
-                if (mTargetState == STATE_PLAYING) {
-                    start();
-                }
-            }
-        }
-    };
-
-    /**
-     * 检查音频轨道是否需要挂载池化硬件伴音解码器：
-     * - MP2 / MP3 / AAC / FLAC 音频由补丁后的 libijkffmpeg.so 直接原生解码输出；
-     * - 若遇 AC-3 / E-AC-3 (杜比 4K 频道) 等格式，直接通过当前 PooledStreamDownloader 的旁路缓冲流
-     *   驱动池化的 Android TV MediaCodec 硬件音频解码器，无需建立第二条网络连接。
-     */
     private void checkAndStartHwAudioIfNeeded() {
         try {
-            TsCodecDescriptor desc = mActiveCodecDescriptor;
-            if (desc != null && desc.requiresHardwareAudioCompanion() && mActiveDownloader != null) {
-                Log.i(TAG, "Starting pooled TsHardwareAudioCompanion via active downloader for " + desc);
-                mHwAudioCompanion.startWithDownloader(mActiveDownloader, desc);
-                return;
-            }
             IMediaPlayer mp = unwrapIjkMediaPlayer();
             if (mp instanceof IjkMediaPlayer) {
                 IjkMediaPlayer ijk = (IjkMediaPlayer) mp;
@@ -903,59 +1349,17 @@ public class IjkVideoView extends FrameLayout {
                 Log.i(TAG, "onPrepared IjkMediaPlayer audioDecoder=" + audioDec
                         + ", videoDecoder=" + videoDec);
                 if (TextUtils.isEmpty(audioDec) || "unknown".equalsIgnoreCase(audioDec)) {
-                    if (mActiveDownloader != null) {
-                        mHwAudioCompanion.startWithDownloader(mActiveDownloader, desc);
-                    } else {
-                        mHwAudioCompanion.start(mUri, mRawChannelUrl);
-                    }
+                    mHwAudioCompanion.start(mUri, mRawChannelUrl);
                 } else {
                     mHwAudioCompanion.stop();
                 }
+            } else {
+                mHwAudioCompanion.stop();
             }
         } catch (Throwable t) {
             Log.w(TAG, "checkAndStartHwAudioIfNeeded failed", t);
         }
     }
-
-    private final IMediaPlayer.OnCompletionListener mCompletionListener = new IMediaPlayer.OnCompletionListener() {
-        @Override
-        public void onCompletion(IMediaPlayer mp) {
-            mCurrentState = STATE_PLAYBACK_COMPLETED;
-            mTargetState = STATE_PLAYBACK_COMPLETED;
-            if (mOnCompletionListener != null) {
-                mOnCompletionListener.onCompletion(mMediaPlayer);
-            }
-        }
-    };
-
-    private final IMediaPlayer.OnInfoListener mInfoListener = new IMediaPlayer.OnInfoListener() {
-        @Override
-        public boolean onInfo(IMediaPlayer mp, int arg1, int arg2) {
-            if (mOnInfoListener != null) {
-                mOnInfoListener.onInfo(mp, arg1, arg2);
-            }
-            if (arg1 == IMediaPlayer.MEDIA_INFO_VIDEO_ROTATION_CHANGED) {
-                mVideoRotationDegree = arg2;
-                if (mRenderView != null) {
-                    mRenderView.setVideoRotation(arg2);
-                }
-            }
-            return true;
-        }
-    };
-
-    private final IMediaPlayer.OnErrorListener mErrorListener = new IMediaPlayer.OnErrorListener() {
-        @Override
-        public boolean onError(IMediaPlayer mp, int frameworkErr, int implErr) {
-            Log.e(TAG, "Playback error: " + frameworkErr + ", " + implErr);
-            mCurrentState = STATE_ERROR;
-            mTargetState = STATE_ERROR;
-            if (mOnErrorListener != null) {
-                return mOnErrorListener.onError(mMediaPlayer, frameworkErr, implErr);
-            }
-            return true;
-        }
-    };
 
     private final IRenderView.IRenderCallback mSHCallback = new IRenderView.IRenderCallback() {
         @Override
@@ -982,6 +1386,10 @@ public class IjkVideoView extends FrameLayout {
                 bindSurfaceHolder(mMediaPlayer, holder);
             } else {
                 openVideo();
+            }
+            if (mPendingPrevUri != null || mPendingNextUri != null) {
+                syncOffscreenAdjacentSlots();
+                scheduleStopOffscreenPlayers();
             }
         }
 
