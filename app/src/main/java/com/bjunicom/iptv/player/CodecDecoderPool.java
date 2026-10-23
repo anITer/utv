@@ -322,15 +322,22 @@ public class CodecDecoderPool {
                                                    IptvSettings settings) {
         boolean useMediaCodec = settings == null || settings.isMediaCodecEnabled();
         boolean isHevcStream = desc != null && desc.isHevc();
-        boolean enableHevcHw = useMediaCodec && (settings == null || settings.isMediaCodecHevcEnabled()) && isHevcStream;
+        boolean enableHevcHw = settings == null || settings.isMediaCodecHevcEnabled();
         boolean useOpenSlEs = settings != null && settings.isOpenSlEsEnabled();
 
-        // 1. 硬件解码器按解析出的视频编码 (H.264 vs HEVC) 精确配置
+        // 1. 硬件解码器配置：默认开启硬解，严格按设置中的 H.264 / HEVC 硬解开关控制，关闭 mediacodec-sync 保障 4K 50fps 吞吐
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec", useMediaCodec ? 1 : 0);
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-auto-rotate", useMediaCodec ? 1 : 0);
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-handle-resolution-change", useMediaCodec ? 1 : 0);
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-avc", useMediaCodec ? 1 : 0);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-hevc", enableHevcHw ? 1 : 0);
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-sync", 1);
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-mpeg2", useMediaCodec ? 1 : 0);
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-mpeg4", useMediaCodec ? 1 : 0);
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-all-videos",
+                (useMediaCodec && enableHevcHw) ? 1 : 0);
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-auto-rotate",
+                (useMediaCodec || enableHevcHw) ? 1 : 0);
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-handle-resolution-change",
+                (useMediaCodec || enableHevcHw) ? 1 : 0);
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-sync", 0);
 
         // 2. 音频输出设置：若流为 EAC3/AC3 则交由池化的硬件伴音解码器处理
         boolean companionAudio = desc != null && desc.requiresHardwareAudioCompanion();
@@ -338,16 +345,17 @@ public class CodecDecoderPool {
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "an", companionAudio ? 1 : 0);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "volume", 100);
 
-        // 3. 消除切台慢放 (Slow-Motion) 的音画同步与起播探针参数
+        // 3. 音画同步与缓冲参数：4K HEVC 高码率流使用 8MB 缓冲上限，避免高频丢包导致卡顿
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "overlay-format", IjkMediaPlayer.SDL_FCC_RV32);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "sync-av-start", 1);
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "framedrop", 2);
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "framedrop", isHevcStream ? 1 : 2);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "start-on-prepared", 1);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "fast", 1);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "infbuf", 1);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "packet-buffering", 0);
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "min-frames", 5);
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "max-buffer-size", 2 * 1024 * 1024L);
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "min-frames", isHevcStream ? 15 : 5);
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "max-buffer-size",
+                isHevcStream ? (8 * 1024 * 1024L) : (2 * 1024 * 1024L));
 
         // 下载模块已完成 PAT+PMT+IDR 对齐，FFmpeg 仅需极小探针即可完成流信息识别，避免积压历史包导致慢放
         // HEVC 4K 例外：Wi-Fi 组播加入初期的丢包常损坏首个 IDR，探针太小会探测不到视频参数
@@ -364,11 +372,13 @@ public class CodecDecoderPool {
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "analyzeduration", analyzeUs);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "fpsprobesize", 0);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "flush_packets", 1L);
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "fflags", "nobuffer+fastseek+discardcorrupt");
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "fflags",
+                isHevcStream ? "fastseek+discardcorrupt" : "nobuffer+fastseek+discardcorrupt");
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "http-detect-range-support", 0);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "reconnect", 1);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "timeout", 8000000L);
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_CODEC, "skip_loop_filter", 48);
+        boolean activeHw = isHevcStream ? enableHevcHw : useMediaCodec;
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_CODEC, "skip_loop_filter", activeHw ? 0 : 48);
         ijkMediaPlayer.setVolume(1.0f, 1.0f);
     }
 

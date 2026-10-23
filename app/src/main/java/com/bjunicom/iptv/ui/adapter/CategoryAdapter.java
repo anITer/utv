@@ -44,6 +44,17 @@ public class CategoryAdapter extends RecyclerView.Adapter<CategoryAdapter.ViewHo
         this.listener = listener;
     }
 
+    public void setCategories(List<String> newCategories) {
+        categories.clear();
+        if (newCategories != null) {
+            categories.addAll(newCategories);
+        }
+        if (!categories.contains(selectedCategory)) {
+            selectedCategory = categories.isEmpty() ? "全部频道" : categories.get(0);
+        }
+        updateSelectionVisuals();
+    }
+
     @Override
     public void onAttachedToRecyclerView(@NonNull RecyclerView recyclerView) {
         super.onAttachedToRecyclerView(recyclerView);
@@ -128,8 +139,11 @@ public class CategoryAdapter extends RecyclerView.Adapter<CategoryAdapter.ViewHo
         holder.tvName.setOnClickListener(v -> selectCategoryAt(position));
 
         holder.tvName.setOnFocusChangeListener((v, hasFocus) -> {
-            v.animate().scaleX(hasFocus ? 1.06f : 1.0f).scaleY(hasFocus ? 1.06f : 1.0f).setDuration(120).start();
-            if (!hasFocus) {
+            v.animate().scaleX(hasFocus ? 1.04f : 1.0f).scaleY(hasFocus ? 1.04f : 1.0f).setDuration(120).start();
+            v.setElevation(hasFocus ? 6f : 0f);
+            if (hasFocus) {
+                centerTabInRecyclerView(v);
+            } else {
                 v.setFocusableInTouchMode(false);
             }
         });
@@ -176,6 +190,22 @@ public class CategoryAdapter extends RecyclerView.Adapter<CategoryAdapter.ViewHo
         updateSelectionVisuals();
         if (listener != null) {
             listener.onCategorySelected(cat, position);
+        }
+    }
+
+    private void centerTabInRecyclerView(View tabView) {
+        if (attachedRecyclerView == null || tabView == null) {
+            return;
+        }
+        int rvWidth = attachedRecyclerView.getWidth();
+        if (rvWidth <= 0) {
+            return;
+        }
+        int tabCenter = (tabView.getLeft() + tabView.getRight()) / 2;
+        int rvCenter = rvWidth / 2;
+        int dx = tabCenter - rvCenter;
+        if (Math.abs(dx) > 2 && !attachedRecyclerView.isComputingLayout()) {
+            attachedRecyclerView.scrollBy(dx, 0);
         }
     }
 

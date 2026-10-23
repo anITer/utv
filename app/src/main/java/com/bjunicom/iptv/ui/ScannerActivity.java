@@ -1,5 +1,6 @@
 package com.bjunicom.iptv.ui;
 
+import android.content.Intent;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -56,6 +57,7 @@ public class ScannerActivity extends AppCompatActivity {
     private IptvSettings settings;
     private ChannelRepository repository;
     private MulticastScannerEngine scannerEngine;
+    private CustomM3uDialogHelper customM3uDialogHelper;
     private ScanStatistics lastStats;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final StringBuilder logBuffer = new StringBuilder();
@@ -68,11 +70,29 @@ public class ScannerActivity extends AppCompatActivity {
         settings = new IptvSettings(this);
         repository = ChannelRepository.getInstance(this);
         scannerEngine = new MulticastScannerEngine(this);
+        customM3uDialogHelper = new CustomM3uDialogHelper(this, (report, switchedToCustomIsp) -> {
+            etScanSubnet.setText(settings.getScanSubnet());
+            rgScanMode.check(R.id.rb_mode_check_playlist);
+            appendConsoleLog("----------------------------------------");
+            appendConsoleLog(report.toSummaryText());
+            appendConsoleLog("[IMPORT] 已导入自定义 M3U (" + report.sourceName + ")，可点击「开始动态扫描」对全部频道执行 check_iptv_m3u.sh 巡检。");
+            tvProgressLabel.setText(String.format(Locale.US,
+                    "已导入 %s (%d 频道)，按[OK]或[绿键]启动频道流巡检",
+                    report.sourceName, report.validChannelCount));
+        });
 
         bindViews();
 
         // 默认将遥控器焦点放在「开始动态扫描」按钮上，按 OK 键即可直接开扫
         btnStartScan.post(() -> btnStartScan.requestFocus());
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (customM3uDialogHelper != null) {
+            customM3uDialogHelper.handleActivityResult(requestCode, resultCode, data);
+        }
     }
 
     private void bindViews() {
@@ -98,17 +118,35 @@ public class ScannerActivity extends AppCompatActivity {
         etScanTimeout.setText(String.valueOf(settings.getScanTimeoutMs()));
 
         findViewById(R.id.btn_scanner_back).setOnClickListener(v -> finish());
+        View btnImportM3u = findViewById(R.id.btn_import_m3u);
+        if (btnImportM3u != null) {
+            btnImportM3u.setOnClickListener(v -> customM3uDialogHelper.showUploadAndInspectDialog());
+        }
         findViewById(R.id.btn_export_m3u).setOnClickListener(v -> showExportSummaryDialog());
 
         btnStartScan.setOnClickListener(v -> startScanning());
         btnStopScan.setOnClickListener(v -> stopScanningByUser());
 
         View.OnFocusChangeListener focusScale = (v, hasFocus) -> {
-            v.animate().scaleX(hasFocus ? 1.06f : 1.0f).scaleY(hasFocus ? 1.06f : 1.0f).setDuration(120).start();
+            v.animate().scaleX(hasFocus ? 1.03f : 1.0f).scaleY(hasFocus ? 1.03f : 1.0f).setDuration(120).start();
             v.setSelected(hasFocus);
+            if (hasFocus) {
+                ScrollView svParams = findViewById(R.id.sv_scanner_params);
+                if (svParams != null && svParams.getHeight() > 0) {
+                    android.graphics.Rect rect = new android.graphics.Rect();
+                    v.getDrawingRect(rect);
+                    try {
+                        svParams.offsetDescendantRectToMyCoords(v, rect);
+                        int targetScrollY = Math.max(0, rect.centerY() - svParams.getHeight() / 2);
+                        svParams.smoothScrollTo(0, targetScrollY);
+                    } catch ( IllegalArgumentException ignored) {
+                    }
+                }
+            }
         };
         int[] scannerFocusableIds = {
                 R.id.btn_scanner_back,
+                R.id.btn_import_m3u,
                 R.id.btn_export_m3u,
                 R.id.btn_start_scan,
                 R.id.btn_stop_scan,

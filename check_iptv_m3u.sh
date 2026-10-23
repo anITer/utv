@@ -232,13 +232,15 @@ run_dynamic_multicast_scan() {
                 echo "$extinf" >> "$DISCOVERED_M3U"
                 echo "$probe_url" >> "$DISCOVERED_M3U"
                 echo "[$(date +"%Y-%m-%d %H:%M:%S")] [SCAN_HIT] Found active stream: $raw_rtp -> $probe_url" | tee -a "$LOG_FILE"
+                echo "[SCAN_PROGRESS] ip=${target_ip} port=${port} host=${host}/${SCAN_END} discovered=${discovered_count}"
                 # 同一 IP 找到活跃组播流后在 fast 模式下可跳至下一 IP 以加速扫描
                 if [ "$SCAN_MODE" = "fast" ]; then
                     break
                 fi
+            else
+                echo "[SCAN_PROGRESS] ip=${target_ip} port=${port} host=${host}/${SCAN_END} discovered=${discovered_count}"
             fi
         done
-        echo "[SCAN_PROGRESS] host=${host}/${SCAN_END} ip=${target_ip} discovered=${discovered_count}"
     done
 
     echo "[$(date +"%Y-%m-%d %H:%M:%S")] [SCAN] Dynamic scan finished. Discovered $discovered_count active streams." | tee -a "$LOG_FILE"
