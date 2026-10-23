@@ -500,14 +500,14 @@ public class StartupSmokeTest {
     public void testAppUpdateManagerVersionComparisonAndReleaseParsing() {
         try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class)) {
             MainActivity activity = controller.create().get();
-            assertEquals("1.1.0", com.bjunicom.iptv.update.AppUpdateManager.getCurrentVersionName(activity));
+            assertEquals("1.2.0", com.bjunicom.iptv.update.AppUpdateManager.getCurrentVersionName(activity));
         }
-        assertEquals("1.1.0", com.bjunicom.iptv.update.AppUpdateManager.CURRENT_VERSION_NAME);
-        assertTrue(com.bjunicom.iptv.update.AppUpdateManager.isNewerVersion("v1.2.0", "1.1.0"));
-        assertTrue(com.bjunicom.iptv.update.AppUpdateManager.isNewerVersion("1.1.1", "1.1.0"));
+        assertEquals("1.2.0", com.bjunicom.iptv.update.AppUpdateManager.CURRENT_VERSION_NAME);
+        assertTrue(com.bjunicom.iptv.update.AppUpdateManager.isNewerVersion("v1.3.0", "1.2.0"));
+        assertTrue(com.bjunicom.iptv.update.AppUpdateManager.isNewerVersion("1.2.1", "1.2.0"));
         assertTrue(com.bjunicom.iptv.update.AppUpdateManager.isNewerVersion("2.0", "1.9.9"));
-        assertFalse(com.bjunicom.iptv.update.AppUpdateManager.isNewerVersion("1.1.0", "1.1.0"));
-        assertFalse(com.bjunicom.iptv.update.AppUpdateManager.isNewerVersion("v1.0.0", "1.1.0"));
+        assertFalse(com.bjunicom.iptv.update.AppUpdateManager.isNewerVersion("1.2.0", "1.2.0"));
+        assertFalse(com.bjunicom.iptv.update.AppUpdateManager.isNewerVersion("v1.1.0", "1.2.0"));
 
         String sampleApiJson = "[\n" +
                 "  {\n" +

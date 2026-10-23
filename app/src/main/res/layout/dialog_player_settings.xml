@@ -428,7 +428,7 @@
                 android:drawablePadding="6dp"
                 android:focusable="true"
                 android:paddingHorizontal="14dp"
-                android:text="检查新版本 (当前 v1.0.0 · GitHub Releases)"
+                android:text="检查新版本 (当前 v1.2.0 · GitHub Releases)"
                 android:textColor="@color/md_theme_dark_primary"
                 android:textSize="13sp" />
         </LinearLayout>
