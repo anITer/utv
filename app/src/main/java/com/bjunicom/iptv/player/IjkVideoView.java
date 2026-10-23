@@ -90,6 +90,8 @@ public class IjkVideoView extends FrameLayout {
         public long prepareStartTime;
         public long prepareEndTime;
         public boolean promotedFromOffscreen;
+        // IJK 直连组播时的 IDR 对齐下载器（非空表示本槽位由它供流，释放槽位时必须归还池）
+        StreamDownloaderPool.PooledStreamDownloader pooledDownloader;
 
         private SurfaceTexture offscreenTexture;
         private Surface offscreenSurface;
@@ -772,7 +774,36 @@ public class IjkVideoView extends FrameLayout {
 
             IMediaPlayer mp = slot.player;
             attachSlotListeners(slot, mp);
-            mp.setDataSource(mAppContext, playbackUri, mHeaders);
+            releaseSlotDownloader(slot); // 复用槽位时先归还上一频道的组播下载会话
+            IjkMediaPlayer rawIjk = unwrapPlayer(mp) instanceof IjkMediaPlayer
+                    ? (IjkMediaPlayer) unwrapPlayer(mp) : null;
+            Uri rawMulticastUri = getRawMulticastUri(rawUrl);
+            if (rawIjk != null && rawMulticastUri != null) {
+                // IJK 直连组播 + PAT/PMT/IDR 对齐（旧架构已在本机验证）：
+                // 本地 HTTP 代理从任意 GOP 中点开始转发，4K HEVC 在探针窗口内等不到完整 IDR，
+                // FFmpeg 探测不到视频参数 → MTK 硬解以 0x0 配置失败 → 静默降级软解 (5fps)。
+                // 对齐下载器在关键帧边界才开始喂数据，小探针也能秒级探测成功。
+                StreamDownloaderPool.PooledStreamDownloader downloader =
+                        StreamDownloaderPool.getInstance().acquire();
+                slot.pooledDownloader = downloader;
+                downloader.startDownload(rawMulticastUri, rawUrl,
+                        new StreamDownloaderPool.OnStreamEventsListener() {
+                            @Override
+                            public void onCodecParsed(TsCodecDescriptor descriptor,
+                                                      StreamDownloaderPool.PooledStreamDownloader dl) {
+                                Log.i(TAG, "Slot #" + slot.slotIndex + " codec parsed: " + descriptor);
+                            }
+
+                            @Override
+                            public void onStreamError(String reason,
+                                                      StreamDownloaderPool.PooledStreamDownloader dl) {
+                                Log.w(TAG, "Slot #" + slot.slotIndex + " stream error: " + reason);
+                            }
+                        });
+                rawIjk.setDataSource(downloader);
+            } else {
+                mp.setDataSource(mAppContext, playbackUri, mHeaders);
+            }
 
             if (isMainScreen) {
                 mMediaPlayer = mp;
@@ -797,6 +828,35 @@ public class IjkVideoView extends FrameLayout {
                 }
             }
         }
+    }
+
+    /**
+     * 原始频道地址为组播 (rtp/udp) 时返回其 Uri，供 IJK 直连 + IDR 对齐下载器使用
+     */
+    private static Uri getRawMulticastUri(String rawUrl) {
+        if (TextUtils.isEmpty(rawUrl)) {
+            return null;
+        }
+        Uri uri;
+        try {
+            uri = Uri.parse(rawUrl);
+        } catch (Throwable t) {
+            return null;
+        }
+        String scheme = uri.getScheme();
+        if (scheme != null && (scheme.equalsIgnoreCase("rtp") || scheme.equalsIgnoreCase("udp"))) {
+            return uri;
+        }
+        return null;
+    }
+
+    private static void releaseSlotDownloader(PlayerSlot slot) {
+        if (slot == null || slot.pooledDownloader == null) {
+            return;
+        }
+        StreamDownloaderPool.PooledStreamDownloader downloader = slot.pooledDownloader;
+        slot.pooledDownloader = null;
+        StreamDownloaderPool.getInstance().release(downloader);
     }
 
     private String buildCurrentCodecConfigSignature() {
@@ -888,7 +948,6 @@ public class IjkVideoView extends FrameLayout {
         boolean useMediaCodec = mSettings == null || mSettings.isMediaCodecEnabled();
         boolean enableHevcHw = mSettings == null || mSettings.isMediaCodecHevcEnabled();
         boolean useOpenSlEs = mSettings != null && mSettings.isOpenSlEsEnabled();
-        boolean likely4K = !TextUtils.isEmpty(rawUrl) && rawUrl.endsWith(":2000");
 
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec", useMediaCodec ? 1 : 0);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-avc", useMediaCodec ? 1 : 0);
@@ -906,27 +965,31 @@ public class IjkVideoView extends FrameLayout {
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "opensles", useOpenSlEs ? 1 : 0);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "overlay-format", IjkMediaPlayer.SDL_FCC_RV32);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "sync-av-start", 1);
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "framedrop", 1);
+        // framedrop=2：直播流追同步时激进丢帧（1 会在 4K@50 高码率下积累延迟导致卡顿感）
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "framedrop", 2);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "start-on-prepared", 1);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "fast", 1);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "infbuf", 1);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "packet-buffering", 0);
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "min-frames", likely4K ? 15 : 5);
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "max-buffer-size",
-                likely4K ? (8 * 1024 * 1024L) : (2 * 1024 * 1024L));
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "min-frames", 15);
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "max-buffer-size", 8 * 1024 * 1024L);
 
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "probesize",
-                likely4K ? (1536 * 1024L) : (512 * 1024L));
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "analyzeduration",
-                likely4K ? 800000L : 400000L);
+        // 探测窗口一律加大到 1.5MB/1.5s：旧架构由下载器做 PAT+PMT+IDR 对齐可用 96KB 小探针，
+        // 新架构直接读本地代理转发的原始 TS，Wi-Fi 组播加入初期的丢包会损坏首个 IDR，
+        // 探针太小 FFmpeg 探测不到视频参数 (unspecified size) → MTK 硬解以 0x0 配置失败
+        // (err -1010) → ijk 静默降级软解，4K@50fps 软解帧率仅个位数。
+        // 不能用 URL 后缀判断 4K（北京联通 4K 频道是 :3002/:8001 等非 :2000 端口）。
+        // 代价是所有频道起播多等约 1 秒，由三实例离屏预加载抵消。
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "probesize", 1536 * 1024L);
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "analyzeduration", 1500000L);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "fpsprobesize", 0);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "flush_packets", 1L);
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "fflags", "fastseek+discardcorrupt");
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "fflags", "nobuffer+fastseek+discardcorrupt");
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "http-detect-range-support", 0);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "reconnect", 1);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "timeout", 8000000L);
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_CODEC, "skip_loop_filter",
-                (useMediaCodec || enableHevcHw) ? 0 : 48);
+        // 软解兜底时跳过全部循环滤波（旧实测值 48），硬解生效时此选项无影响
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_CODEC, "skip_loop_filter", 48);
     }
 
     private void attachSlotListeners(final PlayerSlot slot, IMediaPlayer mp) {
@@ -1150,6 +1213,7 @@ public class IjkVideoView extends FrameLayout {
             mp.release();
         } catch (Throwable ignored) {
         }
+        releaseSlotDownloader(slot);
     }
 
     public void release(boolean cleartargetstate) {
