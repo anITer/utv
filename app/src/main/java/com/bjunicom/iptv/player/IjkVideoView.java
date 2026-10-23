@@ -362,6 +362,9 @@ public class IjkVideoView extends FrameLayout {
             return;
         }
         if (slot.player != null && slot.state != STATE_IDLE) {
+            // 必须先停组播下载器：ijk reset() 会死等阻塞在 readAt(缓冲 wait) 的读取线程，
+            // 停止下载器使 readAt 立即返回 -1 后 reset 才能返回（否则主线程 ANR）
+            releaseSlotDownloader(slot);
             IMediaPlayer rawPlayer = unwrapPlayer(slot.player);
             // AndroidMediaPlayer 在 STATE_PREPARING 状态直接调 stop() 会抛 IllegalStateException，
             // 仅在已进入 PREPARED/PLAYING/PAUSED 时调用 stop()，随后统一 reset()
