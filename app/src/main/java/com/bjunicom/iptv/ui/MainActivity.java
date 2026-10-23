@@ -32,11 +32,13 @@ import com.bjunicom.iptv.R;
 import com.bjunicom.iptv.config.IptvSettings;
 import com.bjunicom.iptv.model.IptvChannel;
 import com.bjunicom.iptv.network.StreamUrlResolver;
+import com.bjunicom.iptv.parser.M3uParser;
 import com.bjunicom.iptv.player.IjkVideoView;
 import com.bjunicom.iptv.player.MeasureHelper;
 import com.bjunicom.iptv.repository.ChannelRepository;
 import com.bjunicom.iptv.ui.adapter.CategoryAdapter;
 import com.bjunicom.iptv.ui.adapter.ChannelAdapter;
+import com.bjunicom.iptv.update.AppUpdateManager;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
 import java.util.List;
@@ -52,8 +54,8 @@ import tv.danmaku.ijk.media.player.IMediaPlayer;
  * 2. 支持路由器 udpxy 单播代理、Android 内置本地 udpxy 网关、RTP 原生组播三种播放模式
  * 3. 实时探测并回填与 check_iptv_m3u.sh 一致的视频轨道、音频轨道及实测分辨率标签
  * 4. 完整适配【电视遥控器】与【手机/平板触屏】双交互模式：
- *    - 遥控器：上下键/频道键换台、0-9数字键选台(含频道名实时预览与OK立即确认)、OK/左键呼出频道列表并自动定位当前频道焦点、
- *      列表内左右键直接切换分类、长按OK/红键收藏、绿键打开动态组播扫描、黄键切换画面比例、菜单/蓝键打开设置、双击返回退出
+ *    - 遥控器：上下键/频道键换台、0-9数字键选台(含频道名实时预览与OK立即确认)、左右键呼出频道列表并自动定位当前频道焦点、
+ *      OK键呼出信息页面、列表内左右键直接切换分类、长按OK/红键收藏、绿键打开动态组播扫描、黄键切换画面比例、菜单/蓝键打开设置、双击返回退出
  *    - 触屏：单击显隐OSD/收起抽屉、双击切换画面比例、右滑呼出频道抽屉、左滑收起抽屉、全屏上下滑动快速换台
  */
 public class MainActivity extends AppCompatActivity {
@@ -77,12 +79,14 @@ public class MainActivity extends AppCompatActivity {
     private TextView tvOsdGroupName;
     private TextView tvOsdStreamUrl;
     private TextView tvOsdTrackInfo;
+    private Button btnSwitchIsp;
     private Button btnFavoriteChannel;
     private Button btnPrevChannel;
     private View[] hudButtons;
     private int currentHudFocusIndex = 0;
     private boolean longPressCenterHandled = false;
     private boolean drawerFocusOnCategories = false;
+    private CustomM3uDialogHelper customM3uDialogHelper;
 
     private TextView tvDrawerTitle;
     private CheckBox cbOnlyAvailable;
@@ -147,6 +151,7 @@ public class MainActivity extends AppCompatActivity {
 
         repository = ChannelRepository.getInstance(this);
         settings = new IptvSettings(this);
+        customM3uDialogHelper = new CustomM3uDialogHelper(this, this::onCustomM3uApplied);
 
         bindViews();
         setupTouchGestures();
@@ -164,6 +169,56 @@ public class MainActivity extends AppCompatActivity {
         } else {
             focusHudButtonAt(currentHudFocusIndex);
         }
+
+        handleIncomingM3uIntent(getIntent());
+        AppUpdateManager.getInstance(this).checkForUpdatesOnStartup(this);
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleIncomingM3uIntent(intent);
+    }
+
+    private void handleIncomingM3uIntent(Intent intent) {
+        if (intent != null && Intent.ACTION_VIEW.equals(intent.getAction()) && intent.getData() != null) {
+            showCustomM3uDialog();
+            customM3uDialogHelper.loadFromUri(intent.getData());
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (customM3uDialogHelper != null) {
+            customM3uDialogHelper.handleActivityResult(requestCode, resultCode, data);
+        }
+        AppUpdateManager.getInstance(this).handleActivityResult(this, requestCode);
+    }
+
+    public void showCustomM3uDialog() {
+        if (customM3uDialogHelper == null) {
+            customM3uDialogHelper = new CustomM3uDialogHelper(this, this::onCustomM3uApplied);
+        }
+        customM3uDialogHelper.showUploadAndInspectDialog();
+    }
+
+    private void onCustomM3uApplied(M3uParser.M3uInspectionReport report, boolean switchedToCustomIsp) {
+        if (categoryAdapter != null) {
+            categoryAdapter.setCategories(repository.getCategoryGroups());
+            categoryAdapter.setSelectedCategory(ChannelRepository.GROUP_ALL);
+        }
+        updateIspButtonsVisualState();
+        refreshChannelList();
+        if (switchedToCustomIsp || currentChannel == null) {
+            playInitialChannel();
+        }
+        String modeDesc = switchedToCustomIsp ? "已切换为自定义源并加载" : "已合并到当前播放列表";
+        Toast.makeText(this,
+                String.format(Locale.US, "%s: %s (%d 个有效频道)",
+                        modeDesc, report.sourceName, report.validChannelCount),
+                Toast.LENGTH_LONG).show();
     }
 
     private void bindViews() {
@@ -182,6 +237,7 @@ public class MainActivity extends AppCompatActivity {
         tvOsdGroupName = findViewById(R.id.tv_osd_group_name);
         tvOsdStreamUrl = findViewById(R.id.tv_osd_stream_url);
         tvOsdTrackInfo = findViewById(R.id.tv_osd_track_info);
+        btnSwitchIsp = findViewById(R.id.btn_switch_isp);
         btnFavoriteChannel = findViewById(R.id.btn_favorite_channel);
         btnPrevChannel = findViewById(R.id.btn_prev_channel);
 
@@ -214,6 +270,15 @@ public class MainActivity extends AppCompatActivity {
 
         findViewById(R.id.btn_toggle_drawer).setOnClickListener(v -> toggleChannelDrawer());
 
+        if (btnSwitchIsp != null) {
+            btnSwitchIsp.setOnClickListener(v -> showIspSwitchDialog());
+        }
+
+        View btnUploadM3u = findViewById(R.id.btn_upload_m3u);
+        if (btnUploadM3u != null) {
+            btnUploadM3u.setOnClickListener(v -> showCustomM3uDialog());
+        }
+
         findViewById(R.id.btn_open_scanner).setOnClickListener(v -> openScannerActivity());
 
         findViewById(R.id.btn_open_settings).setOnClickListener(v -> showSettingsDialog());
@@ -235,11 +300,14 @@ public class MainActivity extends AppCompatActivity {
         });
 
         setupButtonFocusEffects();
+        updateIspButtonsVisualState();
     }
 
     private void setupButtonFocusEffects() {
         hudButtons = new View[]{
                 findViewById(R.id.btn_toggle_drawer),
+                findViewById(R.id.btn_switch_isp),
+                findViewById(R.id.btn_upload_m3u),
                 findViewById(R.id.btn_open_scanner),
                 findViewById(R.id.btn_open_settings),
                 findViewById(R.id.btn_prev_channel),
@@ -273,8 +341,8 @@ public class MainActivity extends AppCompatActivity {
         };
         View.OnFocusChangeListener drawerFocusListener = (v, hasFocus) -> {
             v.animate()
-                    .scaleX(hasFocus ? 1.08f : 1.0f)
-                    .scaleY(hasFocus ? 1.08f : 1.0f)
+                    .scaleX(hasFocus ? 1.04f : 1.0f)
+                    .scaleY(hasFocus ? 1.04f : 1.0f)
                     .setDuration(120)
                     .start();
             v.setSelected(hasFocus);
@@ -372,8 +440,8 @@ public class MainActivity extends AppCompatActivity {
             btn.setBackgroundResource(isTarget ? R.drawable.bg_md3_primary_button : R.drawable.bg_group_tab);
             btn.setBackgroundTintList(null);
             btn.setElevation(isTarget ? 12f : 0f);
-            btn.setScaleX(isTarget ? 1.08f : 1.0f);
-            btn.setScaleY(isTarget ? 1.08f : 1.0f);
+            btn.setScaleX(isTarget ? 1.04f : 1.0f);
+            btn.setScaleY(isTarget ? 1.04f : 1.0f);
         }
     }
 
@@ -409,6 +477,7 @@ public class MainActivity extends AppCompatActivity {
                     closeChannelDrawer();
                 } else if (hudOverlay.getVisibility() == View.VISIBLE) {
                     hudOverlay.setVisibility(View.GONE);
+                    updateHudButtonsVisualState();
                 } else {
                     showHudTemporarily();
                 }
@@ -494,8 +563,8 @@ public class MainActivity extends AppCompatActivity {
         channelAdapter = new ChannelAdapter(new ChannelAdapter.OnChannelActionListener() {
             @Override
             public void onChannelClicked(IptvChannel channel, int position) {
-                playChannel(channel);
                 closeChannelDrawer();
+                playChannel(channel);
             }
 
             @Override
@@ -525,6 +594,12 @@ public class MainActivity extends AppCompatActivity {
                 drawerFocusOnCategories = false;
                 focusChannelListAt(0);
             }
+
+            @Override
+            public void onNavigateToPosition(int targetPosition) {
+                drawerFocusOnCategories = false;
+                focusChannelListAt(targetPosition);
+            }
         });
         rvChannels.setAdapter(channelAdapter);
     }
@@ -534,7 +609,7 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
         int newCatPos = categoryAdapter.selectAdjacentCategory(delta);
-        rvCategories.scrollToPosition(newCatPos);
+        scrollCategoryListToCenter(newCatPos);
         if (drawerFocusOnCategories || channelAdapter == null || channelAdapter.getItemCount() == 0) {
             focusSelectedCategoryTab();
         } else {
@@ -594,7 +669,7 @@ public class MainActivity extends AppCompatActivity {
         });
 
         videoView.setOnErrorListener((mp, frameworkErr, implErr) -> {
-            if (currentChannel != null && !fallbackToLocalProxyAttempted) {
+            if (currentChannel != null && currentChannel.isMulticastStream() && !fallbackToLocalProxyAttempted) {
                 fallbackToLocalProxyAttempted = true;
                 if (settings.getStreamMode() == IptvSettings.STREAM_MODE_UDPXY) {
                     udpxyUnreachableInSession = true;
@@ -617,7 +692,11 @@ public class MainActivity extends AppCompatActivity {
                 currentChannel.setConnected(false);
                 channelAdapter.notifyDataSetChanged();
             }
-            tvOsdTrackInfo.setText("连接失败 (请按遥控器[菜单]检查 udpxy/内置组播代理设置，或按[绿键]打开「组播动态扫描」)");
+            if (currentChannel != null && !currentChannel.isMulticastStream()) {
+                tvOsdTrackInfo.setText("单播流连接失败 (请检查北京移动 IPTV 专网/网络环境或切换其它频道)");
+            } else {
+                tvOsdTrackInfo.setText("连接失败 (请按遥控器[菜单]检查 udpxy/内置组播代理设置，或按[绿键]打开「组播动态扫描」)");
+            }
             showHudTemporarily();
             return true;
         });
@@ -642,6 +721,7 @@ public class MainActivity extends AppCompatActivity {
                 ? String.format(Locale.US, " (%d/%d 可用)", availableCount, all.size())
                 : String.format(Locale.US, " (共%d频道)", all.size());
         tvDrawerTitle.setText("uTV" + statsSuffix);
+        updateIspButtonsVisualState();
     }
 
     private void playInitialChannel() {
@@ -684,14 +764,8 @@ public class MainActivity extends AppCompatActivity {
         String resolvedUrl;
         if (forceSystemPlayerFor4k && localProxyPort > 0) {
             resolvedUrl = StreamUrlResolver.toUdpxyUrl(channel.getRawUrl(), "127.0.0.1:" + localProxyPort);
-        } else if (settings.getStreamMode() == IptvSettings.STREAM_MODE_UDPXY
-                && udpxyUnreachableInSession
-                && localProxyPort > 0) {
-            // 若当前会话已检测到外部 udpxy 不可达，切台时直接走本地网卡组播直连，避免每次切台等待 udpxy 超时
-            fallbackToLocalProxyAttempted = true;
-            resolvedUrl = StreamUrlResolver.toUdpxyUrl(channel.getRawUrl(), "127.0.0.1:" + localProxyPort);
         } else {
-            resolvedUrl = StreamUrlResolver.resolvePlaybackUrl(channel, settings, localProxyPort);
+            resolvedUrl = resolveChannelUrl(channel, localProxyPort);
         }
         loadingOverlay.setVisibility(View.VISIBLE);
         tvLoadingHint.setText(String.format(Locale.US, "正在连接 [%s] %s...",
@@ -703,6 +777,68 @@ public class MainActivity extends AppCompatActivity {
         videoView.setRawChannelUrl(channel.getRawUrl());
         videoView.setVideoPath(resolvedUrl);
         videoView.start();
+
+        // 同步更新另外两个 Player 实例离屏播放【上一个】和【下一个】相邻频道
+        updateOffscreenAdjacentPlayers(channel, localProxyPort);
+    }
+
+    private String resolveChannelUrl(IptvChannel ch, int localProxyPort) {
+        if (ch == null) {
+            return "";
+        }
+        if (settings.getStreamMode() == IptvSettings.STREAM_MODE_UDPXY
+                && udpxyUnreachableInSession
+                && localProxyPort > 0
+                && ch.isMulticastStream()) {
+            return StreamUrlResolver.toUdpxyUrl(ch.getRawUrl(), "127.0.0.1:" + localProxyPort);
+        }
+        return StreamUrlResolver.resolvePlaybackUrl(ch, settings, localProxyPort);
+    }
+
+    /**
+     * 三实例级池化调度：计算当前频道的【上一个】与【下一个】频道，交由 IjkVideoView 的另外两个实例在离屏状态播放
+     */
+    private void updateOffscreenAdjacentPlayers(IptvChannel activeChannel, int localProxyPort) {
+        if (activeChannel == null || videoView == null) {
+            return;
+        }
+        List<IptvChannel> list = channelAdapter != null ? channelAdapter.getChannels() : null;
+        if (list == null || list.isEmpty()) {
+            list = repository.getAllChannels();
+        }
+        if (list == null || list.size() <= 1) {
+            return;
+        }
+        int curIdx = -1;
+        for (int i = 0; i < list.size(); i++) {
+            if (list.get(i).getRawUrl().equals(activeChannel.getRawUrl())) {
+                curIdx = i;
+                break;
+            }
+        }
+        if (curIdx < 0) {
+            return;
+        }
+        int prevIdx = (curIdx - 1 + list.size()) % list.size();
+        int nextIdx = (curIdx + 1) % list.size();
+        IptvChannel prevCh = list.get(prevIdx);
+        IptvChannel nextCh = list.get(nextIdx);
+
+        String prevResolved = (prevCh != null && !prevCh.getRawUrl().equals(activeChannel.getRawUrl()))
+                ? resolveChannelUrl(prevCh, localProxyPort)
+                : null;
+        String prevRaw = (prevCh != null && !prevCh.getRawUrl().equals(activeChannel.getRawUrl()))
+                ? prevCh.getRawUrl()
+                : null;
+
+        String nextResolved = (nextCh != null && !nextCh.getRawUrl().equals(activeChannel.getRawUrl()))
+                ? resolveChannelUrl(nextCh, localProxyPort)
+                : null;
+        String nextRaw = (nextCh != null && !nextCh.getRawUrl().equals(activeChannel.getRawUrl()))
+                ? nextCh.getRawUrl()
+                : null;
+
+        videoView.setAdjacentChannelPaths(prevResolved, prevRaw, nextResolved, nextRaw);
     }
 
     private void updateOsdWithChannel(IptvChannel ch) {
@@ -729,7 +865,9 @@ public class MainActivity extends AppCompatActivity {
         }
         tvOsdGroupName.setText(TextUtils.join(" / ", ch.getGroups()));
 
-        if (settings.getStreamMode() == IptvSettings.STREAM_MODE_DIRECT_RTP) {
+        if (!ch.isMulticastStream()) {
+            tvOsdStreamUrl.setText("HTTP/HLS 单播源: " + ch.getRawUrl());
+        } else if (settings.getStreamMode() == IptvSettings.STREAM_MODE_DIRECT_RTP) {
             tvOsdStreamUrl.setText("RTP 组播直连 (网卡 IGMP): " + ch.getRawUrl());
         } else if (resolvedUrl.equals(ch.getRawUrl())) {
             tvOsdStreamUrl.setText("组播直连: " + ch.getRawUrl());
@@ -831,7 +969,7 @@ public class MainActivity extends AppCompatActivity {
         }
         int nextIdx = (curIdx + delta + list.size()) % list.size();
         playChannel(list.get(nextIdx));
-        rvChannels.scrollToPosition(nextIdx);
+        scrollChannelListToCenter(nextIdx);
     }
 
     private void toggleChannelDrawer() {
@@ -843,10 +981,15 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void openChannelDrawerAndFocus() {
+        if (hudOverlay.getVisibility() == View.VISIBLE) {
+            hudOverlay.setVisibility(View.GONE);
+        }
         drawerPanel.setVisibility(View.VISIBLE);
-        hudOverlay.setVisibility(View.VISIBLE);
         drawerFocusOnCategories = false;
         updateHudButtonsVisualState();
+        if (categoryAdapter != null) {
+            scrollCategoryListToCenter(categoryAdapter.getSelectedPosition());
+        }
         if (channelAdapter != null && channelAdapter.getItemCount() > 0) {
             focusChannelListAt(channelAdapter.getPlayingChannelIndex());
         } else {
@@ -857,7 +1000,61 @@ public class MainActivity extends AppCompatActivity {
 
     private void closeChannelDrawer() {
         drawerPanel.setVisibility(View.GONE);
-        showHudTemporarily();
+        updateHudButtonsVisualState();
+    }
+
+    private void scrollChannelListToCenter(int position) {
+        if (rvChannels == null || channelAdapter == null || channelAdapter.getItemCount() == 0) {
+            return;
+        }
+        int safePos = Math.max(0, Math.min(position, channelAdapter.getItemCount() - 1));
+        RecyclerView.ViewHolder vh = rvChannels.findViewHolderForAdapterPosition(safePos);
+        int rvHeight = rvChannels.getHeight();
+        if (vh != null && vh.itemView != null && rvHeight > 0) {
+            int itemCenter = (vh.itemView.getTop() + vh.itemView.getBottom()) / 2;
+            int dy = itemCenter - (rvHeight / 2);
+            if (Math.abs(dy) > 2 && !rvChannels.isComputingLayout()) {
+                rvChannels.scrollBy(0, dy);
+            }
+            return;
+        }
+        RecyclerView.LayoutManager lm = rvChannels.getLayoutManager();
+        if (lm instanceof LinearLayoutManager && rvHeight > 0) {
+            int itemHeight = rvChannels.getChildCount() > 0
+                    ? rvChannels.getChildAt(0).getHeight()
+                    : Math.round(64f * getResources().getDisplayMetrics().density);
+            int centerOffset = Math.max(0, (rvHeight - itemHeight) / 2);
+            ((LinearLayoutManager) lm).scrollToPositionWithOffset(safePos, centerOffset);
+        } else {
+            rvChannels.scrollToPosition(safePos);
+        }
+    }
+
+    private void scrollCategoryListToCenter(int position) {
+        if (rvCategories == null || categoryAdapter == null || categoryAdapter.getItemCount() == 0) {
+            return;
+        }
+        int safePos = Math.max(0, Math.min(position, categoryAdapter.getItemCount() - 1));
+        RecyclerView.ViewHolder vh = rvCategories.findViewHolderForAdapterPosition(safePos);
+        int rvWidth = rvCategories.getWidth();
+        if (vh != null && vh.itemView != null && rvWidth > 0) {
+            int tabCenter = (vh.itemView.getLeft() + vh.itemView.getRight()) / 2;
+            int dx = tabCenter - (rvWidth / 2);
+            if (Math.abs(dx) > 2 && !rvCategories.isComputingLayout()) {
+                rvCategories.scrollBy(dx, 0);
+            }
+            return;
+        }
+        RecyclerView.LayoutManager lm = rvCategories.getLayoutManager();
+        if (lm instanceof LinearLayoutManager && rvWidth > 0) {
+            int tabWidth = rvCategories.getChildCount() > 0
+                    ? rvCategories.getChildAt(0).getWidth()
+                    : Math.round(92f * getResources().getDisplayMetrics().density);
+            int centerOffset = Math.max(0, (rvWidth - tabWidth) / 2);
+            ((LinearLayoutManager) lm).scrollToPositionWithOffset(safePos, centerOffset);
+        } else {
+            rvCategories.scrollToPosition(safePos);
+        }
     }
 
     private void focusChannelListAt(int position) {
@@ -865,16 +1062,25 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
         int safePos = Math.max(0, Math.min(position, channelAdapter.getItemCount() - 1));
-        rvChannels.scrollToPosition(safePos);
+        scrollChannelListToCenter(safePos);
+        RecyclerView.ViewHolder immediateVh = rvChannels.findViewHolderForAdapterPosition(safePos);
+        if (immediateVh != null && immediateVh.itemView != null) {
+            requestFocusCompat(immediateVh.itemView);
+            scrollChannelListToCenter(safePos);
+        }
         rvChannels.post(() -> {
+            scrollChannelListToCenter(safePos);
             RecyclerView.ViewHolder vh = rvChannels.findViewHolderForAdapterPosition(safePos);
             if (vh != null && vh.itemView != null) {
                 requestFocusCompat(vh.itemView);
+                scrollChannelListToCenter(safePos);
             } else {
                 rvChannels.post(() -> {
+                    scrollChannelListToCenter(safePos);
                     RecyclerView.ViewHolder delayedVh = rvChannels.findViewHolderForAdapterPosition(safePos);
                     if (delayedVh != null && delayedVh.itemView != null) {
                         requestFocusCompat(delayedVh.itemView);
+                        scrollChannelListToCenter(safePos);
                     } else {
                         requestFocusCompat(rvChannels);
                     }
@@ -888,16 +1094,25 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
         int pos = categoryAdapter.getSelectedPosition();
-        rvCategories.scrollToPosition(pos);
+        scrollCategoryListToCenter(pos);
+        RecyclerView.ViewHolder immediateVh = rvCategories.findViewHolderForAdapterPosition(pos);
+        if (immediateVh != null && immediateVh.itemView != null) {
+            requestFocusCompat(immediateVh.itemView);
+            scrollCategoryListToCenter(pos);
+        }
         rvCategories.post(() -> {
+            scrollCategoryListToCenter(pos);
             RecyclerView.ViewHolder vh = rvCategories.findViewHolderForAdapterPosition(pos);
             if (vh != null && vh.itemView != null) {
                 requestFocusCompat(vh.itemView);
+                scrollCategoryListToCenter(pos);
             } else {
                 rvCategories.post(() -> {
+                    scrollCategoryListToCenter(pos);
                     RecyclerView.ViewHolder delayedVh = rvCategories.findViewHolderForAdapterPosition(pos);
                     if (delayedVh != null && delayedVh.itemView != null) {
                         requestFocusCompat(delayedVh.itemView);
+                        scrollCategoryListToCenter(pos);
                     } else {
                         requestFocusCompat(rvCategories);
                     }
@@ -914,6 +1129,8 @@ public class MainActivity extends AppCompatActivity {
         if (focused != null) {
             int id = focused.getId();
             if (id == R.id.btn_toggle_drawer
+                    || id == R.id.btn_switch_isp
+                    || id == R.id.btn_upload_m3u
                     || id == R.id.btn_open_scanner
                     || id == R.id.btn_open_settings
                     || id == R.id.btn_prev_channel
@@ -929,11 +1146,75 @@ public class MainActivity extends AppCompatActivity {
         return target != null && target.isSelected();
     }
 
-    private void showHudTemporarily() {
-        hudOverlay.setVisibility(View.VISIBLE);
-        if (drawerPanel.getVisibility() != View.VISIBLE) {
-            focusHudButtonAt(currentHudFocusIndex);
+    private void updateIspButtonsVisualState() {
+        if (settings == null) {
+            return;
         }
+        if (btnSwitchIsp != null) {
+            btnSwitchIsp.setText(settings.getIspShortName());
+        }
+    }
+
+    public void switchIspProvider(int newIsp) {
+        if (settings == null) {
+            return;
+        }
+        int oldIsp = settings.getIspProvider();
+        String oldDefaultSubnet = IptvSettings.getDefaultScanSubnetForIsp(oldIsp);
+        String currentSubnet = settings.getScanSubnet();
+
+        settings.setIspProvider(newIsp);
+        if (TextUtils.isEmpty(currentSubnet) || oldDefaultSubnet.equals(currentSubnet)) {
+            settings.setScanSubnet(IptvSettings.getDefaultScanSubnetForIsp(newIsp));
+        }
+
+        repository.reloadChannels();
+        if (categoryAdapter != null) {
+            categoryAdapter.setCategories(repository.getCategoryGroups());
+            categoryAdapter.setSelectedCategory(ChannelRepository.GROUP_ALL);
+        }
+        updateIspButtonsVisualState();
+        refreshChannelList();
+        playInitialChannel();
+
+        Toast.makeText(this,
+                "已切换至: " + settings.getIspDisplayName() + " (" + repository.getAllChannels().size() + " 频道)",
+                Toast.LENGTH_SHORT).show();
+    }
+
+    private void showIspSwitchDialog() {
+        String customLabel = repository.hasCustomUploadedM3u()
+                ? "自定义 M3U 播放列表 (" + settings.getCustomM3uName() + ")"
+                : "自定义 M3U 播放列表 (点击上传并检测文件内容)";
+        String[] ispOptions = {
+                "北京联通 IPTV (bj-unicom-iptv 组播源 rtp://239.3.1.x)",
+                "北京移动 IPTV (bj-mobile-iptv 单播源 http://.../*.m3u8)",
+                "北京电信 IPTV (bj-telecom-iptv 组播源 rtp://225.1.8.x)",
+                "北京三网聚合 (联通 + 移动 + 电信全部频道)",
+                customLabel
+        };
+        int currentIsp = settings.getIspProvider();
+        new MaterialAlertDialogBuilder(this)
+                .setTitle("切换北京 IPTV 运营商节目源")
+                .setSingleChoiceItems(ispOptions, currentIsp, (dialog, which) -> {
+                    dialog.dismiss();
+                    if (which == IptvSettings.ISP_CUSTOM_M3U && !repository.hasCustomUploadedM3u()) {
+                        showCustomM3uDialog();
+                    } else {
+                        switchIspProvider(which);
+                    }
+                })
+                .setNeutralButton("上传/检测自定义 M3U", (d, w) -> showCustomM3uDialog())
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void showHudTemporarily() {
+        if (drawerPanel.getVisibility() == View.VISIBLE) {
+            drawerPanel.setVisibility(View.GONE);
+        }
+        hudOverlay.setVisibility(View.VISIBLE);
+        focusHudButtonAt(currentHudFocusIndex);
         scheduleHideHud();
     }
 
@@ -987,7 +1268,7 @@ public class MainActivity extends AppCompatActivity {
             final int digit = i;
             Button b = view.findViewById(btnIds[i]);
             b.setOnFocusChangeListener((v, hasFocus) -> {
-                v.animate().scaleX(hasFocus ? 1.08f : 1.0f).scaleY(hasFocus ? 1.08f : 1.0f).setDuration(100).start();
+                v.animate().scaleX(hasFocus ? 1.04f : 1.0f).scaleY(hasFocus ? 1.04f : 1.0f).setDuration(100).start();
                 v.setSelected(hasFocus);
             });
             b.setOnClickListener(v -> {
@@ -1001,7 +1282,7 @@ public class MainActivity extends AppCompatActivity {
 
         View btnDel = view.findViewById(R.id.btn_numpad_del);
         btnDel.setOnFocusChangeListener((v, hasFocus) -> {
-            v.animate().scaleX(hasFocus ? 1.08f : 1.0f).scaleY(hasFocus ? 1.08f : 1.0f).setDuration(100).start();
+            v.animate().scaleX(hasFocus ? 1.04f : 1.0f).scaleY(hasFocus ? 1.04f : 1.0f).setDuration(100).start();
             v.setSelected(hasFocus);
         });
         btnDel.setOnClickListener(v -> {
@@ -1018,7 +1299,7 @@ public class MainActivity extends AppCompatActivity {
 
         View btnGo = view.findViewById(R.id.btn_numpad_go);
         btnGo.setOnFocusChangeListener((v, hasFocus) -> {
-            v.animate().scaleX(hasFocus ? 1.08f : 1.0f).scaleY(hasFocus ? 1.08f : 1.0f).setDuration(100).start();
+            v.animate().scaleX(hasFocus ? 1.04f : 1.0f).scaleY(hasFocus ? 1.04f : 1.0f).setDuration(100).start();
             v.setSelected(hasFocus);
         });
         btnGo.setOnClickListener(v -> {
@@ -1058,13 +1339,16 @@ public class MainActivity extends AppCompatActivity {
                 : "收藏当前频道 (" + (currentChannel != null ? currentChannel.getDisplayName() : "") + ")";
 
         String[] items = {
+                "切换运营商节目源: 当前 [" + settings.getIspShortName() + "] (联通 / 移动 / 电信 / 自定义)",
+                "上传并检测自定义 M3U 播放列表文件",
                 "虚拟数字键盘选台 (按台号直达)",
                 "打开频道分类列表 (左右键切换分类)",
                 favText,
                 "切换画面比例 (16:9 / 4:3 / 铺满 / 适应)",
                 "重新连接当前频道流",
                 "播放与网络转发设置 (udpxy / RTP 组播直连)",
-                "组播地址动态扫描与巡检 (check_iptv_m3u.sh)"
+                "组播地址动态扫描与巡检 (check_iptv_m3u.sh)",
+                "检查应用新版本 (v" + AppUpdateManager.getCurrentVersionName(this) + ")"
         };
 
         new MaterialAlertDialogBuilder(this)
@@ -1072,27 +1356,36 @@ public class MainActivity extends AppCompatActivity {
                 .setItems(items, (dialog, which) -> {
                     switch (which) {
                         case 0:
-                            showVirtualNumpadDialog();
+                            showIspSwitchDialog();
                             break;
                         case 1:
-                            openChannelDrawerAndFocus();
+                            showCustomM3uDialog();
                             break;
                         case 2:
-                            toggleCurrentChannelFavorite();
+                            showVirtualNumpadDialog();
                             break;
                         case 3:
-                            cycleAspectRatio();
+                            openChannelDrawerAndFocus();
                             break;
                         case 4:
+                            toggleCurrentChannelFavorite();
+                            break;
+                        case 5:
+                            cycleAspectRatio();
+                            break;
+                        case 6:
                             if (currentChannel != null) {
                                 playChannel(currentChannel);
                             }
                             break;
-                        case 5:
+                        case 7:
                             showSettingsDialog();
                             break;
-                        case 6:
+                        case 8:
                             openScannerActivity();
+                            break;
+                        case 9:
+                            AppUpdateManager.getInstance(this).checkForUpdates(this, true);
                             break;
                     }
                 })
@@ -1102,6 +1395,8 @@ public class MainActivity extends AppCompatActivity {
 
     private void showSettingsDialog() {
         View view = LayoutInflater.from(this).inflate(R.layout.dialog_player_settings, null);
+        RadioGroup rgIspProvider = view.findViewById(R.id.rg_isp_provider);
+        Button btnSettingsUploadM3u = view.findViewById(R.id.btn_settings_upload_m3u);
         RadioGroup rgStreamMode = view.findViewById(R.id.rg_stream_mode);
         EditText etUdpxy = view.findViewById(R.id.et_settings_udpxy);
         RadioGroup rgPlayerCore = view.findViewById(R.id.rg_player_core);
@@ -1110,6 +1405,21 @@ public class MainActivity extends AppCompatActivity {
         CheckBox cbOpenSlEs = view.findViewById(R.id.cb_settings_opensles);
         CheckBox cbTextureView = view.findViewById(R.id.cb_settings_textureview);
         CheckBox cbAllChannels = view.findViewById(R.id.cb_settings_all_channels);
+
+        if (rgIspProvider != null) {
+            int currentIsp = settings.getIspProvider();
+            if (currentIsp == IptvSettings.ISP_BEIJING_MOBILE) {
+                rgIspProvider.check(R.id.rb_isp_mobile);
+            } else if (currentIsp == IptvSettings.ISP_BEIJING_TELECOM) {
+                rgIspProvider.check(R.id.rb_isp_telecom);
+            } else if (currentIsp == IptvSettings.ISP_ALL_MERGED) {
+                rgIspProvider.check(R.id.rb_isp_all);
+            } else if (currentIsp == IptvSettings.ISP_CUSTOM_M3U) {
+                rgIspProvider.check(R.id.rb_isp_custom);
+            } else {
+                rgIspProvider.check(R.id.rb_isp_unicom);
+            }
+        }
 
         int mode = settings.getStreamMode();
         if (mode == IptvSettings.STREAM_MODE_UDPXY) {
@@ -1123,10 +1433,10 @@ public class MainActivity extends AppCompatActivity {
         etUdpxy.setText(settings.getUdpxyAddress());
 
         int playerCore = settings.getPlayerType();
-        if (playerCore == IptvSettings.PLAYER_IJK_EXO) {
-            rgPlayerCore.check(R.id.rb_core_exo);
-        } else if (playerCore == IptvSettings.PLAYER_ANDROID_MEDIA) {
+        if (playerCore == IptvSettings.PLAYER_ANDROID_MEDIA) {
             rgPlayerCore.check(R.id.rb_core_android);
+        } else if (playerCore == IptvSettings.PLAYER_UTV) {
+            rgPlayerCore.check(R.id.rb_core_utv);
         } else {
             rgPlayerCore.check(R.id.rb_core_ijk);
         }
@@ -1137,7 +1447,7 @@ public class MainActivity extends AppCompatActivity {
         cbTextureView.setChecked(settings.getRenderViewType() == IjkVideoView.RENDER_TEXTURE_VIEW);
         cbAllChannels.setChecked(settings.isIncludeAllRepoChannels());
 
-        new MaterialAlertDialogBuilder(this)
+        AlertDialog settingsDialog = new MaterialAlertDialogBuilder(this)
                 .setTitle("uTV 播放与网络配置")
                 .setView(view)
                 .setPositiveButton("保存并应用", (dialog, which) -> {
@@ -1154,10 +1464,10 @@ public class MainActivity extends AppCompatActivity {
                     udpxyUnreachableInSession = false;
 
                     int checkedCore = rgPlayerCore.getCheckedRadioButtonId();
-                    if (checkedCore == R.id.rb_core_exo) {
-                        settings.setPlayerType(IptvSettings.PLAYER_IJK_EXO);
-                    } else if (checkedCore == R.id.rb_core_android) {
+                    if (checkedCore == R.id.rb_core_android) {
                         settings.setPlayerType(IptvSettings.PLAYER_ANDROID_MEDIA);
+                    } else if (checkedCore == R.id.rb_core_utv) {
+                        settings.setPlayerType(IptvSettings.PLAYER_UTV);
                     } else {
                         settings.setPlayerType(IptvSettings.PLAYER_IJK);
                     }
@@ -1175,9 +1485,40 @@ public class MainActivity extends AppCompatActivity {
                     }
 
                     boolean prevAll = settings.isIncludeAllRepoChannels();
+                    int prevIsp = settings.getIspProvider();
+                    int newIsp = prevIsp;
+                    if (rgIspProvider != null) {
+                        int checkedIspId = rgIspProvider.getCheckedRadioButtonId();
+                        if (checkedIspId == R.id.rb_isp_mobile) {
+                            newIsp = IptvSettings.ISP_BEIJING_MOBILE;
+                        } else if (checkedIspId == R.id.rb_isp_telecom) {
+                            newIsp = IptvSettings.ISP_BEIJING_TELECOM;
+                        } else if (checkedIspId == R.id.rb_isp_all) {
+                            newIsp = IptvSettings.ISP_ALL_MERGED;
+                        } else if (checkedIspId == R.id.rb_isp_custom) {
+                            newIsp = IptvSettings.ISP_CUSTOM_M3U;
+                        } else {
+                            newIsp = IptvSettings.ISP_BEIJING_UNICOM;
+                        }
+                    }
+
                     if (prevAll != cbAllChannels.isChecked()) {
                         settings.setIncludeAllRepoChannels(cbAllChannels.isChecked());
+                    }
+
+                    if (newIsp == IptvSettings.ISP_CUSTOM_M3U && !repository.hasCustomUploadedM3u()) {
+                        showCustomM3uDialog();
+                        return;
+                    }
+
+                    if (newIsp != prevIsp) {
+                        switchIspProvider(newIsp);
+                        return;
+                    } else if (prevAll != cbAllChannels.isChecked()) {
                         repository.reloadChannels();
+                        if (categoryAdapter != null) {
+                            categoryAdapter.setCategories(repository.getCategoryGroups());
+                        }
                     }
 
                     refreshChannelList();
@@ -1186,7 +1527,60 @@ public class MainActivity extends AppCompatActivity {
                     }
                 })
                 .setNegativeButton("取消", null)
-                .show();
+                .create();
+
+        if (btnSettingsUploadM3u != null) {
+            btnSettingsUploadM3u.setOnClickListener(v -> {
+                settingsDialog.dismiss();
+                showCustomM3uDialog();
+            });
+        }
+        Button btnSettingsCheckUpdate = view.findViewById(R.id.btn_settings_check_update);
+        if (btnSettingsCheckUpdate != null) {
+            btnSettingsCheckUpdate.setText(String.format(Locale.US,
+                    "检查新版本 (当前 v%s · GitHub Releases)",
+                    AppUpdateManager.getCurrentVersionName(this)));
+            btnSettingsCheckUpdate.setOnClickListener(v -> {
+                settingsDialog.dismiss();
+                AppUpdateManager.getInstance(this).checkForUpdates(this, true);
+            });
+        }
+
+        final android.widget.ScrollView svSettings = view.findViewById(R.id.sv_player_settings);
+        int[] settingsFocusableIds = {
+                R.id.rb_isp_unicom, R.id.rb_isp_mobile, R.id.rb_isp_telecom,
+                R.id.rb_isp_all, R.id.rb_isp_custom, R.id.btn_settings_upload_m3u,
+                R.id.rb_stream_udpxy, R.id.rb_stream_local_proxy, R.id.rb_stream_direct_rtp,
+                R.id.et_settings_udpxy, R.id.rb_core_ijk, R.id.rb_core_utv, R.id.rb_core_android,
+                R.id.cb_settings_mediacodec, R.id.cb_settings_hevc, R.id.cb_settings_opensles,
+                R.id.cb_settings_textureview, R.id.cb_settings_all_channels, R.id.btn_settings_check_update
+        };
+        View.OnFocusChangeListener settingsFocusCenterListener = (v, hasFocus) -> {
+            if (hasFocus && svSettings != null && svSettings.getHeight() > 0) {
+                android.graphics.Rect rect = new android.graphics.Rect();
+                v.getDrawingRect(rect);
+                try {
+                    svSettings.offsetDescendantRectToMyCoords(v, rect);
+                    int targetY = Math.max(0, rect.centerY() - svSettings.getHeight() / 2);
+                    svSettings.smoothScrollTo(0, targetY);
+                } catch (IllegalArgumentException ignored) {
+                }
+            }
+        };
+        for (int id : settingsFocusableIds) {
+            View item = view.findViewById(id);
+            if (item != null) {
+                item.setOnFocusChangeListener(settingsFocusCenterListener);
+            }
+        }
+
+        settingsDialog.show();
+        if (rgIspProvider != null) {
+            View checkedIspRadio = view.findViewById(rgIspProvider.getCheckedRadioButtonId());
+            if (checkedIspRadio != null) {
+                checkedIspRadio.post(() -> requestFocusCompat(checkedIspRadio));
+            }
+        }
     }
 
     /**
@@ -1195,8 +1589,8 @@ public class MainActivity extends AppCompatActivity {
      * - 频道加减键 (CHANNEL_UP / CHANNEL_DOWN / PAGE_UP / PAGE_DOWN)：随时上下换台
      * - 全屏状态下（抽屉关闭）：
      *   - 上/下方向键：直接切换上/下一频道
-     *   - OK / Enter / 左方向键：打开左侧频道抽屉并自动将焦点落在当前频道上
-     *   - 右方向键：唤出底部操控栏并将遥控器焦点移入功能按钮
+     *   - 左/右方向键：若信息页面(HUD)未显示则调出左侧频道列表并定位当前频道；若信息页面已显示则切换 HUD 按钮焦点
+     *   - OK / Enter 键：若信息页面(HUD)未显示则调出信息页面并聚焦功能按钮；若信息页面已显示则触发当前聚焦按钮
      * - 机顶盒四色功能键与快捷键：
      *   - 菜单键 / 蓝键 (PROG_BLUE)：打开播放与 udpxy 设置
      *   - 绿键 (PROG_GREEN) / GUIDE：打开组播地址动态扫描器
@@ -1274,8 +1668,9 @@ public class MainActivity extends AppCompatActivity {
                 return true;
             }
             if (keyCode == KeyEvent.KEYCODE_INFO || keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE) {
-                if (hudOverlay.getVisibility() == View.VISIBLE && drawerPanel.getVisibility() != View.VISIBLE) {
+                if (hudOverlay.getVisibility() == View.VISIBLE) {
                     hudOverlay.setVisibility(View.GONE);
+                    updateHudButtonsVisualState();
                 } else {
                     showHudTemporarily();
                 }
@@ -1310,13 +1705,13 @@ public class MainActivity extends AppCompatActivity {
                 }
 
                 // 播放时方向键逻辑：
-                // - 左/右方向键：切换页面上所有 HUD 按钮的焦点（若 HUD 已隐藏则先唤出 HUD 并聚焦按钮）
+                // - 左/右方向键：若信息页面(HUD)未显示则调出频道列表；若信息页面已显示则切换 HUD 按钮焦点
                 // - 上/下方向键：直接切换上/下一频道
-                // - 短按 OK：若 HUD 已显示则触发当前聚焦的按钮点击；若 HUD 未显示则打开频道抽屉
+                // - 短按 OK：若信息页面(HUD)已显示则触发当前聚焦的按钮点击；若信息页面未显示则调出信息页面(HUD)
                 // - 长按 OK 键：弹出「智能遥控器快捷操作面板」
                 if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
                     if (hudOverlay.getVisibility() != View.VISIBLE) {
-                        showHudTemporarily();
+                        openChannelDrawerAndFocus();
                     } else {
                         scheduleHideHud();
                         moveHudButtonFocus(-1);
@@ -1324,7 +1719,7 @@ public class MainActivity extends AppCompatActivity {
                     return true;
                 } else if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
                     if (hudOverlay.getVisibility() != View.VISIBLE) {
-                        showHudTemporarily();
+                        openChannelDrawerAndFocus();
                     } else {
                         scheduleHideHud();
                         moveHudButtonFocus(1);
@@ -1357,6 +1752,7 @@ public class MainActivity extends AppCompatActivity {
                 }
                 if (hudOverlay.getVisibility() == View.VISIBLE) {
                     hudOverlay.setVisibility(View.GONE);
+                    updateHudButtonsVisualState();
                     return true;
                 }
                 long now = System.currentTimeMillis();
@@ -1371,7 +1767,7 @@ public class MainActivity extends AppCompatActivity {
             }
         } else if (event.getAction() == KeyEvent.ACTION_UP) {
             int keyCode = event.getKeyCode();
-            // 全屏播放时，短按松开 OK 键：若 HUD 显示则执行当前聚焦按钮功能，否则打开频道列表
+            // 全屏播放时，短按松开 OK 键：若信息页面(HUD)已显示则执行当前聚焦按钮功能，否则调出信息页面(HUD)
             if (drawerPanel.getVisibility() != View.VISIBLE
                     && remoteNumberBuffer.length() == 0
                     && (keyCode == KeyEvent.KEYCODE_DPAD_CENTER
@@ -1388,7 +1784,7 @@ public class MainActivity extends AppCompatActivity {
                             return true;
                         }
                     }
-                    openChannelDrawerAndFocus();
+                    showHudTemporarily();
                     return true;
                 }
                 return true;
@@ -1433,6 +1829,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        AppUpdateManager.getInstance(this).attachActivity(this);
         refreshChannelList();
         mainHandler.post(telemetryTickRunnable);
         if (currentChannel != null && !videoView.isPlaying()) {
@@ -1443,6 +1840,9 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onPause() {
         mainHandler.removeCallbacks(telemetryTickRunnable);
+        if (videoView != null) {
+            videoView.stopOffscreenPlayers();
+        }
         super.onPause();
     }
 

@@ -27,9 +27,11 @@ import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Date;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -71,11 +73,12 @@ public class MulticastScannerEngine {
     private ExecutorService workerPool;
     private Process activeShellProcess;
 
-    // 北京联通高频组播端口列表 (按出现频次降序排列，加速动态扫描)
+    // 北京联通与北京电信高频组播端口列表 (按出现频次降序排列，加速动态扫描)
     private static final int[] FAST_UNICOM_PORTS = {
-            8001, 4120, 8000, 4220, 2000, 1234,
+            8002, 8001, 4120, 8000, 4220, 2000, 1234, 5008,
             3001, 3002, 3003, 3004, 3005, 3006,
-            8004, 8008, 8012, 8016, 8020, 8028, 8032, 8036, 9000, 9012, 9020, 9024
+            8004, 8008, 8012, 8016, 8020, 8028, 8032, 8036, 8068, 8080, 8128, 8264,
+            9000, 9004, 9008, 9012, 9016, 9020, 9024
     };
 
     public MulticastScannerEngine(Context context) {
@@ -131,6 +134,93 @@ public class MulticastScannerEngine {
     }
 
     /**
+     * 对用户上传的自定义 M3U 解析结果执行在线流连通性与音视频轨道检测
+     */
+    public void startCustomReportCheck(M3uParser.M3uInspectionReport report,
+                                       int timeoutMs,
+                                       ScanCallback callback) {
+        if (report == null || report.channels.isEmpty()) {
+            if (callback != null) {
+                callback.onError("没有可检测的频道条目");
+            }
+            return;
+        }
+        cancel();
+        cancelled.set(false);
+        workerPool = Executors.newSingleThreadExecutor();
+        workerPool.execute(() -> {
+            try {
+                long startEpoch = System.currentTimeMillis() / 1000L;
+                File runDir = createRunDirectory();
+                ScanStatistics stats = initStats(runDir);
+                List<IptvChannel> channels = report.channels;
+                int total = channels.size();
+                report.probedCount = 0;
+                report.reachableCount = 0;
+                report.unreachableCount = 0;
+
+                StringBuilder scriptLog = new StringBuilder();
+                StringBuilder mismatchLog = new StringBuilder("Resolution Mismatch Log\n-----------------------\n");
+                emitLog(callback, scriptLog, String.format(Locale.US,
+                        "[%s] Starting custom M3U inspection (%s). Total channels: %d",
+                        nowTimeStr(), report.sourceName, total));
+
+                int counter = 1;
+                for (IptvChannel ch : channels) {
+                    if (cancelled.get()) {
+                        emitLog(callback, scriptLog, "[" + nowTimeStr() + "] Custom M3U check cancelled.");
+                        break;
+                    }
+                    String targetEndpoint = (!TextUtils.isEmpty(ch.getMulticastIp()) && ch.getMulticastPort() > 0)
+                            ? (ch.getMulticastIp() + ":" + ch.getMulticastPort())
+                            : ch.getRawUrl();
+                    if (callback != null) {
+                        callback.onProgress(counter - 1, total,
+                                String.format(Locale.US, "正在探测 [%s] %s (%s)",
+                                        ch.getChannelNumberDisplay(), ch.getDisplayName(), targetEndpoint),
+                                stats);
+                    }
+                    StreamProbeResult probe = probeChannelStream(
+                            ch.getMulticastIp(), ch.getMulticastPort(), ch, timeoutMs);
+                    applyProbeResultToChannel(counter, ch, probe, stats, mismatchLog, scriptLog, callback);
+                    report.probedCount++;
+                    if (probe.connected) {
+                        report.reachableCount++;
+                    } else {
+                        report.unreachableCount++;
+                    }
+                    if (callback != null) {
+                        callback.onChannelProbed(ch);
+                        callback.onProgress(counter, total,
+                                String.format(Locale.US, "[%s] %s (%s)",
+                                        probe.connected ? "可用" : "超时", ch.getDisplayName(), targetEndpoint),
+                                stats);
+                    }
+                    counter++;
+                }
+
+                stats.durationSeconds = Math.max(1L, (System.currentTimeMillis() / 1000L) - startEpoch);
+                writeTextFile(stats.resultsCsvFile, M3uParser.toResultsCsvContent(channels));
+                writeTextFile(stats.modifiedM3uFile, M3uParser.toM3uContent(channels, true, null));
+                writeTextFile(stats.mismatchLogFile, mismatchLog.toString());
+                writeTextFile(stats.scriptLogFile, scriptLog + "\n" + stats.toSummaryText() + "\n");
+
+                if (callback != null) {
+                    callback.onCompleted(channels, stats);
+                }
+            } catch (Exception e) {
+                if (!cancelled.get() && callback != null) {
+                    callback.onError("检测异常: " + e.getMessage());
+                }
+            } finally {
+                if (workerPool != null) {
+                    workerPool.shutdown();
+                }
+            }
+        });
+    }
+
+    /**
      * 模式 1：按照 check_iptv_m3u.sh 的完整逻辑巡检现有全部频道
      */
     private void runCheckPlaylistMode(int timeoutMs, ScanCallback callback) throws IOException {
@@ -153,16 +243,28 @@ public class MulticastScannerEngine {
                 emitLog(callback, scriptLog, "[" + nowTimeStr() + "] Scan cancelled by user.");
                 break;
             }
+            String targetEndpoint = (!TextUtils.isEmpty(ch.getMulticastIp()) && ch.getMulticastPort() > 0)
+                    ? (ch.getMulticastIp() + ":" + ch.getMulticastPort())
+                    : ch.getRawUrl();
             emitLog(callback, scriptLog, String.format(Locale.US,
                     "[%s] Processing channel %d: %s (%s)",
-                    nowTimeStr(), counter, ch.getRawTitle(), ch.getRawUrl()));
+                    nowTimeStr(), counter, ch.getRawTitle(), targetEndpoint));
+            if (callback != null) {
+                callback.onProgress(counter - 1, total,
+                        String.format(Locale.US, "正在探测 [%s] %s (%s)",
+                                ch.getChannelNumberDisplay(), ch.getDisplayName(), targetEndpoint),
+                        stats);
+            }
 
             StreamProbeResult probe = probeChannelStream(ch.getMulticastIp(), ch.getMulticastPort(), ch, timeoutMs);
             applyProbeResultToChannel(counter, ch, probe, stats, mismatchLog, scriptLog, callback);
 
             if (callback != null) {
                 callback.onChannelProbed(ch);
-                callback.onProgress(counter, total, ch.getDisplayName() + " (" + ch.getRawUrl() + ")", stats);
+                callback.onProgress(counter, total,
+                        String.format(Locale.US, "[%s] %s (%s)",
+                                probe.connected ? "可用" : "超时", ch.getDisplayName(), targetEndpoint),
+                        stats);
             }
             counter++;
         }
@@ -197,8 +299,31 @@ public class MulticastScannerEngine {
 
         List<Integer> allKnownPorts = repository.getAllKnownPorts();
         List<IptvChannel> discoveredChannels = Collections.synchronizedList(new ArrayList<>());
-        AtomicInteger completedHosts = new AtomicInteger(0);
+        AtomicInteger completedProbes = new AtomicInteger(0);
         AtomicInteger counterGen = new AtomicInteger(1);
+
+        // 预先构建每个组播 IP 的候选端口表，并统计 (组播地址 × 端口) 联合总探测粒度数
+        final Map<Integer, List<Integer>> hostCandidatePortsMap = new LinkedHashMap<>();
+        int totalEndpointChecks = 0;
+        for (int host = sHost; host <= eHost; host++) {
+            String ip = cleanSubnet + "." + host;
+            Set<Integer> candidateSet = new LinkedHashSet<>(repository.getKnownPortsForIp(ip));
+            if (fullPortScan) {
+                candidateSet.addAll(allKnownPorts);
+            } else {
+                for (int p : FAST_UNICOM_PORTS) {
+                    candidateSet.add(p);
+                }
+            }
+            List<Integer> portList = new ArrayList<>(candidateSet);
+            hostCandidatePortsMap.put(host, portList);
+            totalEndpointChecks += portList.size();
+        }
+        final int totalProbeUnits = Math.max(1, totalEndpointChecks);
+
+        emitLog(callback, scriptLog, String.format(Locale.US,
+                "[%s] [SCAN] Total multicast (IP:Port) probe targets: %d across %d hosts",
+                nowTimeStr(), totalProbeUnits, totalHosts));
 
         // 使用并发线程池加速 239.3.1.1 ~ 239.3.1.254 网段扫描
         ExecutorService hostPool = Executors.newFixedThreadPool(8);
@@ -211,23 +336,20 @@ public class MulticastScannerEngine {
                     return;
                 }
                 String ip = cleanSubnet + "." + currentHost;
-                // 优先探测该组播 IP 已知的端口，再探测高频端口或全量端口
-                Set<Integer> candidatePorts = new LinkedHashSet<>(repository.getKnownPortsForIp(ip));
-                if (fullPortScan) {
-                    candidatePorts.addAll(allKnownPorts);
-                } else {
-                    for (int p : FAST_UNICOM_PORTS) {
-                        candidatePorts.add(p);
-                    }
+                List<Integer> candidatePorts = hostCandidatePortsMap.get(currentHost);
+                if (candidatePorts == null || candidatePorts.isEmpty()) {
+                    return;
                 }
 
-                for (int port : candidatePorts) {
+                for (int i = 0; i < candidatePorts.size(); i++) {
                     if (cancelled.get()) {
                         break;
                     }
+                    int port = candidatePorts.get(i);
                     IptvChannel known = repository.findKnownChannelByIpPort(ip, port);
                     int probeTimeout = (known != null) ? timeoutMs : Math.min(timeoutMs, 800);
                     StreamProbeResult probe = probeChannelStream(ip, port, known, probeTimeout);
+                    int done = completedProbes.incrementAndGet();
 
                     if (probe.connected) {
                         int idx = counterGen.getAndIncrement();
@@ -236,9 +358,10 @@ public class MulticastScannerEngine {
                             channel = known;
                         } else {
                             String rawUrl = "rtp://" + ip + ":" + port;
+                            String ispPrefix = cleanSubnet.startsWith("225.") ? "电信组播" : "联通组播";
                             String extInf = String.format(Locale.US,
-                                    "#EXTINF:-1 tvg-id=\"\" tvg-name=\"\" tvg-logo=\"\" group-title=\"动态扫描发现\",联通组播_%s_%d[%d][%s]",
-                                    ip, port, 500 + idx, probe.resolutionFlag);
+                                    "#EXTINF:-1 tvg-id=\"\" tvg-name=\"\" tvg-logo=\"\" group-title=\"动态扫描发现\",%s_%s_%d[%d][%s]",
+                                    ispPrefix, ip, port, 500 + idx, probe.resolutionFlag);
                             channel = M3uParser.buildChannel(idx, extInf, rawUrl);
                             channel.setDiscoveredByScan(true);
                         }
@@ -253,16 +376,28 @@ public class MulticastScannerEngine {
                         if (callback != null) {
                             callback.onChannelProbed(channel);
                         }
-                        // 在快速扫描模式下，同一 IP 命中有效流后继续下一个 IP
+                        // 在快速扫描模式下，同一 IP 命中有效流后推进该 IP 剩余未探测端口的进度并跳至下一个 IP
                         if (!fullPortScan) {
+                            int remainingInHost = candidatePorts.size() - 1 - i;
+                            if (remainingInHost > 0) {
+                                done = completedProbes.addAndGet(remainingInHost);
+                            }
+                            if (callback != null) {
+                                callback.onProgress(done, totalProbeUnits,
+                                        String.format(Locale.US, "[命中] %s:%d (%s)",
+                                                ip, port, channel.getDisplayName()),
+                                        stats);
+                            }
                             break;
                         }
                     }
-                }
 
-                int done = completedHosts.incrementAndGet();
-                if (callback != null) {
-                    callback.onProgress(done, totalHosts, "正在扫描网段: " + ip, stats);
+                    if (callback != null) {
+                        String targetLabel = (known != null)
+                                ? String.format(Locale.US, "正在扫描: %s:%d (%s)", ip, port, known.getDisplayName())
+                                : String.format(Locale.US, "正在扫描: %s:%d", ip, port);
+                        callback.onProgress(done, totalProbeUnits, targetLabel, stats);
+                    }
                 }
             }));
         }
@@ -449,11 +584,19 @@ public class MulticastScannerEngine {
     }
 
     /**
-     * 探测单个组播地址或 udpxy 代理地址的连通性、MPEG-TS 同步字节及音视频轨道信息
+     * 探测单个组播地址、udpxy 代理地址或 HTTP/HLS 单播地址的连通性、MPEG-TS 同步字节及音视频轨道信息
      */
     private StreamProbeResult probeChannelStream(String ip, int port, IptvChannel knownChannel, int timeoutMs) {
         StreamProbeResult res = new StreamProbeResult();
         if (TextUtils.isEmpty(ip) || port <= 0) {
+            if (knownChannel != null && !TextUtils.isEmpty(knownChannel.getRawUrl())) {
+                String rawUrl = knownChannel.getRawUrl().trim();
+                if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) {
+                    long t0 = System.currentTimeMillis();
+                    res = probeHttpTsStream(rawUrl, knownChannel, timeoutMs);
+                    res.latencyMs = System.currentTimeMillis() - t0;
+                }
+            }
             return res;
         }
         long t0 = System.currentTimeMillis();
@@ -493,11 +636,27 @@ public class MulticastScannerEngine {
             int code = conn.getResponseCode();
             if (code >= 200 && code < 300) {
                 try (InputStream is = conn.getInputStream()) {
-                    byte[] buf = new byte[1316];
-                    int read = is.read(buf);
-                    if (read > 0 && containsTsSyncByte(buf, read)) {
-                        result.connected = true;
-                        populateStreamTrackDetails(result, buf, read, knownChannel);
+                    byte[] buf = new byte[188 * 28];
+                    int totalRead = 0;
+                    long deadline = System.currentTimeMillis() + Math.max(400, timeoutMs);
+                    while (totalRead < buf.length && System.currentTimeMillis() < deadline) {
+                        int n = is.read(buf, totalRead, buf.length - totalRead);
+                        if (n <= 0) {
+                            break;
+                        }
+                        totalRead += n;
+                        String head = new String(buf, 0, Math.min(totalRead, 160), StandardCharsets.UTF_8);
+                        if (head.contains("#EXTM3U") || head.contains("#EXT-X-")) {
+                            result.connected = true;
+                            populateStreamTrackDetails(result, buf, totalRead, knownChannel);
+                            break;
+                        }
+                        // 至少收到 3 个连续 188B 对齐的 TS 同步包 (≥564B)，确认 udpxy 已真正收到组播流而非仅返回 HTTP 200 头
+                        if (totalRead >= 188 * 3 && countAlignedTsPackets(buf, totalRead) >= 3) {
+                            result.connected = true;
+                            populateStreamTrackDetails(result, buf, totalRead, knownChannel);
+                            break;
+                        }
                     }
                 }
             }
@@ -514,41 +673,59 @@ public class MulticastScannerEngine {
         StreamProbeResult result = new StreamProbeResult();
         MulticastSocket socket = null;
         InetAddress group = null;
+        List<NetworkInterface> joinedInterfaces = null;
         try {
             group = InetAddress.getByName(ip);
-            socket = new MulticastSocket(port);
+            socket = new MulticastSocket(null);
             socket.setReuseAddress(true);
+            socket.bind(new java.net.InetSocketAddress(port));
+            socket.setReceiveBufferSize(512 * 1024);
             socket.setSoTimeout(timeoutMs);
-            NetworkInterface mcastIf = LocalMulticastProxyServer.findPreferredMulticastInterface();
-            if (mcastIf != null) {
-                try {
-                    socket.setNetworkInterface(mcastIf);
-                } catch (Exception ignored) {
-                }
-            }
-            socket.joinGroup(group);
+            joinedInterfaces = LocalMulticastProxyServer.joinMulticastOnAllInterfaces(socket, group, port);
 
-            byte[] buf = new byte[1500];
+            byte[] buf = new byte[2048];
             DatagramPacket packet = new DatagramPacket(buf, buf.length);
-            socket.receive(packet);
-            int len = packet.getLength();
-            if (len >= 12 && containsTsSyncByte(buf, len)) {
-                result.connected = true;
-                populateStreamTrackDetails(result, buf, len, knownChannel);
+            int validTsPackets = 0;
+            long deadline = System.currentTimeMillis() + Math.max(300, timeoutMs);
+            while (System.currentTimeMillis() < deadline && validTsPackets < 2) {
+                socket.receive(packet);
+                int len = packet.getLength();
+                if (len >= 188 && containsTsSyncByte(buf, len)) {
+                    validTsPackets++;
+                    if (validTsPackets >= 2) {
+                        result.connected = true;
+                        populateStreamTrackDetails(result, buf, len, knownChannel);
+                        break;
+                    }
+                }
             }
         } catch (Exception ignored) {
         } finally {
             if (socket != null) {
-                if (group != null) {
-                    try {
-                        socket.leaveGroup(group);
-                    } catch (IOException ignored) {
-                    }
-                }
+                LocalMulticastProxyServer.leaveMulticastOnAllInterfaces(socket, group, port, joinedInterfaces);
                 socket.close();
             }
         }
         return result;
+    }
+
+    private int countAlignedTsPackets(byte[] buf, int len) {
+        for (int i = 0; i + 188 <= len; i++) {
+            if ((buf[i] & 0xFF) == 0x47) {
+                int count = 1;
+                for (int pos = i + 188; pos < len; pos += 188) {
+                    if ((buf[pos] & 0xFF) == 0x47) {
+                        count++;
+                    } else {
+                        break;
+                    }
+                }
+                if (count >= 2) {
+                    return count;
+                }
+            }
+        }
+        return 0;
     }
 
     /**
@@ -676,10 +853,8 @@ public class MulticastScannerEngine {
         String finalLog = scriptLogContent + "\n" + stats.toSummaryText() + "\n";
         writeTextFile(stats.scriptLogFile, finalLog);
 
-        // 同步到 ChannelRepository
-        if (stats.connectTrueCount > 0) {
-            repository.mergeScanResults(channels, true);
-        }
+        // 无论扫描结果如何，同步更新 ChannelRepository 并持久化（确保不可用频道不会被误标为可用）
+        repository.mergeScanResults(channels, true);
 
         if (callback != null) {
             callback.onLogLine("----------------------------------------");

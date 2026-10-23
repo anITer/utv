@@ -2,23 +2,30 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
+    android:layout_marginHorizontal="4dp"
     android:layout_marginBottom="8dp"
     android:background="@drawable/bg_channel_item"
     android:clickable="true"
+    android:clipChildren="false"
+    android:clipToPadding="false"
     android:focusable="true"
     android:gravity="center_vertical"
     android:orientation="horizontal"
     android:paddingHorizontal="14dp"
-    android:paddingVertical="12dp">
+    android:paddingVertical="10dp">
 
     <!-- Material 3 频道号胶囊容器 -->
     <TextView
         android:id="@+id/tv_item_channel_num"
-        android:layout_width="48dp"
+        android:layout_width="wrap_content"
         android:layout_height="34dp"
         android:background="@drawable/bg_channel_num_pill"
         android:fontFamily="monospace"
         android:gravity="center"
+        android:includeFontPadding="false"
+        android:minWidth="50dp"
+        android:paddingHorizontal="6dp"
+        android:singleLine="true"
         android:text="001"
         android:textColor="@color/accent_amber"
         android:textSize="14sp"
@@ -42,9 +49,11 @@
                 android:id="@+id/tv_item_channel_name"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
+                android:layout_marginEnd="6dp"
                 android:layout_weight="1"
                 android:ellipsize="end"
                 android:fontFamily="sans-serif-medium"
+                android:includeFontPadding="false"
                 android:singleLine="true"
                 android:text="CCTV-1综合"
                 android:textColor="@color/text_primary"
@@ -57,6 +66,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginEnd="8dp"
                 android:drawableStart="@drawable/ic_flat_star_filled"
+                android:includeFontPadding="false"
                 android:text=""
                 android:visibility="gone" />
 
@@ -66,8 +76,10 @@
                 android:layout_height="wrap_content"
                 android:background="@drawable/bg_res_badge_hd"
                 android:fontFamily="sans-serif-medium"
+                android:includeFontPadding="false"
                 android:paddingHorizontal="8dp"
-                android:paddingVertical="2dp"
+                android:paddingVertical="3dp"
+                android:singleLine="true"
                 android:text="高清"
                 android:textColor="@color/text_primary"
                 android:textSize="11sp"
@@ -88,19 +100,23 @@
                 android:layout_weight="1"
                 android:ellipsize="end"
                 android:fontFamily="monospace"
+                android:includeFontPadding="false"
                 android:singleLine="true"
                 android:text="rtp://239.3.1.129:8008"
                 android:textColor="@color/text_secondary"
-                android:textSize="11sp" />
+                android:textSize="12sp" />
 
             <TextView
                 android:id="@+id/tv_item_status_badge"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
                 android:fontFamily="sans-serif-medium"
+                android:includeFontPadding="false"
+                android:singleLine="true"
                 android:text="未检测"
                 android:textColor="@color/text_muted"
-                android:textSize="11sp" />
+                android:textSize="12sp" />
         </LinearLayout>
     </LinearLayout>
 

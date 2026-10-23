@@ -36,6 +36,9 @@ public class ChannelAdapter extends RecyclerView.Adapter<ChannelAdapter.ViewHold
 
         default void onWrapToTop() {
         }
+
+        default void onNavigateToPosition(int targetPosition) {
+        }
     }
 
     private final List<IptvChannel> channels = new ArrayList<>();
@@ -154,13 +157,17 @@ public class ChannelAdapter extends RecyclerView.Adapter<ChannelAdapter.ViewHold
         holder.itemView.setSelected(isPlaying);
         holder.itemView.setLongClickable(true);
 
-        // 电视遥控器焦点缩放视觉反馈
+        // 电视遥控器焦点缩放视觉反馈，并将当前获焦项自动滚动至列表可视区域正中间
         holder.itemView.setOnFocusChangeListener((v, hasFocus) -> {
             v.animate()
-                    .scaleX(hasFocus ? 1.02f : 1.0f)
-                    .scaleY(hasFocus ? 1.02f : 1.0f)
+                    .scaleX(hasFocus ? 1.015f : 1.0f)
+                    .scaleY(hasFocus ? 1.015f : 1.0f)
                     .setDuration(100)
                     .start();
+            v.setElevation(hasFocus ? 8f : 0f);
+            if (hasFocus) {
+                centerItemInRecyclerView(v);
+            }
         });
 
         holder.itemView.setOnClickListener(v -> {
@@ -187,8 +194,8 @@ public class ChannelAdapter extends RecyclerView.Adapter<ChannelAdapter.ViewHold
 
         // 电视遥控器在频道列表中的快捷导航：
         // - 左/右方向键：直接切换频道分类标签 ([高清]央视 / [高清]卫视 / 4K / 标清 等)
+        // - 上/下方向键：移动焦点并将目标项保持在列表中间位置；首项按上键跳到分类栏，末项按下键循环回首项
         // - 红键/星号键/书签键：一键收藏/取消收藏当前焦点频道
-        // - 首项按上键跳到分类栏，末项按下键循环回首项
         holder.itemView.setOnKeyListener((v, keyCode, event) -> {
             if (event.getAction() != KeyEvent.ACTION_DOWN || listener == null) {
                 return false;
@@ -203,11 +210,19 @@ public class ChannelAdapter extends RecyclerView.Adapter<ChannelAdapter.ViewHold
             } else if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
                 listener.onSwitchCategory(1);
                 return true;
-            } else if (keyCode == KeyEvent.KEYCODE_DPAD_UP && adapterPos == 0) {
-                listener.onNavigateUpFromTop();
+            } else if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+                if (adapterPos <= 0) {
+                    listener.onNavigateUpFromTop();
+                } else {
+                    listener.onNavigateToPosition(adapterPos - 1);
+                }
                 return true;
-            } else if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN && adapterPos == channels.size() - 1) {
-                listener.onWrapToTop();
+            } else if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                if (adapterPos >= channels.size() - 1) {
+                    listener.onWrapToTop();
+                } else {
+                    listener.onNavigateToPosition(adapterPos + 1);
+                }
                 return true;
             } else if (keyCode == KeyEvent.KEYCODE_PROG_RED
                     || keyCode == KeyEvent.KEYCODE_STAR
@@ -219,6 +234,22 @@ public class ChannelAdapter extends RecyclerView.Adapter<ChannelAdapter.ViewHold
             }
             return false;
         });
+    }
+
+    private void centerItemInRecyclerView(View itemView) {
+        if (attachedRecyclerView == null || itemView == null) {
+            return;
+        }
+        int rvHeight = attachedRecyclerView.getHeight();
+        if (rvHeight <= 0) {
+            return;
+        }
+        int itemCenter = (itemView.getTop() + itemView.getBottom()) / 2;
+        int rvCenter = rvHeight / 2;
+        int dy = itemCenter - rvCenter;
+        if (Math.abs(dy) > 2 && !attachedRecyclerView.isComputingLayout()) {
+            attachedRecyclerView.scrollBy(0, dy);
+        }
     }
 
     @Override

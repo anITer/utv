@@ -1,8 +1,13 @@
 package com.bjunicom.iptv.player;
 
+import android.media.AudioAttributes;
+import android.media.AudioFormat;
+import android.media.AudioManager;
+import android.media.AudioTrack;
 import android.media.MediaCodec;
 import android.media.MediaFormat;
 import android.net.Uri;
+import android.os.Build;
 import android.util.Log;
 
 import com.bjunicom.iptv.network.LocalMulticastProxyServer;
@@ -12,74 +17,32 @@ import java.io.InputStream;
 import java.net.DatagramPacket;
 import java.net.HttpURLConnection;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.MulticastSocket;
 import java.net.NetworkInterface;
 import java.net.URL;
 import java.nio.ByteBuffer;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 针对 Android TV 的 MPEG-TS 硬件音频伴音解码器 (与 StreamDownloaderPool 及 CodecDecoderPool 深度协同)
- *
- * 优化点：
- * 1. 下载与解码彻底分离：直接通过 StreamDownloaderPool.PooledStreamDownloader 的 AudioPacketTap 旁路回调
- *    接收已对齐关键帧的 188 字节 TS 音频包，不再重复建立第二条 HTTP / IGMP 组播网络连接；
- * 2. 硬件解码器池化复用：通过 CodecDecoderPool 按音频 MIME (audio/eac3, audio/ac3, audio/mpeg-L2) 获取和归还
- *    已初始化的 MediaCodec + AudioTrack，切台时仅需 flush() 即可复用，避免每次销毁重建。
+ * 针对 Android TV 的 MPEG-TS 独立硬件伴音解码器 (专用于 AC-3 / E-AC-3 杜比音频频道兜底)
  */
 public class TsHardwareAudioCompanion {
     private static final String TAG = "TsHwAudioCompanion";
-    private static final Pattern MCAST_PATTERN = Pattern.compile("(?:rtp|udp)://([0-9.]+):(\\d+)");
+    private static final Pattern MCAST_PATTERN = Pattern.compile("(?:rtp|udp)://@?([0-9.]+):(\\d+)");
 
-    private final AtomicBoolean running = new AtomicBoolean(false);
+    private final AtomicInteger sessionToken = new AtomicInteger(0);
+    private volatile boolean running = false;
     private Thread workerThread;
     private volatile String activeCodecLabel = "";
-    private volatile StreamDownloaderPool.PooledStreamDownloader boundDownloader;
+    private volatile HttpURLConnection activeConn;
+    private volatile MulticastSocket activeSocket;
 
     public String getActiveCodecLabel() {
         return activeCodecLabel;
-    }
-
-    /**
-     * 零重复连接模式：直接挂载到池化下载器 (PooledStreamDownloader) 接收已对齐关键帧的音频 TS 包，
-     * 并根据解析出的 TsCodecDescriptor 从 CodecDecoderPool 获取对应的硬件音频解码器。
-     */
-    public synchronized void startWithDownloader(
-            final StreamDownloaderPool.PooledStreamDownloader downloader,
-            final TsCodecDescriptor descriptor) {
-        stop();
-        if (downloader == null) {
-            return;
-        }
-        boundDownloader = downloader;
-        running.set(true);
-        final BlockingQueue<byte[]> audioQueue = new LinkedBlockingQueue<>(512);
-        downloader.setAudioTeeListener((tsPacketBuf, offset) -> {
-            if (!running.get()) {
-                return;
-            }
-            int pid = ((tsPacketBuf[offset + 1] & 0x1F) << 8) | (tsPacketBuf[offset + 2] & 0xFF);
-            if (pid == 0x0000
-                    || (descriptor != null && (pid == descriptor.pmtPid || pid == descriptor.audioPid))
-                    || descriptor == null
-                    || descriptor.audioPid <= 0) {
-                byte[] pktCopy = new byte[188];
-                System.arraycopy(tsPacketBuf, offset, pktCopy, 0, 188);
-                if (!audioQueue.offer(pktCopy)) {
-                    audioQueue.poll();
-                    audioQueue.offer(pktCopy);
-                }
-            }
-        });
-
-        workerThread = new Thread(() -> runDownloaderTapLoop(audioQueue, descriptor), "TsHwAudioTapWorker");
-        workerThread.setPriority(Thread.MAX_PRIORITY - 1);
-        workerThread.start();
     }
 
     public synchronized void start(final Uri playbackUri, final String rawChannelUrl) {
@@ -87,18 +50,35 @@ public class TsHardwareAudioCompanion {
         if (playbackUri == null) {
             return;
         }
-        running.set(true);
-        workerThread = new Thread(() -> runStandaloneLoop(playbackUri.toString(), rawChannelUrl), "TsHwAudioCompanion");
+        final int token = sessionToken.incrementAndGet();
+        running = true;
+        workerThread = new Thread(
+                () -> runStandaloneLoop(token, playbackUri.toString(), rawChannelUrl),
+                "TsHwAudioCompanion");
         workerThread.setPriority(Thread.MAX_PRIORITY - 1);
+        workerThread.setDaemon(true);
         workerThread.start();
     }
 
     public synchronized void stop() {
-        running.set(false);
+        sessionToken.incrementAndGet();
+        running = false;
         activeCodecLabel = "";
-        if (boundDownloader != null) {
-            boundDownloader.setAudioTeeListener(null);
-            boundDownloader = null;
+        HttpURLConnection conn = activeConn;
+        activeConn = null;
+        if (conn != null) {
+            try {
+                conn.disconnect();
+            } catch (Throwable ignored) {
+            }
+        }
+        MulticastSocket sock = activeSocket;
+        activeSocket = null;
+        if (sock != null) {
+            try {
+                sock.close();
+            } catch (Throwable ignored) {
+            }
         }
         if (workerThread != null) {
             workerThread.interrupt();
@@ -106,88 +86,55 @@ public class TsHardwareAudioCompanion {
         }
     }
 
-    private void runDownloaderTapLoop(BlockingQueue<byte[]> audioQueue, TsCodecDescriptor descriptor) {
-        DecoderSession session = new DecoderSession();
-        if (descriptor != null && descriptor.audioPid > 0) {
-            session.pmtPid = descriptor.pmtPid;
-            session.audioPid = descriptor.audioPid;
-            session.mimeType = mapAudioCodecToMime(descriptor.audioCodec);
-        }
-        try {
-            while (running.get() && !Thread.currentThread().isInterrupted()) {
-                byte[] pkt = audioQueue.poll(200, TimeUnit.MILLISECONDS);
-                if (pkt == null) {
-                    continue;
-                }
-                processTsPacket(pkt, 0, session);
-            }
-        } catch (InterruptedException ignored) {
-        } catch (Throwable t) {
-            if (running.get()) {
-                Log.w(TAG, "Hardware audio tap worker ended: " + t.getMessage());
-            }
-        } finally {
-            session.releaseToPool();
-        }
+    private boolean isTokenActive(int token) {
+        return running && sessionToken.get() == token && !Thread.currentThread().isInterrupted();
     }
 
-    private static String mapAudioCodecToMime(String audioCodec) {
-        if ("eac3".equalsIgnoreCase(audioCodec)) {
-            return MediaFormat.MIMETYPE_AUDIO_EAC3;
-        } else if ("ac3".equalsIgnoreCase(audioCodec)) {
-            return MediaFormat.MIMETYPE_AUDIO_AC3;
-        } else if ("aac".equalsIgnoreCase(audioCodec)) {
-            return MediaFormat.MIMETYPE_AUDIO_AAC;
-        } else if ("mp2".equalsIgnoreCase(audioCodec)) {
-            return "audio/mpeg-L2";
-        }
-        return MediaFormat.MIMETYPE_AUDIO_EAC3;
-    }
-
-    private void runStandaloneLoop(String uriStr, String rawChannelUrl) {
+    private void runStandaloneLoop(int token, String uriStr, String rawChannelUrl) {
         HttpURLConnection conn = null;
         InputStream in = null;
         MulticastSocket mcastSocket = null;
         InetAddress mcastGroup = null;
-        DecoderSession decoderSession = new DecoderSession();
+        int mcastPort = -1;
+        List<NetworkInterface> joinedInterfaces = null;
+        DecoderSession decoderSession = new DecoderSession(token);
 
         try {
             if (uriStr.startsWith("http://") || uriStr.startsWith("https://")) {
                 URL url = new URL(uriStr);
                 conn = (HttpURLConnection) url.openConnection();
+                activeConn = conn;
                 conn.setConnectTimeout(4000);
                 conn.setReadTimeout(5000);
                 conn.connect();
                 in = conn.getInputStream();
-                demuxHttpTsStream(in, decoderSession);
+                demuxHttpTsStream(token, in, decoderSession);
             } else {
                 String target = (rawChannelUrl != null && !rawChannelUrl.isEmpty()) ? rawChannelUrl : uriStr;
                 Matcher m = MCAST_PATTERN.matcher(target);
                 if (m.find()) {
                     String ip = m.group(1);
-                    int port = Integer.parseInt(m.group(2));
+                    mcastPort = Integer.parseInt(m.group(2));
                     mcastGroup = InetAddress.getByName(ip);
-                    mcastSocket = new MulticastSocket(port);
+                    mcastSocket = new MulticastSocket(null);
+                    activeSocket = mcastSocket;
                     mcastSocket.setReuseAddress(true);
+                    LocalMulticastProxyServer.bindMulticastSocketWithGroupFilter(mcastSocket, mcastGroup, mcastPort);
                     mcastSocket.setReceiveBufferSize(512 * 1024);
                     mcastSocket.setSoTimeout(4000);
-                    NetworkInterface nif = LocalMulticastProxyServer.findPreferredMulticastInterface();
-                    if (nif != null) {
-                        try {
-                            mcastSocket.setNetworkInterface(nif);
-                        } catch (Exception ignored) {
-                        }
-                    }
-                    mcastSocket.joinGroup(mcastGroup);
-                    demuxMulticastTsStream(mcastSocket, decoderSession);
+                    joinedInterfaces = LocalMulticastProxyServer.joinMulticastOnAllInterfaces(
+                            mcastSocket, mcastGroup, mcastPort);
+                    demuxMulticastTsStream(token, mcastSocket, decoderSession);
                 }
             }
         } catch (Exception e) {
-            if (running.get()) {
+            if (isTokenActive(token)) {
                 Log.w(TAG, "Hardware audio companion ended: " + e.getMessage());
             }
         } finally {
-            decoderSession.releaseToPool();
+            activeConn = null;
+            activeSocket = null;
+            decoderSession.releaseNow();
             if (in != null) {
                 try {
                     in.close();
@@ -201,23 +148,22 @@ public class TsHardwareAudioCompanion {
                 }
             }
             if (mcastSocket != null) {
-                if (mcastGroup != null) {
-                    try {
-                        mcastSocket.leaveGroup(mcastGroup);
-                    } catch (Exception ignored) {
-                    }
+                LocalMulticastProxyServer.leaveMulticastOnAllInterfaces(
+                        mcastSocket, mcastGroup, mcastPort, joinedInterfaces);
+                try {
+                    mcastSocket.close();
+                } catch (Exception ignored) {
                 }
-                mcastSocket.close();
             }
         }
     }
 
-    private void demuxHttpTsStream(InputStream in, DecoderSession session) throws Exception {
+    private void demuxHttpTsStream(int token, InputStream in, DecoderSession session) throws Exception {
         byte[] readBuf = new byte[188 * 32];
         byte[] carry = new byte[188 * 2];
         int carryLen = 0;
 
-        while (running.get() && !Thread.currentThread().isInterrupted()) {
+        while (isTokenActive(token)) {
             int n = in.read(readBuf, 0, readBuf.length);
             if (n < 0) {
                 break;
@@ -239,7 +185,7 @@ public class TsHardwareAudioCompanion {
             }
 
             int pos = 0;
-            while (pos + 188 <= totalLen && running.get()) {
+            while (pos + 188 <= totalLen && isTokenActive(token)) {
                 if ((combined[pos] & 0xFF) != 0x47) {
                     pos++;
                     continue;
@@ -255,11 +201,12 @@ public class TsHardwareAudioCompanion {
         }
     }
 
-    private void demuxMulticastTsStream(MulticastSocket socket, DecoderSession session) throws Exception {
+    private void demuxMulticastTsStream(int token, MulticastSocket socket, DecoderSession session) throws Exception {
         byte[] buf = new byte[2048];
         DatagramPacket packet = new DatagramPacket(buf, buf.length);
 
-        while (running.get() && !Thread.currentThread().isInterrupted()) {
+        while (isTokenActive(token)) {
+            packet.setLength(buf.length);
             socket.receive(packet);
             int len = packet.getLength();
             int offset = packet.getOffset();
@@ -280,7 +227,7 @@ public class TsHardwareAudioCompanion {
                     payloadOffset = offset + hdrSize;
                 }
             }
-            for (int pos = payloadOffset; pos + 188 <= offset + len; pos += 188) {
+            for (int pos = payloadOffset; pos + 188 <= offset + len && isTokenActive(token); pos += 188) {
                 if ((buf[pos] & 0xFF) == 0x47) {
                     processTsPacket(buf, pos, session);
                 }
@@ -456,12 +403,13 @@ public class TsHardwareAudioCompanion {
         }
 
         if (!session.initialized) {
-            session.acquireDecoderFromPool();
+            session.initDecoder();
         }
         session.feedElementaryStream(pes, esStart, esLen);
     }
 
     private class DecoderSession {
+        final int token;
         int pmtPid = -1;
         int audioPid = -1;
         String mimeType = null;
@@ -469,37 +417,80 @@ public class TsHardwareAudioCompanion {
         final ByteArrayOutputStream pesBuffer = new ByteArrayOutputStream(8192);
 
         boolean initialized = false;
-        CodecDecoderPool.PooledHwAudioDecoder pooledSlot = null;
-        boolean healthy = true;
+        MediaCodec codec = null;
+        AudioTrack audioTrack = null;
+        boolean passthroughMode = false;
+        int sampleRate = 48000;
+        int channelCount = 2;
         long presentationTimeUs = 0L;
 
         // AAC (ADTS over TS) 专用：跨 PES 重组帧缓冲与已生效配置
         final ByteArrayOutputStream aacEsBuffer = new ByteArrayOutputStream(16384);
         boolean aacSawConfig = false;
+        byte[] aacActiveAsc = null;
         int aacSampleRate = 48000;
         int aacChannels = 2;
         long aacPtsUs = 0L;
 
-        void acquireDecoderFromPool() {
+        DecoderSession(int token) {
+            this.token = token;
+        }
+
+        void initDecoder() {
             initialized = true;
             if (mimeType == null) {
                 return;
             }
-            pooledSlot = CodecDecoderPool.getInstance().acquireHwAudioDecoder(mimeType);
-            if (pooledSlot != null) {
-                activeCodecLabel = pooledSlot.label;
+            String[] candidateMimes = "audio/mpeg-L2".equals(mimeType)
+                    ? new String[]{"audio/mpeg-L2", MediaFormat.MIMETYPE_AUDIO_MPEG}
+                    : new String[]{mimeType};
+
+            for (String candidate : candidateMimes) {
+                try {
+                    MediaFormat format = MediaFormat.createAudioFormat(candidate, 48000, 2);
+                    MediaCodec mc = MediaCodec.createDecoderByType(candidate);
+                    mc.configure(format, null, null, 0);
+                    mc.start();
+                    this.codec = mc;
+                    this.audioTrack = createPcmAudioTrack(48000, 2);
+                    this.passthroughMode = false;
+                    activeCodecLabel = candidate + " (硬件伴音)";
+                    return;
+                } catch (Throwable t) {
+                    if (this.codec != null) {
+                        try {
+                            this.codec.release();
+                        } catch (Throwable ignored) {
+                        }
+                        this.codec = null;
+                    }
+                }
+            }
+
+            if (MediaFormat.MIMETYPE_AUDIO_AC3.equals(mimeType)
+                    || MediaFormat.MIMETYPE_AUDIO_EAC3.equals(mimeType)) {
+                try {
+                    int encoding = MediaFormat.MIMETYPE_AUDIO_EAC3.equals(mimeType)
+                            ? AudioFormat.ENCODING_E_AC3
+                            : AudioFormat.ENCODING_AC3;
+                    this.audioTrack = createPassthroughAudioTrack(48000, encoding);
+                    this.passthroughMode = true;
+                    activeCodecLabel = mimeType + " (HDMI透传)";
+                } catch (Throwable t) {
+                    Log.w(TAG, "Failed to init passthrough AudioTrack: " + t.getMessage());
+                }
             }
         }
 
         void feedElementaryStream(byte[] data, int offset, int length) {
-            if (pooledSlot == null) {
+            if (!isTokenActive(token)) {
                 return;
             }
-            if (pooledSlot.passthroughMode && pooledSlot.audioTrack != null) {
-                pooledSlot.audioTrack.write(data, offset, length);
+            if (passthroughMode && audioTrack != null) {
+                audioTrack.write(data, offset, length);
                 return;
             }
-            if (pooledSlot.codec == null) {
+            if (codec == null) {
                 return;
             }
             // AAC over TS 的 PES 载荷是 ADTS 帧序列，而 audio/mp4a-latm 解码器只吃裸 AAC：
@@ -550,9 +541,7 @@ public class TsHardwareAudioCompanion {
                             (byte) (((sfIndex & 0x01) << 7) | (chanConfig << 3))};
                     int sr = aacSampleRateFromIndex(sfIndex);
                     int ch = chanConfig == 0 ? 2 : chanConfig;
-                    if (pooledSlot != null) {
-                        pooledSlot.configureAac(asc, sr, ch);
-                    }
+                    configureAacCsd(asc, sr, ch);
                     aacSampleRate = sr;
                     aacChannels = ch;
                     aacPtsUs = 0L;
@@ -569,6 +558,49 @@ public class TsHardwareAudioCompanion {
             int keep = n - retainFrom;
             if (keep > 0 && keep <= 32768) {
                 aacEsBuffer.write(buf, retainFrom, keep);
+            }
+        }
+
+        /**
+         * 按 ADTS 头解析出的 AudioSpecificConfig 重新配置 AAC 解码器。
+         * MediaCodec 的 audio/mp4a-latm 解码器只接受裸 AAC 帧且必须携带 csd-0，
+         * 直接喂 ADTS 帧会静默无声（北京联通 4K 频道即此场景）。
+         * 相同配置重复调用是 no-op。
+         */
+        private void configureAacCsd(byte[] asc, int sr, int ch) {
+            if (codec == null || asc == null) {
+                return;
+            }
+            if (aacActiveAsc != null && aacActiveAsc.length == asc.length) {
+                boolean same = true;
+                for (int i = 0; i < asc.length; i++) {
+                    if (aacActiveAsc[i] != asc[i]) {
+                        same = false;
+                        break;
+                    }
+                }
+                if (same) {
+                    return;
+                }
+            }
+            try {
+                codec.stop();
+            } catch (Throwable ignored) {
+            }
+            try {
+                MediaFormat format = MediaFormat.createAudioFormat(
+                        MediaFormat.MIMETYPE_AUDIO_AAC, sr, ch);
+                format.setByteBuffer("csd-0", ByteBuffer.wrap(asc));
+                codec.configure(format, null, null, 0);
+                codec.start();
+                aacActiveAsc = asc;
+                sampleRate = sr;
+                channelCount = ch;
+                activeCodecLabel = MediaFormat.MIMETYPE_AUDIO_AAC + " (硬件伴音/ADTS)";
+                Log.i(TAG, "Reconfigured AAC decoder with ADTS-derived CSD: sr=" + sr
+                        + " ch=" + ch);
+            } catch (Throwable t) {
+                Log.w(TAG, "AAC reconfigure with CSD failed: " + t.getMessage());
             }
         }
 
@@ -592,7 +624,6 @@ public class TsHardwareAudioCompanion {
         }
 
         private void queueEncodedFrame(byte[] data, int offset, int length, long ptsUs) {
-            MediaCodec codec = pooledSlot != null ? pooledSlot.codec : null;
             if (codec == null) {
                 return;
             }
@@ -608,19 +639,17 @@ public class TsHardwareAudioCompanion {
                     }
                 }
             } catch (Throwable t) {
-                healthy = false;
-                Log.w(TAG, "Audio queue input error: " + t.getMessage());
+                Log.w(TAG, "queueEncodedFrame error: " + t.getMessage());
             }
         }
 
         private void drainDecoderOutputs() {
-            MediaCodec codec = pooledSlot != null ? pooledSlot.codec : null;
             if (codec == null) {
                 return;
             }
             try {
                 MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
-                while (running.get()) {
+                while (isTokenActive(token)) {
                     int outIdx = codec.dequeueOutputBuffer(info, 0);
                     if (outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                         MediaFormat outFmt = codec.getOutputFormat();
@@ -629,25 +658,25 @@ public class TsHardwareAudioCompanion {
                         int ch = outFmt.containsKey(MediaFormat.KEY_CHANNEL_COUNT)
                                 ? outFmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT) : 2;
                         int normCh = Math.min(2, Math.max(1, ch));
-                        if (sr != pooledSlot.sampleRate || normCh != pooledSlot.channelCount || pooledSlot.audioTrack == null) {
-                            if (pooledSlot.audioTrack != null) {
+                        if (sr != sampleRate || normCh != channelCount || audioTrack == null) {
+                            if (audioTrack != null) {
                                 try {
-                                    pooledSlot.audioTrack.stop();
-                                    pooledSlot.audioTrack.release();
+                                    audioTrack.stop();
+                                    audioTrack.release();
                                 } catch (Throwable ignored) {
                                 }
                             }
-                            pooledSlot.sampleRate = sr;
-                            pooledSlot.channelCount = normCh;
-                            pooledSlot.audioTrack = CodecDecoderPool.createPcmAudioTrack(sr, normCh);
+                            sampleRate = sr;
+                            channelCount = normCh;
+                            audioTrack = createPcmAudioTrack(sr, normCh);
                         }
                     } else if (outIdx >= 0) {
                         ByteBuffer outBuf = codec.getOutputBuffer(outIdx);
-                        if (outBuf != null && info.size > 0 && pooledSlot.audioTrack != null) {
+                        if (outBuf != null && info.size > 0 && audioTrack != null) {
                             byte[] pcm = new byte[info.size];
                             outBuf.position(info.offset);
                             outBuf.get(pcm, 0, info.size);
-                            pooledSlot.audioTrack.write(pcm, 0, pcm.length);
+                            audioTrack.write(pcm, 0, pcm.length);
                         }
                         codec.releaseOutputBuffer(outIdx, false);
                     } else {
@@ -655,16 +684,88 @@ public class TsHardwareAudioCompanion {
                     }
                 }
             } catch (Throwable t) {
-                healthy = false;
                 Log.w(TAG, "Decode cycle error: " + t.getMessage());
             }
         }
 
-        void releaseToPool() {
-            if (pooledSlot != null) {
-                CodecDecoderPool.getInstance().releaseHwAudioDecoder(pooledSlot, healthy);
-                pooledSlot = null;
+        void releaseNow() {
+            if (codec != null) {
+                try {
+                    codec.stop();
+                } catch (Throwable ignored) {
+                }
+                try {
+                    codec.release();
+                } catch (Throwable ignored) {
+                }
+                codec = null;
+            }
+            if (audioTrack != null) {
+                try {
+                    audioTrack.stop();
+                } catch (Throwable ignored) {
+                }
+                try {
+                    audioTrack.release();
+                } catch (Throwable ignored) {
+                }
+                audioTrack = null;
             }
         }
+    }
+
+    private static AudioTrack createPcmAudioTrack(int sampleRate, int channelCount) {
+        int channelConfig = channelCount == 1
+                ? AudioFormat.CHANNEL_OUT_MONO
+                : AudioFormat.CHANNEL_OUT_STEREO;
+        int minBuf = AudioTrack.getMinBufferSize(sampleRate, channelConfig, AudioFormat.ENCODING_PCM_16BIT);
+        int bufSize = Math.max(minBuf * 4, 32768);
+        AudioTrack track;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            track = new AudioTrack(
+                    new AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
+                            .build(),
+                    new AudioFormat.Builder()
+                            .setSampleRate(sampleRate)
+                            .setChannelMask(channelConfig)
+                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                            .build(),
+                    bufSize,
+                    AudioTrack.MODE_STREAM,
+                    AudioManager.AUDIO_SESSION_ID_GENERATE);
+        } else {
+            track = new AudioTrack(
+                    AudioManager.STREAM_MUSIC,
+                    sampleRate,
+                    channelConfig,
+                    AudioFormat.ENCODING_PCM_16BIT,
+                    bufSize,
+                    AudioTrack.MODE_STREAM);
+        }
+        track.play();
+        return track;
+    }
+
+    private static AudioTrack createPassthroughAudioTrack(int sampleRate, int encoding) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            AudioTrack track = new AudioTrack(
+                    new AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
+                            .build(),
+                    new AudioFormat.Builder()
+                            .setSampleRate(sampleRate)
+                            .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
+                            .setEncoding(encoding)
+                            .build(),
+                    32768,
+                    AudioTrack.MODE_STREAM,
+                    AudioManager.AUDIO_SESSION_ID_GENERATE);
+            track.play();
+            return track;
+        }
+        return null;
     }
 }

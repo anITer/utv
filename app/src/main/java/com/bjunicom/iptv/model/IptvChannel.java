@@ -37,6 +37,7 @@ public class IptvChannel implements Serializable {
     private long latencyMs;                 // 探测响应耗时 (ms)
     private boolean discoveredByScan;       // 是否由网段动态扫描新发现的组播地址
     private boolean favorite;               // 是否收藏
+    private String ispName;                 // 所属运营商标识 (如 "北京联通", "北京移动", "北京电信")
 
     public IptvChannel() {
         this.groups = new ArrayList<>();
@@ -233,6 +234,29 @@ public class IptvChannel implements Serializable {
         this.favorite = favorite;
     }
 
+    public String getIspName() {
+        return ispName;
+    }
+
+    public void setIspName(String ispName) {
+        this.ispName = ispName;
+    }
+
+    public boolean isMulticastStream() {
+        if (!isEmpty(multicastIp) && multicastPort > 0) {
+            return true;
+        }
+        return rawUrl != null && (rawUrl.startsWith("rtp://") || rawUrl.startsWith("udp://"));
+    }
+
+    public boolean isHlsStream() {
+        if (isEmpty(rawUrl)) {
+            return false;
+        }
+        String lower = rawUrl.toLowerCase();
+        return lower.contains(".m3u8");
+    }
+
     public String getMulticastKey() {
         if (!isEmpty(multicastIp) && multicastPort > 0) {
             return multicastIp + ":" + multicastPort;
@@ -256,6 +280,7 @@ public class IptvChannel implements Serializable {
         String res = getResolutionTag();
         String cleaned = base.replace("[高清]", "")
                 .replace("[4K]", "")
+                .replace("[超清]", "")
                 .replace("[标清]", "")
                 .replace("[其它]", "")
                 .trim();
