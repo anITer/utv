@@ -19,10 +19,12 @@ public class M3uParserTest {
                 "#EXTINF:-1 tvg-id=\"1\" tvg-name=\"CCTV1\" tvg-logo=\"http://epg.51zmt.top:8000/tb1/CCTV/CCTV1.png\" group-title=\"[高清]央视\",CCTV-1综合[1][高清]\n" +
                 "rtp://239.3.1.129:8008\n" +
                 "#EXTINF:-1 tvg-id=\"106\" tvg-name=\"CCTV4K\" tvg-logo=\"http://epg.51zmt.top:8000/tb1/CCTV/CCTV4k.png\" group-title=\"[高清]央视;[高清]北京IPTV;4K\",CCTV 4K[85][4K]\n" +
-                "rtp://239.3.1.244:2000\n";
+                "rtp://239.3.1.244:2000\n" +
+                "#EXTINF:-1 tvg-id=\"2\" tvg-name=\"CCTV2\" group-title=\"[高清]央视\",CCTV-2财经[2][高清]\n" +
+                "rtp://239.3.1.130:8008\n";
 
         List<IptvChannel> list = M3uParser.parseString(sample);
-        assertEquals(2, list.size());
+        assertEquals(3, list.size());
 
         IptvChannel cctv1 = list.get(0);
         assertEquals(1, cctv1.getChannelNumber());
@@ -36,6 +38,9 @@ public class M3uParserTest {
         assertEquals("4K", cctv4k.getResolutionTag());
         assertTrue(cctv4k.getGroups().contains("4K"));
 
+        IptvChannel cctv2Unprobed = list.get(2);
+        assertEquals(null, cctv2Unprobed.getConnected());
+
         cctv1.setConnected(true);
         cctv1.setActualResolutionFlag("高清");
         cctv1.setVideoTrackInfo("#1 h264, 1920x1080,25fps");
@@ -44,9 +49,11 @@ public class M3uParserTest {
         cctv4k.setConnected(false);
         cctv4k.setActualResolutionFlag("错误");
 
+        // When onlyConnected=true, both false and null (unprobed) channels must be excluded
         String modifiedM3u = M3uParser.toM3uContent(list, true, "192.168.2.1:8012");
         assertTrue(modifiedM3u.contains("http://192.168.2.1:8012/rtp/239.3.1.129:8008"));
         assertFalse(modifiedM3u.contains("239.3.1.244"));
+        assertFalse(modifiedM3u.contains("239.3.1.130"));
 
         String csv = M3uParser.toResultsCsvContent(list);
         assertTrue(csv.contains("编号,频道名称,video track,audio track,screenshot_name,连接flag,分辨率flag"));

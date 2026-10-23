@@ -15,6 +15,7 @@ import java.net.NetworkInterface;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.List;
@@ -128,8 +129,7 @@ public class LocalMulticastProxyServer {
         MulticastSocket multicastSocket = null;
         InetAddress groupAddr = null;
         int mcastPort = -1;
-        NetworkInterface mcastIf = null;
-        boolean joinedWithInterface = false;
+        List<NetworkInterface> joinedInterfaces = null;
         ActiveSession currentSession = null;
         try {
             client.setSoTimeout(8000);
@@ -173,29 +173,10 @@ public class LocalMulticastProxyServer {
             groupAddr = InetAddress.getByName(mcastIp);
             multicastSocket = new MulticastSocket(null);
             multicastSocket.setReuseAddress(true);
-            try {
-                // 优先绑定具体组播 IP+端口，防止 Linux 内核将同端口不同组播组的包混入当前 Socket
-                multicastSocket.bind(new InetSocketAddress(groupAddr, mcastPort));
-            } catch (Exception bindEx) {
-                multicastSocket.bind(new InetSocketAddress(mcastPort));
-            }
-            multicastSocket.setReceiveBufferSize(512 * 1024);
+            multicastSocket.bind(new InetSocketAddress(mcastPort));
+            multicastSocket.setReceiveBufferSize(1024 * 1024);
             multicastSocket.setSoTimeout(5000);
-            mcastIf = findPreferredMulticastInterface();
-            if (mcastIf != null) {
-                try {
-                    multicastSocket.setNetworkInterface(mcastIf);
-                } catch (Exception ignored) {
-                }
-                try {
-                    multicastSocket.joinGroup(new InetSocketAddress(groupAddr, mcastPort), mcastIf);
-                    joinedWithInterface = true;
-                } catch (Exception ignored) {
-                }
-            }
-            if (!joinedWithInterface) {
-                multicastSocket.joinGroup(groupAddr);
-            }
+            joinedInterfaces = joinMulticastOnAllInterfaces(multicastSocket, groupAddr, mcastPort);
 
             currentSession = new ActiveSession(groupKey, client, multicastSocket);
             activeSessions.add(currentSession);
@@ -256,16 +237,7 @@ public class LocalMulticastProxyServer {
                 activeSessions.remove(currentSession);
             }
             if (multicastSocket != null) {
-                if (groupAddr != null) {
-                    try {
-                        if (joinedWithInterface && mcastIf != null && mcastPort > 0) {
-                            multicastSocket.leaveGroup(new InetSocketAddress(groupAddr, mcastPort), mcastIf);
-                        } else {
-                            multicastSocket.leaveGroup(groupAddr);
-                        }
-                    } catch (Exception ignored) {
-                    }
-                }
+                leaveMulticastOnAllInterfaces(multicastSocket, groupAddr, mcastPort, joinedInterfaces);
                 try {
                     multicastSocket.close();
                 } catch (Exception ignored) {
@@ -288,25 +260,93 @@ public class LocalMulticastProxyServer {
      * 优先查找 eth0 / usb0 / wlan0 等已启用且具备 IPv4 地址的组播网卡（支持有线网卡直连光猫 IPTV 口）
      */
     public static NetworkInterface findPreferredMulticastInterface() {
+        List<NetworkInterface> candidates = getCandidateMulticastInterfaces();
+        return candidates.isEmpty() ? null : candidates.get(0);
+    }
+
+    /**
+     * 获取所有可能承载 IPTV 组播流的候选网卡列表（按优先级排序：有线 eth0/eth1 -> USB网卡 -> Wi-Fi wlan0 -> 其它支持组播的网卡）
+     * 解决多网卡设备（如同时插了光猫 IPTV 网线 eth0 与家庭路由器 Wi-Fi wlan0）绑定单一网卡导致组播探测或播放超时的问题。
+     */
+    public static List<NetworkInterface> getCandidateMulticastInterfaces() {
+        List<NetworkInterface> list = new ArrayList<>();
         try {
             String[] preferredNames = {"eth0", "eth1", "usb0", "rndis0", "wlan0"};
             for (String name : preferredNames) {
                 NetworkInterface nif = NetworkInterface.getByName(name);
                 if (nif != null && nif.isUp() && !nif.isLoopback() && hasIpv4Address(nif)) {
-                    return nif;
+                    list.add(nif);
                 }
             }
             Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
             if (interfaces != null) {
                 for (NetworkInterface nif : Collections.list(interfaces)) {
                     if (nif.isUp() && !nif.isLoopback() && nif.supportsMulticast() && hasIpv4Address(nif)) {
-                        return nif;
+                        boolean exists = false;
+                        for (NetworkInterface existing : list) {
+                            if (existing.getName().equals(nif.getName())) {
+                                exists = true;
+                                break;
+                            }
+                        }
+                        if (!exists) {
+                            list.add(nif);
+                        }
                     }
                 }
             }
         } catch (Exception ignored) {
         }
-        return null;
+        return list;
+    }
+
+    /**
+     * 将组播 Socket 同时加入所有候选网卡的 IGMP 组播组，确保无论组播流从有线口还是 Wi-Fi 进入均可接收
+     */
+    public static List<NetworkInterface> joinMulticastOnAllInterfaces(
+            MulticastSocket socket, InetAddress groupAddr, int mcastPort) {
+        List<NetworkInterface> joinedInterfaces = new ArrayList<>();
+        List<NetworkInterface> candidates = getCandidateMulticastInterfaces();
+        if (!candidates.isEmpty()) {
+            try {
+                socket.setNetworkInterface(candidates.get(0));
+            } catch (Exception ignored) {
+            }
+            for (NetworkInterface nif : candidates) {
+                try {
+                    socket.joinGroup(new InetSocketAddress(groupAddr, mcastPort), nif);
+                    joinedInterfaces.add(nif);
+                } catch (Exception ignored) {
+                }
+            }
+        }
+        if (joinedInterfaces.isEmpty()) {
+            try {
+                socket.joinGroup(groupAddr);
+            } catch (Exception ignored) {
+            }
+        }
+        return joinedInterfaces;
+    }
+
+    public static void leaveMulticastOnAllInterfaces(
+            MulticastSocket socket, InetAddress groupAddr, int mcastPort, List<NetworkInterface> joinedInterfaces) {
+        if (socket == null || groupAddr == null) {
+            return;
+        }
+        if (joinedInterfaces != null && !joinedInterfaces.isEmpty()) {
+            for (NetworkInterface nif : joinedInterfaces) {
+                try {
+                    socket.leaveGroup(new InetSocketAddress(groupAddr, mcastPort), nif);
+                } catch (Exception ignored) {
+                }
+            }
+        } else {
+            try {
+                socket.leaveGroup(groupAddr);
+            } catch (Exception ignored) {
+            }
+        }
     }
 
     private static boolean hasIpv4Address(NetworkInterface nif) {

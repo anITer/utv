@@ -543,7 +543,7 @@ public final class M3uParser {
         StringBuilder sb = new StringBuilder();
         sb.append(DEFAULT_EPG_HEADER).append("\n");
         for (IptvChannel ch : channels) {
-            if (onlyConnected && Boolean.FALSE.equals(ch.getConnected())) {
+            if (onlyConnected && !Boolean.TRUE.equals(ch.getConnected())) {
                 continue;
             }
             sb.append(ch.toExtInfLine()).append("\n");

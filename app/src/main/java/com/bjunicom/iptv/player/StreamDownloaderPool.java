@@ -16,6 +16,7 @@ import java.net.MulticastSocket;
 import java.net.NetworkInterface;
 import java.net.URL;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
@@ -434,37 +435,19 @@ public class StreamDownloaderPool {
 
             MulticastSocket socket = null;
             InetAddress groupAddr = null;
-            NetworkInterface mcastIf = null;
-            boolean joinedWithIf = false;
+            List<NetworkInterface> joinedInterfaces = null;
 
             try {
                 groupAddr = InetAddress.getByName(mcastIp);
                 socket = new MulticastSocket(null);
                 activeMcastSocket = socket;
                 socket.setReuseAddress(true);
-                try {
-                    socket.bind(new InetSocketAddress(groupAddr, mcastPort));
-                } catch (Exception bindEx) {
-                    socket.bind(new InetSocketAddress(mcastPort));
-                }
+                socket.bind(new InetSocketAddress(mcastPort));
                 socket.setReceiveBufferSize(2 * 1024 * 1024);
                 socket.setSoTimeout(4000);
 
-                mcastIf = LocalMulticastProxyServer.findPreferredMulticastInterface();
-                if (mcastIf != null) {
-                    try {
-                        socket.setNetworkInterface(mcastIf);
-                    } catch (Exception ignored) {
-                    }
-                    try {
-                        socket.joinGroup(new InetSocketAddress(groupAddr, mcastPort), mcastIf);
-                        joinedWithIf = true;
-                    } catch (Exception ignored) {
-                    }
-                }
-                if (!joinedWithIf) {
-                    socket.joinGroup(groupAddr);
-                }
+                joinedInterfaces = LocalMulticastProxyServer.joinMulticastOnAllInterfaces(
+                        socket, groupAddr, mcastPort);
 
                 byte[] udpBuf = new byte[2048];
                 DatagramPacket packet = new DatagramPacket(udpBuf, udpBuf.length);
@@ -515,16 +498,8 @@ public class StreamDownloaderPool {
             } finally {
                 activeMcastSocket = null;
                 if (socket != null) {
-                    if (groupAddr != null) {
-                        try {
-                            if (joinedWithIf && mcastIf != null) {
-                                socket.leaveGroup(new InetSocketAddress(groupAddr, mcastPort), mcastIf);
-                            } else {
-                                socket.leaveGroup(groupAddr);
-                            }
-                        } catch (Exception ignored) {
-                        }
-                    }
+                    LocalMulticastProxyServer.leaveMulticastOnAllInterfaces(
+                            socket, groupAddr, mcastPort, joinedInterfaces);
                     try {
                         socket.close();
                     } catch (Exception ignored) {

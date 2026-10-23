@@ -16,6 +16,7 @@ import java.net.MulticastSocket;
 import java.net.NetworkInterface;
 import java.net.URL;
 import java.nio.ByteBuffer;
+import java.util.List;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -149,6 +150,8 @@ public class TsHardwareAudioCompanion {
         InputStream in = null;
         MulticastSocket mcastSocket = null;
         InetAddress mcastGroup = null;
+        int mcastPort = -1;
+        List<NetworkInterface> joinedInterfaces = null;
         DecoderSession decoderSession = new DecoderSession();
 
         try {
@@ -165,20 +168,14 @@ public class TsHardwareAudioCompanion {
                 Matcher m = MCAST_PATTERN.matcher(target);
                 if (m.find()) {
                     String ip = m.group(1);
-                    int port = Integer.parseInt(m.group(2));
+                    mcastPort = Integer.parseInt(m.group(2));
                     mcastGroup = InetAddress.getByName(ip);
-                    mcastSocket = new MulticastSocket(port);
+                    mcastSocket = new MulticastSocket(mcastPort);
                     mcastSocket.setReuseAddress(true);
                     mcastSocket.setReceiveBufferSize(512 * 1024);
                     mcastSocket.setSoTimeout(4000);
-                    NetworkInterface nif = LocalMulticastProxyServer.findPreferredMulticastInterface();
-                    if (nif != null) {
-                        try {
-                            mcastSocket.setNetworkInterface(nif);
-                        } catch (Exception ignored) {
-                        }
-                    }
-                    mcastSocket.joinGroup(mcastGroup);
+                    joinedInterfaces = LocalMulticastProxyServer.joinMulticastOnAllInterfaces(
+                            mcastSocket, mcastGroup, mcastPort);
                     demuxMulticastTsStream(mcastSocket, decoderSession);
                 }
             }
@@ -201,12 +198,8 @@ public class TsHardwareAudioCompanion {
                 }
             }
             if (mcastSocket != null) {
-                if (mcastGroup != null) {
-                    try {
-                        mcastSocket.leaveGroup(mcastGroup);
-                    } catch (Exception ignored) {
-                    }
-                }
+                LocalMulticastProxyServer.leaveMulticastOnAllInterfaces(
+                        mcastSocket, mcastGroup, mcastPort, joinedInterfaces);
                 mcastSocket.close();
             }
         }
