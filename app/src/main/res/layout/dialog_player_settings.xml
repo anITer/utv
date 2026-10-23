@@ -1,14 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/sv_player_settings"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:background="@drawable/bg_md3_dialog_surface"
+    android:clipChildren="false"
+    android:clipToPadding="false"
     android:padding="20dp">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="vertical">
+        android:clipChildren="false"
+        android:clipToPadding="false"
+        android:orientation="vertical"
+        android:padding="4dp">
 
         <!-- Section 0: IPTV 运营商节目源切换卡片 (北京联通 / 北京移动 / 北京电信 / 三网聚合) -->
         <LinearLayout
@@ -16,6 +22,8 @@
             android:layout_height="wrap_content"
             android:layout_marginBottom="12dp"
             android:background="@drawable/bg_md3_card_container"
+            android:clipChildren="false"
+            android:clipToPadding="false"
             android:orientation="vertical"
             android:padding="16dp">
 
@@ -23,6 +31,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:fontFamily="sans-serif-medium"
+                android:includeFontPadding="false"
                 android:text="北京 IPTV 运营商节目源 (联通 / 移动 / 电信)"
                 android:textColor="@color/md_theme_dark_primary"
                 android:textSize="14sp"
@@ -32,16 +41,22 @@
                 android:id="@+id/rg_isp_provider"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp">
+                android:layout_marginTop="8dp"
+                android:clipChildren="false"
+                android:clipToPadding="false">
 
                 <RadioButton
                     android:id="@+id/rb_isp_unicom"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:layout_marginHorizontal="2dp"
                     android:background="@drawable/bg_badge"
                     android:buttonTint="@color/md_theme_dark_primary"
                     android:focusable="true"
+                    android:includeFontPadding="false"
+                    android:minHeight="38dp"
                     android:paddingHorizontal="8dp"
+                    android:paddingVertical="6dp"
                     android:text="北京联通 IPTV (bj-unicom-iptv 组播源 rtp://239.3.1.x)"
                     android:textColor="@color/text_primary"
                     android:textSize="13sp" />
@@ -50,11 +65,15 @@
                     android:id="@+id/rb_isp_mobile"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
+                    android:layout_marginHorizontal="2dp"
+                    android:layout_marginTop="6dp"
                     android:background="@drawable/bg_badge"
                     android:buttonTint="@color/md_theme_dark_primary"
                     android:focusable="true"
+                    android:includeFontPadding="false"
+                    android:minHeight="38dp"
                     android:paddingHorizontal="8dp"
+                    android:paddingVertical="6dp"
                     android:text="北京移动 IPTV (bj-mobile-iptv 单播源 http://.../*.m3u8)"
                     android:textColor="@color/text_primary"
                     android:textSize="13sp" />
@@ -63,11 +82,15 @@
                     android:id="@+id/rb_isp_telecom"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
+                    android:layout_marginHorizontal="2dp"
+                    android:layout_marginTop="6dp"
                     android:background="@drawable/bg_badge"
                     android:buttonTint="@color/md_theme_dark_primary"
                     android:focusable="true"
+                    android:includeFontPadding="false"
+                    android:minHeight="38dp"
                     android:paddingHorizontal="8dp"
+                    android:paddingVertical="6dp"
                     android:text="北京电信 IPTV (bj-telecom-iptv 组播源 rtp://225.1.8.x)"
                     android:textColor="@color/text_primary"
                     android:textSize="13sp" />
@@ -76,11 +99,15 @@
                     android:id="@+id/rb_isp_all"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
+                    android:layout_marginHorizontal="2dp"
+                    android:layout_marginTop="6dp"
                     android:background="@drawable/bg_badge"
                     android:buttonTint="@color/md_theme_dark_primary"
                     android:focusable="true"
+                    android:includeFontPadding="false"
+                    android:minHeight="38dp"
                     android:paddingHorizontal="8dp"
+                    android:paddingVertical="6dp"
                     android:text="北京三网聚合 (同时加载联通 + 移动 + 电信全部频道)"
                     android:textColor="@color/text_primary"
                     android:textSize="13sp" />
@@ -89,11 +116,15 @@
                     android:id="@+id/rb_isp_custom"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
+                    android:layout_marginHorizontal="2dp"
+                    android:layout_marginTop="6dp"
                     android:background="@drawable/bg_badge"
                     android:buttonTint="@color/md_theme_dark_primary"
                     android:focusable="true"
+                    android:includeFontPadding="false"
+                    android:minHeight="38dp"
                     android:paddingHorizontal="8dp"
+                    android:paddingVertical="6dp"
                     android:text="自定义 M3U 播放列表 (支持上传本地文件与内容检测)"
                     android:textColor="@color/text_primary"
                     android:textSize="13sp" />
@@ -103,7 +134,8 @@
                 android:id="@+id/btn_settings_upload_m3u"
                 style="@style/Widget.BjUnicomIptv.HudButton"
                 android:layout_width="match_parent"
-                android:layout_height="38dp"
+                android:layout_height="40dp"
+                android:layout_marginHorizontal="2dp"
                 android:layout_marginTop="8dp"
                 android:drawableStart="@drawable/ic_flat_upload"
                 android:drawablePadding="6dp"
@@ -119,6 +151,8 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:background="@drawable/bg_md3_card_container"
+            android:clipChildren="false"
+            android:clipToPadding="false"
             android:orientation="vertical"
             android:padding="16dp">
 
@@ -126,6 +160,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:fontFamily="sans-serif-medium"
+                android:includeFontPadding="false"
                 android:text="网络转发模式 (IGMP 组播 / udpxy 单播)"
                 android:textColor="@color/md_theme_dark_primary"
                 android:textSize="14sp"
@@ -135,16 +170,22 @@
                 android:id="@+id/rg_stream_mode"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp">
+                android:layout_marginTop="8dp"
+                android:clipChildren="false"
+                android:clipToPadding="false">
 
                 <RadioButton
                     android:id="@+id/rb_stream_udpxy"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:layout_marginHorizontal="2dp"
                     android:background="@drawable/bg_badge"
                     android:buttonTint="@color/md_theme_dark_primary"
                     android:focusable="true"
+                    android:includeFontPadding="false"
+                    android:minHeight="38dp"
                     android:paddingHorizontal="8dp"
+                    android:paddingVertical="6dp"
                     android:text="路由器 udpxy 组播转单播 (推荐，如 http://192.168.2.1:8012/rtp/...)"
                     android:textColor="@color/text_primary"
                     android:textSize="13sp" />
@@ -153,11 +194,15 @@
                     android:id="@+id/rb_stream_local_proxy"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
+                    android:layout_marginHorizontal="2dp"
+                    android:layout_marginTop="6dp"
                     android:background="@drawable/bg_badge"
                     android:buttonTint="@color/md_theme_dark_primary"
                     android:focusable="true"
+                    android:includeFontPadding="false"
+                    android:minHeight="38dp"
                     android:paddingHorizontal="8dp"
+                    android:paddingVertical="6dp"
                     android:text="内置 Android 本地 udpxy 代理网关 (自动剥离 RTP 头转 HTTP-TS)"
                     android:textColor="@color/text_primary"
                     android:textSize="13sp" />
@@ -166,11 +211,15 @@
                     android:id="@+id/rb_stream_direct_rtp"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
+                    android:layout_marginHorizontal="2dp"
+                    android:layout_marginTop="6dp"
                     android:background="@drawable/bg_badge"
                     android:buttonTint="@color/md_theme_dark_primary"
                     android:focusable="true"
+                    android:includeFontPadding="false"
+                    android:minHeight="38dp"
                     android:paddingHorizontal="8dp"
+                    android:paddingVertical="6dp"
                     android:text="池化下载器原生 IGMP 组播直连 (rtp://239.3.1.x:port)"
                     android:textColor="@color/text_primary"
                     android:textSize="13sp" />
@@ -180,6 +229,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="10dp"
+                android:includeFontPadding="false"
                 android:text="局域网 udpxy 代理地址与端口 (IP:Port)"
                 android:textColor="@color/text_secondary"
                 android:textSize="12sp" />
@@ -188,11 +238,15 @@
                 android:id="@+id/et_settings_udpxy"
                 android:layout_width="match_parent"
                 android:layout_height="42dp"
+                android:layout_marginHorizontal="2dp"
                 android:layout_marginTop="6dp"
                 android:background="@drawable/bg_md3_search_bar"
                 android:fontFamily="monospace"
+                android:gravity="center_vertical"
                 android:hint="192.168.2.1:8012"
+                android:includeFontPadding="false"
                 android:paddingHorizontal="16dp"
+                android:paddingVertical="0dp"
                 android:singleLine="true"
                 android:textColor="@color/text_primary"
                 android:textSize="14sp" />
@@ -204,6 +258,8 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
             android:background="@drawable/bg_md3_card_container"
+            android:clipChildren="false"
+            android:clipToPadding="false"
             android:orientation="vertical"
             android:padding="16dp">
 
@@ -211,6 +267,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:fontFamily="sans-serif-medium"
+                android:includeFontPadding="false"
                 android:text="播放器内核与池化解码设置"
                 android:textColor="@color/md_theme_dark_primary"
                 android:textSize="14sp"
@@ -221,97 +278,135 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
+                android:clipChildren="false"
+                android:clipToPadding="false"
                 android:orientation="horizontal">
 
                 <RadioButton
                     android:id="@+id/rb_core_ijk"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
+                    android:layout_marginStart="2dp"
                     android:layout_marginEnd="12dp"
                     android:background="@drawable/bg_badge"
                     android:buttonTint="@color/md_theme_dark_primary"
                     android:focusable="true"
-                    android:paddingHorizontal="8dp"
+                    android:includeFontPadding="false"
+                    android:minHeight="38dp"
+                    android:paddingHorizontal="10dp"
+                    android:paddingVertical="6dp"
                     android:text="IjkMediaPlayer (池化)"
-                    android:textColor="@color/text_primary" />
+                    android:textColor="@color/text_primary"
+                    android:textSize="13sp" />
 
                 <RadioButton
                     android:id="@+id/rb_core_android"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
+                    android:layout_marginEnd="2dp"
                     android:background="@drawable/bg_badge"
                     android:buttonTint="@color/md_theme_dark_primary"
                     android:focusable="true"
-                    android:paddingHorizontal="8dp"
+                    android:includeFontPadding="false"
+                    android:minHeight="38dp"
+                    android:paddingHorizontal="10dp"
+                    android:paddingVertical="6dp"
                     android:text="AndroidMediaPlayer"
-                    android:textColor="@color/text_primary" />
+                    android:textColor="@color/text_primary"
+                    android:textSize="13sp" />
             </RadioGroup>
 
             <CheckBox
                 android:id="@+id/cb_settings_mediacodec"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
+                android:layout_marginHorizontal="2dp"
+                android:layout_marginTop="6dp"
                 android:background="@drawable/bg_badge"
                 android:buttonTint="@color/md_theme_dark_primary"
                 android:focusable="true"
+                android:includeFontPadding="false"
+                android:minHeight="38dp"
                 android:paddingHorizontal="8dp"
+                android:paddingVertical="6dp"
                 android:text="开启 MediaCodec 硬件加速解码 (H.264)"
-                android:textColor="@color/text_primary" />
+                android:textColor="@color/text_primary"
+                android:textSize="13sp" />
 
             <CheckBox
                 android:id="@+id/cb_settings_hevc"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
+                android:layout_marginHorizontal="2dp"
+                android:layout_marginTop="6dp"
                 android:background="@drawable/bg_badge"
                 android:buttonTint="@color/md_theme_dark_primary"
                 android:focusable="true"
+                android:includeFontPadding="false"
+                android:minHeight="38dp"
                 android:paddingHorizontal="8dp"
+                android:paddingVertical="6dp"
                 android:text="开启 MediaCodec HEVC/H.265 4K 超高清硬解"
-                android:textColor="@color/text_primary" />
+                android:textColor="@color/text_primary"
+                android:textSize="13sp" />
 
             <CheckBox
                 android:id="@+id/cb_settings_opensles"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
+                android:layout_marginHorizontal="2dp"
+                android:layout_marginTop="6dp"
                 android:background="@drawable/bg_badge"
                 android:buttonTint="@color/md_theme_dark_primary"
                 android:focusable="true"
+                android:includeFontPadding="false"
+                android:minHeight="38dp"
                 android:paddingHorizontal="8dp"
+                android:paddingVertical="6dp"
                 android:text="开启 OpenSL ES 音频硬件加速"
-                android:textColor="@color/text_primary" />
+                android:textColor="@color/text_primary"
+                android:textSize="13sp" />
 
             <CheckBox
                 android:id="@+id/cb_settings_textureview"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
+                android:layout_marginHorizontal="2dp"
+                android:layout_marginTop="6dp"
                 android:background="@drawable/bg_badge"
                 android:buttonTint="@color/md_theme_dark_primary"
                 android:focusable="true"
+                android:includeFontPadding="false"
+                android:minHeight="38dp"
                 android:paddingHorizontal="8dp"
+                android:paddingVertical="6dp"
                 android:text="使用 TextureRenderView 渲染画面 (默认 SurfaceRenderView)"
-                android:textColor="@color/text_primary" />
+                android:textColor="@color/text_primary"
+                android:textSize="13sp" />
 
             <CheckBox
                 android:id="@+id/cb_settings_all_channels"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
+                android:layout_marginHorizontal="2dp"
+                android:layout_marginTop="6dp"
                 android:background="@drawable/bg_badge"
                 android:buttonTint="@color/md_theme_dark_primary"
                 android:focusable="true"
+                android:includeFontPadding="false"
+                android:minHeight="38dp"
                 android:paddingHorizontal="8dp"
+                android:paddingVertical="6dp"
                 android:text="包含项目仓库全部 215 个频道 (含标清及历史频道)"
-                android:textColor="@color/text_primary" />
+                android:textColor="@color/text_primary"
+                android:textSize="13sp" />
 
             <Button
                 android:id="@+id/btn_settings_check_update"
                 style="@style/Widget.BjUnicomIptv.HudButton"
                 android:layout_width="match_parent"
-                android:layout_height="38dp"
+                android:layout_height="40dp"
+                android:layout_marginHorizontal="2dp"
                 android:layout_marginTop="8dp"
                 android:drawableStart="@drawable/ic_flat_refresh"
                 android:drawablePadding="6dp"

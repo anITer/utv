@@ -43,7 +43,7 @@ import tv.danmaku.ijk.media.player.misc.IMediaDataSource;
 public class StreamDownloaderPool {
     private static final String TAG = "StreamDownloaderPool";
     private static final int MAX_POOL_SIZE = 4;
-    private static final int RING_BUFFER_SIZE = 2 * 1024 * 1024; // 2MB 预分配环形缓冲
+    private static final int RING_BUFFER_SIZE = 8 * 1024 * 1024; // 8MB 预分配环形缓冲，保障 4K 50fps 高码率流零丢包
 
     private static volatile StreamDownloaderPool instance;
 
@@ -126,6 +126,8 @@ public class StreamDownloaderPool {
         private static final Pattern MCAST_URI_PATTERN = Pattern.compile("(?:rtp|udp)://@?([0-9.]+):(\\d+)");
         private static final Pattern UDPXY_PATH_PATTERN = Pattern.compile("/(?:rtp|udp)/([0-9.]+):(\\d+)");
         private static final long KEYFRAME_ALIGN_MAX_WAIT_MS = 420L;
+        private static final long HEVC_KEYFRAME_ALIGN_MAX_WAIT_MS = 950L;
+        private static final int MAX_PENDING_VIDEO_PES_PACKETS = 16;
 
         private final StreamDownloaderPool ownerPool;
         private final byte[] ringBuffer;
@@ -134,6 +136,7 @@ public class StreamDownloaderPool {
 
         private long writePos = 0L;
         private long readPos = 0L;
+        private int waitingReaders = 0;
         private volatile boolean sessionActive = false;
         private volatile boolean streamEof = false;
         private final AtomicInteger sessionToken = new AtomicInteger(0);
@@ -141,6 +144,9 @@ public class StreamDownloaderPool {
         // MPEG-TS 实时解析与 IDR 对齐状态
         private final byte[] cachedPatPacket = new byte[188];
         private final byte[] cachedPmtPacket = new byte[188];
+        private final byte[] pendingVideoPesPackets = new byte[188 * MAX_PENDING_VIDEO_PES_PACKETS];
+        private int pendingVideoPesCount = 0;
+        private long pendingVideoPesPts = -1L;
         private boolean hasPat = false;
         private boolean hasPmt = false;
         private int pmtPid = -1;
@@ -181,9 +187,12 @@ public class StreamDownloaderPool {
             synchronized (bufferLock) {
                 writePos = 0L;
                 readPos = 0L;
+                waitingReaders = 0;
             }
             hasPat = false;
             hasPmt = false;
+            pendingVideoPesCount = 0;
+            pendingVideoPesPts = -1L;
             pmtPid = -1;
             videoPid = -1;
             audioPid = -1;
@@ -438,7 +447,7 @@ public class StreamDownloaderPool {
                 } catch (Exception bindEx) {
                     socket.bind(new InetSocketAddress(mcastPort));
                 }
-                socket.setReceiveBufferSize(768 * 1024);
+                socket.setReceiveBufferSize(2 * 1024 * 1024);
                 socket.setSoTimeout(4000);
 
                 mcastIf = LocalMulticastProxyServer.findPreferredMulticastInterface();
@@ -587,12 +596,22 @@ public class StreamDownloaderPool {
 
             // 3. 在首个视频关键帧到达前，拦截并丢弃非关键帧视频包与超前到达的旧音频包
             if (!keyframeAligned) {
+                long maxWaitMs = TsCodecDescriptor.VIDEO_HEVC.equals(parsedVideoCodec)
+                        ? HEVC_KEYFRAME_ALIGN_MAX_WAIT_MS
+                        : KEYFRAME_ALIGN_MAX_WAIT_MS;
                 if (hasPmt && videoPid > 0 && pid == videoPid && (adaptationCtrl & 0x01) != 0 && payloadStart < pktEnd) {
-                    if (randomAccessIndicator || (pusi && isVideoKeyframePayload(buf, payloadStart, pktEnd))) {
+                    if (pusi) {
+                        pendingVideoPesCount = 0;
+                        pendingVideoPesPts = parsePesPts(buf, payloadStart, pktEnd);
+                    }
+                    if (pendingVideoPesCount < MAX_PENDING_VIDEO_PES_PACKETS) {
+                        System.arraycopy(buf, pktOffset,
+                                pendingVideoPesPackets, pendingVideoPesCount * 188, 188);
+                        pendingVideoPesCount++;
+                    }
+                    if (randomAccessIndicator || isVideoKeyframePayload(buf, payloadStart, pktEnd)) {
                         keyframeAligned = true;
-                        if (pusi) {
-                            firstVideoPts = parsePesPts(buf, payloadStart, pktEnd);
-                        }
+                        firstVideoPts = pendingVideoPesPts;
                         // 在缓冲区头部立即注入最新的 PAT + PMT 表，确保解码器 0 延迟识别流格式
                         if (hasPat) {
                             writeTsPacketToRing(cachedPatPacket, 0);
@@ -600,10 +619,15 @@ public class StreamDownloaderPool {
                         if (hasPmt) {
                             writeTsPacketToRing(cachedPmtPacket, 0);
                         }
+                        // 将当前关键帧 PES 起始包一并写入环形缓冲区，保证 PES Header 与 VPS/SPS/IDR 完整对齐
+                        for (int i = 0; i < pendingVideoPesCount - 1; i++) {
+                            writeTsPacketToRing(pendingVideoPesPackets, i * 188);
+                        }
+                        pendingVideoPesCount = 0;
                         notifyCodecParsedIfNeeded(token, listener);
                     }
-                } else if (elapsedSinceStart >= KEYFRAME_ALIGN_MAX_WAIT_MS && hasPmt) {
-                    // 安全兜底：若超过 420ms 仍未遇到显式 IDR 标记，立即放行，防止特殊流卡住
+                } else if (elapsedSinceStart >= maxWaitMs && hasPmt) {
+                    // 安全兜底：若超时仍未遇到显式 IDR 标记，立即放行，防止特殊流卡住
                     keyframeAligned = true;
                     audioAligned = true;
                     if (hasPat) {
@@ -612,10 +636,12 @@ public class StreamDownloaderPool {
                     if (hasPmt) {
                         writeTsPacketToRing(cachedPmtPacket, 0);
                     }
+                    pendingVideoPesCount = 0;
                     notifyCodecParsedIfNeeded(token, listener);
-                } else if (elapsedSinceStart >= KEYFRAME_ALIGN_MAX_WAIT_MS * 2) {
+                } else if (elapsedSinceStart >= maxWaitMs * 2) {
                     keyframeAligned = true;
                     audioAligned = true;
+                    pendingVideoPesCount = 0;
                     notifyCodecParsedIfNeeded(token, listener);
                 }
 
@@ -874,7 +900,9 @@ public class StreamDownloaderPool {
                     System.arraycopy(src, offset + firstPart, ringBuffer, 0, 188 - firstPart);
                 }
                 writePos += 188L;
-                bufferLock.notifyAll();
+                if (waitingReaders > 0) {
+                    bufferLock.notifyAll();
+                }
             }
         }
 
@@ -887,11 +915,14 @@ public class StreamDownloaderPool {
             }
             synchronized (bufferLock) {
                 while (writePos - readPos < 188 && sessionActive && !streamEof) {
+                    waitingReaders++;
                     try {
                         bufferLock.wait(120L);
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
                         return -1;
+                    } finally {
+                        waitingReaders--;
                     }
                 }
                 if (!sessionActive && writePos <= readPos) {

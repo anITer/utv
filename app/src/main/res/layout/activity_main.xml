@@ -73,6 +73,8 @@
         android:id="@+id/player_hud_overlay"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
+        android:clipChildren="false"
+        android:clipToPadding="false"
         android:descendantFocusability="afterDescendants"
         android:visibility="visible">
 
@@ -84,6 +86,8 @@
             android:layout_marginHorizontal="18dp"
             android:layout_marginTop="14dp"
             android:background="@drawable/bg_md3_hud_surface"
+            android:clipChildren="false"
+            android:clipToPadding="false"
             android:elevation="8dp"
             android:gravity="center_vertical"
             android:orientation="horizontal"
@@ -94,7 +98,7 @@
                 android:id="@+id/btn_toggle_drawer"
                 style="@style/Widget.BjUnicomIptv.HudButton"
                 android:layout_width="wrap_content"
-                android:layout_height="38dp"
+                android:layout_height="40dp"
                 android:layout_marginEnd="8dp"
                 android:drawableStart="@drawable/ic_flat_menu"
                 android:drawablePadding="6dp"
@@ -111,7 +115,7 @@
                 android:id="@+id/btn_switch_isp"
                 style="@style/Widget.BjUnicomIptv.HudButton"
                 android:layout_width="wrap_content"
-                android:layout_height="38dp"
+                android:layout_height="40dp"
                 android:drawablePadding="6dp"
                 android:focusable="true"
                 android:nextFocusDown="@id/btn_prev_channel"
@@ -137,6 +141,7 @@
                 android:layout_weight="1"
                 android:ellipsize="end"
                 android:fontFamily="sans-serif-medium"
+                android:includeFontPadding="false"
                 android:singleLine="true"
                 android:text="001 CCTV-1综合 [高清]"
                 android:textColor="@color/text_primary"
@@ -151,8 +156,10 @@
                 android:layout_marginEnd="12dp"
                 android:background="@drawable/bg_channel_num_pill"
                 android:fontFamily="monospace"
+                android:includeFontPadding="false"
                 android:paddingHorizontal="12dp"
-                android:paddingVertical="5dp"
+                android:paddingVertical="6dp"
+                android:singleLine="true"
                 android:text="0 KB/s | 25 fps"
                 android:textColor="@color/md_theme_dark_primary"
                 android:textSize="12sp"
@@ -162,7 +169,7 @@
                 android:id="@+id/btn_upload_m3u"
                 style="@style/Widget.BjUnicomIptv.HudButton"
                 android:layout_width="wrap_content"
-                android:layout_height="38dp"
+                android:layout_height="40dp"
                 android:layout_marginEnd="8dp"
                 android:drawableStart="@drawable/ic_flat_upload"
                 android:drawablePadding="6dp"
@@ -179,7 +186,7 @@
                 android:id="@+id/btn_open_scanner"
                 style="@style/Widget.BjUnicomIptv.HudButton"
                 android:layout_width="wrap_content"
-                android:layout_height="38dp"
+                android:layout_height="40dp"
                 android:layout_marginEnd="8dp"
                 android:drawableStart="@drawable/ic_flat_radar"
                 android:drawablePadding="6dp"
@@ -196,7 +203,7 @@
                 android:id="@+id/btn_open_settings"
                 style="@style/Widget.BjUnicomIptv.HudButton"
                 android:layout_width="wrap_content"
-                android:layout_height="38dp"
+                android:layout_height="40dp"
                 android:drawableStart="@drawable/ic_flat_settings"
                 android:drawablePadding="6dp"
                 android:focusable="true"
@@ -217,6 +224,8 @@
             android:layout_marginHorizontal="18dp"
             android:layout_marginBottom="14dp"
             android:background="@drawable/bg_md3_hud_surface"
+            android:clipChildren="false"
+            android:clipToPadding="false"
             android:elevation="10dp"
             android:orientation="vertical"
             android:paddingHorizontal="20dp"
@@ -226,8 +235,11 @@
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:clipChildren="false"
+                android:clipToPadding="false"
                 android:gravity="center_vertical"
-                android:orientation="horizontal">
+                android:orientation="horizontal"
+                android:paddingVertical="4dp">
 
                 <TextView
                     android:id="@+id/tv_osd_channel_num"
@@ -235,11 +247,13 @@
                     android:layout_height="wrap_content"
                     android:background="@drawable/bg_channel_num_pill"
                     android:fontFamily="monospace"
+                    android:includeFontPadding="false"
                     android:paddingHorizontal="12dp"
-                    android:paddingVertical="4dp"
+                    android:paddingVertical="5dp"
+                    android:singleLine="true"
                     android:text="001"
                     android:textColor="@color/accent_amber"
-                    android:textSize="19sp"
+                    android:textSize="18sp"
                     android:textStyle="bold" />
 
                 <TextView
@@ -247,10 +261,14 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginStart="12dp"
+                    android:ellipsize="end"
                     android:fontFamily="sans-serif-medium"
+                    android:includeFontPadding="false"
+                    android:maxWidth="240dp"
+                    android:singleLine="true"
                     android:text="CCTV-1综合"
                     android:textColor="@color/text_primary"
-                    android:textSize="20sp"
+                    android:textSize="18sp"
                     android:textStyle="bold" />
 
                 <TextView
@@ -259,11 +277,13 @@
                     android:layout_height="wrap_content"
                     android:layout_marginStart="10dp"
                     android:background="@drawable/bg_res_badge_hd"
+                    android:includeFontPadding="false"
                     android:paddingHorizontal="9dp"
                     android:paddingVertical="3dp"
+                    android:singleLine="true"
                     android:text="高清"
                     android:textColor="@color/text_primary"
-                    android:textSize="11sp"
+                    android:textSize="12sp"
                     android:textStyle="bold" />
 
                 <TextView
@@ -271,8 +291,10 @@
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_marginStart="12dp"
+                    android:layout_marginEnd="8dp"
                     android:layout_weight="1"
                     android:ellipsize="end"
+                    android:includeFontPadding="false"
                     android:singleLine="true"
                     android:text="[高清]央视"
                     android:textColor="@color/text_secondary"
@@ -282,7 +304,7 @@
                     android:id="@+id/btn_prev_channel"
                     style="@style/Widget.BjUnicomIptv.HudButton"
                     android:layout_width="wrap_content"
-                    android:layout_height="36dp"
+                    android:layout_height="38dp"
                     android:layout_marginEnd="6dp"
                     android:drawableStart="@drawable/ic_flat_prev"
                     android:drawablePadding="4dp"
@@ -293,13 +315,13 @@
                     android:nextFocusUp="@id/btn_toggle_drawer"
                     android:paddingHorizontal="12dp"
                     android:text="上一台"
-                    android:textSize="12sp" />
+                    android:textSize="13sp" />
 
                 <Button
                     android:id="@+id/btn_next_channel"
                     style="@style/Widget.BjUnicomIptv.HudButton"
                     android:layout_width="wrap_content"
-                    android:layout_height="36dp"
+                    android:layout_height="38dp"
                     android:layout_marginEnd="6dp"
                     android:drawableStart="@drawable/ic_flat_next"
                     android:drawablePadding="4dp"
@@ -310,13 +332,13 @@
                     android:nextFocusUp="@id/btn_toggle_drawer"
                     android:paddingHorizontal="12dp"
                     android:text="下一台"
-                    android:textSize="12sp" />
+                    android:textSize="13sp" />
 
                 <Button
                     android:id="@+id/btn_numpad_dialog"
                     style="@style/Widget.BjUnicomIptv.HudButton"
                     android:layout_width="wrap_content"
-                    android:layout_height="36dp"
+                    android:layout_height="38dp"
                     android:layout_marginEnd="6dp"
                     android:drawableStart="@drawable/ic_flat_dialpad"
                     android:drawablePadding="5dp"
@@ -327,13 +349,13 @@
                     android:nextFocusUp="@id/btn_toggle_drawer"
                     android:paddingHorizontal="12dp"
                     android:text="数字选台"
-                    android:textSize="12sp" />
+                    android:textSize="13sp" />
 
                 <Button
                     android:id="@+id/btn_favorite_channel"
                     style="@style/Widget.BjUnicomIptv.HudButton"
                     android:layout_width="wrap_content"
-                    android:layout_height="36dp"
+                    android:layout_height="38dp"
                     android:layout_marginEnd="6dp"
                     android:drawableStart="@drawable/ic_flat_star_outline"
                     android:drawablePadding="5dp"
@@ -344,13 +366,13 @@
                     android:nextFocusUp="@id/btn_open_scanner"
                     android:paddingHorizontal="12dp"
                     android:text="收藏"
-                    android:textSize="12sp" />
+                    android:textSize="13sp" />
 
                 <Button
                     android:id="@+id/btn_aspect_ratio"
                     style="@style/Widget.BjUnicomIptv.HudButton"
                     android:layout_width="wrap_content"
-                    android:layout_height="36dp"
+                    android:layout_height="38dp"
                     android:layout_marginEnd="6dp"
                     android:drawableStart="@drawable/ic_flat_aspect_ratio"
                     android:drawablePadding="5dp"
@@ -361,13 +383,13 @@
                     android:nextFocusUp="@id/btn_open_scanner"
                     android:paddingHorizontal="12dp"
                     android:text="画面比例"
-                    android:textSize="12sp" />
+                    android:textSize="13sp" />
 
                 <Button
                     android:id="@+id/btn_reload_stream"
                     style="@style/Widget.BjUnicomIptv.HudButton"
                     android:layout_width="wrap_content"
-                    android:layout_height="36dp"
+                    android:layout_height="38dp"
                     android:drawableStart="@drawable/ic_flat_refresh"
                     android:drawablePadding="5dp"
                     android:focusable="true"
@@ -377,7 +399,7 @@
                     android:nextFocusUp="@id/btn_open_settings"
                     android:paddingHorizontal="12dp"
                     android:text="重连"
-                    android:textSize="12sp" />
+                    android:textSize="13sp" />
             </LinearLayout>
 
             <View
@@ -400,6 +422,7 @@
                     android:layout_weight="1"
                     android:ellipsize="middle"
                     android:fontFamily="monospace"
+                    android:includeFontPadding="false"
                     android:singleLine="true"
                     android:text="组播源: rtp://239.3.1.129:8008 -> http://192.168.2.1:8012/rtp/239.3.1.129:8008"
                     android:textColor="@color/text_secondary"
@@ -411,6 +434,8 @@
                     android:layout_height="wrap_content"
                     android:layout_marginStart="14dp"
                     android:fontFamily="sans-serif-medium"
+                    android:includeFontPadding="false"
+                    android:singleLine="true"
                     android:text="Video: #1 h264, 1920x1080,25fps | Audio: #1 mp2,2ch,48khz"
                     android:textColor="@color/accent_green"
                     android:textSize="12sp" />
@@ -421,22 +446,26 @@
                 android:id="@+id/tv_remote_help_hint"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="5dp"
+                android:layout_marginTop="6dp"
+                android:ellipsize="end"
+                android:includeFontPadding="false"
                 android:singleLine="true"
                 android:text="遥控器导航: [◄/►]调出频道列表/切换按钮  [OK]调出信息页/确认按钮  [▲/▼]上下换台  [长按OK/菜单]快捷面板"
                 android:textColor="@color/text_muted"
-                android:textSize="11sp" />
+                android:textSize="12sp" />
         </LinearLayout>
     </RelativeLayout>
 
     <!-- 5. 左侧 Material Design 3 Navigation Drawer / Side Sheet 频道面板 -->
     <LinearLayout
         android:id="@+id/channel_drawer_panel"
-        android:layout_width="440dp"
+        android:layout_width="456dp"
         android:layout_height="match_parent"
         android:layout_gravity="start"
         android:background="@drawable/bg_md3_drawer_sheet"
         android:clickable="true"
+        android:clipChildren="false"
+        android:clipToPadding="false"
         android:descendantFocusability="afterDescendants"
         android:elevation="18dp"
         android:orientation="vertical"
@@ -448,16 +477,24 @@
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:clipChildren="false"
+            android:clipToPadding="false"
             android:gravity="center_vertical"
-            android:orientation="horizontal">
+            android:orientation="horizontal"
+            android:paddingHorizontal="4dp"
+            android:paddingVertical="4dp">
 
             <TextView
                 android:id="@+id/tv_drawer_title"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
+                android:layout_marginEnd="6dp"
                 android:layout_weight="1"
+                android:ellipsize="end"
                 android:fontFamily="sans-serif-medium"
+                android:includeFontPadding="false"
                 android:letterSpacing="0.01"
+                android:singleLine="true"
                 android:text="uTV (215频道)"
                 android:textColor="@color/text_primary"
                 android:textSize="16sp"
@@ -467,7 +504,7 @@
                 android:id="@+id/btn_drawer_numpad"
                 style="@style/Widget.BjUnicomIptv.HudButton"
                 android:layout_width="wrap_content"
-                android:layout_height="32dp"
+                android:layout_height="36dp"
                 android:layout_marginEnd="8dp"
                 android:drawableStart="@drawable/ic_flat_dialpad"
                 android:drawablePadding="5dp"
@@ -482,13 +519,18 @@
             <CheckBox
                 android:id="@+id/cb_only_available"
                 android:layout_width="wrap_content"
-                android:layout_height="32dp"
+                android:layout_height="36dp"
                 android:background="@drawable/bg_badge"
                 android:buttonTint="@color/md_theme_dark_primary"
                 android:focusable="true"
+                android:gravity="center_vertical"
+                android:includeFontPadding="false"
+                android:minHeight="0dp"
                 android:nextFocusDown="@id/et_search_channel"
                 android:nextFocusLeft="@id/btn_drawer_numpad"
-                android:paddingHorizontal="8dp"
+                android:paddingHorizontal="10dp"
+                android:paddingVertical="0dp"
+                android:singleLine="true"
                 android:text="仅看可用"
                 android:textColor="@color/text_secondary"
                 android:textSize="12sp" />
@@ -499,18 +541,22 @@
             android:id="@+id/et_search_channel"
             android:layout_width="match_parent"
             android:layout_height="42dp"
-            android:layout_marginTop="12dp"
+            android:layout_marginHorizontal="4dp"
+            android:layout_marginTop="8dp"
             android:background="@drawable/bg_md3_search_bar"
             android:drawableStart="@drawable/ic_md_search"
             android:drawablePadding="10dp"
             android:focusable="true"
             android:focusableInTouchMode="false"
+            android:gravity="center_vertical"
             android:hint="搜索频道名 / 台号 / 239.3.1.x..."
             android:imeOptions="actionSearch"
+            android:includeFontPadding="false"
             android:inputType="text"
             android:nextFocusDown="@id/rv_categories"
             android:nextFocusUp="@id/cb_only_available"
-            android:paddingHorizontal="16dp"
+            android:paddingHorizontal="14dp"
+            android:paddingVertical="0dp"
             android:singleLine="true"
             android:textColor="@color/text_primary"
             android:textColorHint="@color/text_muted"
@@ -520,31 +566,39 @@
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/rv_categories"
             android:layout_width="match_parent"
-            android:layout_height="42dp"
-            android:layout_marginTop="10dp"
+            android:layout_height="48dp"
+            android:layout_marginTop="8dp"
+            android:clipChildren="false"
             android:clipToPadding="false"
-            android:focusable="true" />
+            android:focusable="true"
+            android:paddingHorizontal="4dp"
+            android:paddingVertical="4dp" />
 
         <!-- Material 3 频道卡片列表 -->
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/rv_channels"
             android:layout_width="match_parent"
             android:layout_height="0dp"
-            android:layout_marginTop="10dp"
+            android:layout_marginTop="6dp"
             android:layout_weight="1"
+            android:clipChildren="false"
             android:clipToPadding="false"
             android:focusable="true"
+            android:paddingHorizontal="4dp"
+            android:paddingVertical="6dp"
             android:scrollbars="vertical" />
 
         <!-- 抽屉底部操作指引 -->
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
+            android:layout_marginTop="6dp"
             android:gravity="center"
+            android:includeFontPadding="false"
+            android:singleLine="true"
             android:text="[▲/▼]选台  [◄/►]切换分类  [OK]播放  [长按OK]收藏  [返回]收起"
             android:textColor="@color/text_muted"
-            android:textSize="11sp" />
+            android:textSize="12sp" />
     </LinearLayout>
 
 </FrameLayout>

@@ -3,6 +3,8 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:background="@drawable/bg_md3_dialog_surface"
+    android:clipChildren="false"
+    android:clipToPadding="false"
     android:gravity="center_horizontal"
     android:orientation="vertical"
     android:padding="22dp">
@@ -11,6 +13,7 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:fontFamily="sans-serif-medium"
+        android:includeFontPadding="false"
         android:letterSpacing="0.01"
         android:text="智能电视虚拟数字选台面板"
         android:textColor="@color/md_theme_dark_primary"
@@ -21,6 +24,7 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
+        android:includeFontPadding="false"
         android:text="使用遥控器【方向键】移动焦点，按【OK键】输入频道号"
         android:textColor="@color/text_secondary"
         android:textSize="12sp" />
@@ -41,6 +45,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:fontFamily="monospace"
+            android:includeFontPadding="false"
             android:minWidth="76dp"
             android:text="---"
             android:textColor="@color/accent_amber"
@@ -55,6 +60,7 @@
             android:layout_weight="1"
             android:ellipsize="end"
             android:fontFamily="sans-serif-medium"
+            android:includeFontPadding="false"
             android:singleLine="true"
             android:text="请选择频道号 (如: 1=CCTV1, 21=北京卫视, 85=CCTV-4K)"
             android:textColor="@color/accent_green"
@@ -67,12 +73,17 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="14dp"
-        android:orientation="vertical">
+        android:clipChildren="false"
+        android:clipToPadding="false"
+        android:orientation="vertical"
+        android:padding="4dp">
 
         <!-- Row 1: 1, 2, 3 -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:clipChildren="false"
+            android:clipToPadding="false"
             android:orientation="horizontal">
 
             <Button
@@ -119,6 +130,8 @@
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:clipChildren="false"
+            android:clipToPadding="false"
             android:orientation="horizontal">
 
             <Button
@@ -165,6 +178,8 @@
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:clipChildren="false"
+            android:clipToPadding="false"
             android:orientation="horizontal">
 
             <Button
@@ -211,6 +226,8 @@
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:clipChildren="false"
+            android:clipToPadding="false"
             android:orientation="horizontal">
 
             <Button

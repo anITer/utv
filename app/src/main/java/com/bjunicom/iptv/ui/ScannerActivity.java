@@ -128,8 +128,21 @@ public class ScannerActivity extends AppCompatActivity {
         btnStopScan.setOnClickListener(v -> stopScanningByUser());
 
         View.OnFocusChangeListener focusScale = (v, hasFocus) -> {
-            v.animate().scaleX(hasFocus ? 1.06f : 1.0f).scaleY(hasFocus ? 1.06f : 1.0f).setDuration(120).start();
+            v.animate().scaleX(hasFocus ? 1.03f : 1.0f).scaleY(hasFocus ? 1.03f : 1.0f).setDuration(120).start();
             v.setSelected(hasFocus);
+            if (hasFocus) {
+                ScrollView svParams = findViewById(R.id.sv_scanner_params);
+                if (svParams != null && svParams.getHeight() > 0) {
+                    android.graphics.Rect rect = new android.graphics.Rect();
+                    v.getDrawingRect(rect);
+                    try {
+                        svParams.offsetDescendantRectToMyCoords(v, rect);
+                        int targetScrollY = Math.max(0, rect.centerY() - svParams.getHeight() / 2);
+                        svParams.smoothScrollTo(0, targetScrollY);
+                    } catch ( IllegalArgumentException ignored) {
+                    }
+                }
+            }
         };
         int[] scannerFocusableIds = {
                 R.id.btn_scanner_back,

@@ -632,7 +632,11 @@ public class IjkVideoView extends FrameLayout {
 
         boolean pooledHit = (mPooledIjkDecoder != null && mPooledIjkDecoder.reusedFromPool);
         String poolTag = pooledHit ? "池化复用" : "池化";
-        String videoDecoder = mSettings.isMediaCodecEnabled() ? "MediaCodec" : "FFmpeg";
+        boolean isHevc = mActiveCodecDescriptor != null && mActiveCodecDescriptor.isHevc();
+        boolean hwEnabledForCurrent = isHevc
+                ? mSettings.isMediaCodecHevcEnabled()
+                : mSettings.isMediaCodecEnabled();
+        String videoDecoder = hwEnabledForCurrent ? "MediaCodec" : "FFmpeg";
         if (isInPlaybackState()) {
             try {
                 IMediaPlayer mp = unwrapIjkMediaPlayer();

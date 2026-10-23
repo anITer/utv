@@ -67,8 +67,8 @@ public class TsCodecDescriptor {
      * 生成解码器池化 Key，使相同视频编码(H264/HEVC)与音频编码规格的频道直接复用池中解码器
      */
     public String toDecoderPoolKey(IptvSettings settings) {
-        boolean hw = settings != null && settings.isMediaCodecEnabled();
-        boolean hevcHw = hw && settings.isMediaCodecHevcEnabled() && isHevc();
+        boolean hw = settings == null || settings.isMediaCodecEnabled();
+        boolean hevcHw = settings == null || settings.isMediaCodecHevcEnabled();
         boolean opensl = settings != null && settings.isOpenSlEsEnabled();
         return String.format(Locale.US, "V_%s_A_%s_HW_%d_HEVC_%d_SL_%d",
                 videoCodec.toUpperCase(Locale.US),

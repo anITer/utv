@@ -337,8 +337,8 @@ public class MainActivity extends AppCompatActivity {
         };
         View.OnFocusChangeListener drawerFocusListener = (v, hasFocus) -> {
             v.animate()
-                    .scaleX(hasFocus ? 1.08f : 1.0f)
-                    .scaleY(hasFocus ? 1.08f : 1.0f)
+                    .scaleX(hasFocus ? 1.04f : 1.0f)
+                    .scaleY(hasFocus ? 1.04f : 1.0f)
                     .setDuration(120)
                     .start();
             v.setSelected(hasFocus);
@@ -436,8 +436,8 @@ public class MainActivity extends AppCompatActivity {
             btn.setBackgroundResource(isTarget ? R.drawable.bg_md3_primary_button : R.drawable.bg_group_tab);
             btn.setBackgroundTintList(null);
             btn.setElevation(isTarget ? 12f : 0f);
-            btn.setScaleX(isTarget ? 1.08f : 1.0f);
-            btn.setScaleY(isTarget ? 1.08f : 1.0f);
+            btn.setScaleX(isTarget ? 1.04f : 1.0f);
+            btn.setScaleY(isTarget ? 1.04f : 1.0f);
         }
     }
 
@@ -590,6 +590,12 @@ public class MainActivity extends AppCompatActivity {
                 drawerFocusOnCategories = false;
                 focusChannelListAt(0);
             }
+
+            @Override
+            public void onNavigateToPosition(int targetPosition) {
+                drawerFocusOnCategories = false;
+                focusChannelListAt(targetPosition);
+            }
         });
         rvChannels.setAdapter(channelAdapter);
     }
@@ -599,7 +605,7 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
         int newCatPos = categoryAdapter.selectAdjacentCategory(delta);
-        rvCategories.scrollToPosition(newCatPos);
+        scrollCategoryListToCenter(newCatPos);
         if (drawerFocusOnCategories || channelAdapter == null || channelAdapter.getItemCount() == 0) {
             focusSelectedCategoryTab();
         } else {
@@ -883,7 +889,7 @@ public class MainActivity extends AppCompatActivity {
         }
         int nextIdx = (curIdx + delta + list.size()) % list.size();
         playChannel(list.get(nextIdx));
-        rvChannels.scrollToPosition(nextIdx);
+        scrollChannelListToCenter(nextIdx);
     }
 
     private void toggleChannelDrawer() {
@@ -901,6 +907,9 @@ public class MainActivity extends AppCompatActivity {
         drawerPanel.setVisibility(View.VISIBLE);
         drawerFocusOnCategories = false;
         updateHudButtonsVisualState();
+        if (categoryAdapter != null) {
+            scrollCategoryListToCenter(categoryAdapter.getSelectedPosition());
+        }
         if (channelAdapter != null && channelAdapter.getItemCount() > 0) {
             focusChannelListAt(channelAdapter.getPlayingChannelIndex());
         } else {
@@ -914,21 +923,84 @@ public class MainActivity extends AppCompatActivity {
         updateHudButtonsVisualState();
     }
 
+    private void scrollChannelListToCenter(int position) {
+        if (rvChannels == null || channelAdapter == null || channelAdapter.getItemCount() == 0) {
+            return;
+        }
+        int safePos = Math.max(0, Math.min(position, channelAdapter.getItemCount() - 1));
+        RecyclerView.ViewHolder vh = rvChannels.findViewHolderForAdapterPosition(safePos);
+        int rvHeight = rvChannels.getHeight();
+        if (vh != null && vh.itemView != null && rvHeight > 0) {
+            int itemCenter = (vh.itemView.getTop() + vh.itemView.getBottom()) / 2;
+            int dy = itemCenter - (rvHeight / 2);
+            if (Math.abs(dy) > 2 && !rvChannels.isComputingLayout()) {
+                rvChannels.scrollBy(0, dy);
+            }
+            return;
+        }
+        RecyclerView.LayoutManager lm = rvChannels.getLayoutManager();
+        if (lm instanceof LinearLayoutManager && rvHeight > 0) {
+            int itemHeight = rvChannels.getChildCount() > 0
+                    ? rvChannels.getChildAt(0).getHeight()
+                    : Math.round(64f * getResources().getDisplayMetrics().density);
+            int centerOffset = Math.max(0, (rvHeight - itemHeight) / 2);
+            ((LinearLayoutManager) lm).scrollToPositionWithOffset(safePos, centerOffset);
+        } else {
+            rvChannels.scrollToPosition(safePos);
+        }
+    }
+
+    private void scrollCategoryListToCenter(int position) {
+        if (rvCategories == null || categoryAdapter == null || categoryAdapter.getItemCount() == 0) {
+            return;
+        }
+        int safePos = Math.max(0, Math.min(position, categoryAdapter.getItemCount() - 1));
+        RecyclerView.ViewHolder vh = rvCategories.findViewHolderForAdapterPosition(safePos);
+        int rvWidth = rvCategories.getWidth();
+        if (vh != null && vh.itemView != null && rvWidth > 0) {
+            int tabCenter = (vh.itemView.getLeft() + vh.itemView.getRight()) / 2;
+            int dx = tabCenter - (rvWidth / 2);
+            if (Math.abs(dx) > 2 && !rvCategories.isComputingLayout()) {
+                rvCategories.scrollBy(dx, 0);
+            }
+            return;
+        }
+        RecyclerView.LayoutManager lm = rvCategories.getLayoutManager();
+        if (lm instanceof LinearLayoutManager && rvWidth > 0) {
+            int tabWidth = rvCategories.getChildCount() > 0
+                    ? rvCategories.getChildAt(0).getWidth()
+                    : Math.round(92f * getResources().getDisplayMetrics().density);
+            int centerOffset = Math.max(0, (rvWidth - tabWidth) / 2);
+            ((LinearLayoutManager) lm).scrollToPositionWithOffset(safePos, centerOffset);
+        } else {
+            rvCategories.scrollToPosition(safePos);
+        }
+    }
+
     private void focusChannelListAt(int position) {
         if (channelAdapter == null || channelAdapter.getItemCount() == 0) {
             return;
         }
         int safePos = Math.max(0, Math.min(position, channelAdapter.getItemCount() - 1));
-        rvChannels.scrollToPosition(safePos);
+        scrollChannelListToCenter(safePos);
+        RecyclerView.ViewHolder immediateVh = rvChannels.findViewHolderForAdapterPosition(safePos);
+        if (immediateVh != null && immediateVh.itemView != null) {
+            requestFocusCompat(immediateVh.itemView);
+            scrollChannelListToCenter(safePos);
+        }
         rvChannels.post(() -> {
+            scrollChannelListToCenter(safePos);
             RecyclerView.ViewHolder vh = rvChannels.findViewHolderForAdapterPosition(safePos);
             if (vh != null && vh.itemView != null) {
                 requestFocusCompat(vh.itemView);
+                scrollChannelListToCenter(safePos);
             } else {
                 rvChannels.post(() -> {
+                    scrollChannelListToCenter(safePos);
                     RecyclerView.ViewHolder delayedVh = rvChannels.findViewHolderForAdapterPosition(safePos);
                     if (delayedVh != null && delayedVh.itemView != null) {
                         requestFocusCompat(delayedVh.itemView);
+                        scrollChannelListToCenter(safePos);
                     } else {
                         requestFocusCompat(rvChannels);
                     }
@@ -942,16 +1014,25 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
         int pos = categoryAdapter.getSelectedPosition();
-        rvCategories.scrollToPosition(pos);
+        scrollCategoryListToCenter(pos);
+        RecyclerView.ViewHolder immediateVh = rvCategories.findViewHolderForAdapterPosition(pos);
+        if (immediateVh != null && immediateVh.itemView != null) {
+            requestFocusCompat(immediateVh.itemView);
+            scrollCategoryListToCenter(pos);
+        }
         rvCategories.post(() -> {
+            scrollCategoryListToCenter(pos);
             RecyclerView.ViewHolder vh = rvCategories.findViewHolderForAdapterPosition(pos);
             if (vh != null && vh.itemView != null) {
                 requestFocusCompat(vh.itemView);
+                scrollCategoryListToCenter(pos);
             } else {
                 rvCategories.post(() -> {
+                    scrollCategoryListToCenter(pos);
                     RecyclerView.ViewHolder delayedVh = rvCategories.findViewHolderForAdapterPosition(pos);
                     if (delayedVh != null && delayedVh.itemView != null) {
                         requestFocusCompat(delayedVh.itemView);
+                        scrollCategoryListToCenter(pos);
                     } else {
                         requestFocusCompat(rvCategories);
                     }
@@ -1107,7 +1188,7 @@ public class MainActivity extends AppCompatActivity {
             final int digit = i;
             Button b = view.findViewById(btnIds[i]);
             b.setOnFocusChangeListener((v, hasFocus) -> {
-                v.animate().scaleX(hasFocus ? 1.08f : 1.0f).scaleY(hasFocus ? 1.08f : 1.0f).setDuration(100).start();
+                v.animate().scaleX(hasFocus ? 1.04f : 1.0f).scaleY(hasFocus ? 1.04f : 1.0f).setDuration(100).start();
                 v.setSelected(hasFocus);
             });
             b.setOnClickListener(v -> {
@@ -1121,7 +1202,7 @@ public class MainActivity extends AppCompatActivity {
 
         View btnDel = view.findViewById(R.id.btn_numpad_del);
         btnDel.setOnFocusChangeListener((v, hasFocus) -> {
-            v.animate().scaleX(hasFocus ? 1.08f : 1.0f).scaleY(hasFocus ? 1.08f : 1.0f).setDuration(100).start();
+            v.animate().scaleX(hasFocus ? 1.04f : 1.0f).scaleY(hasFocus ? 1.04f : 1.0f).setDuration(100).start();
             v.setSelected(hasFocus);
         });
         btnDel.setOnClickListener(v -> {
@@ -1138,7 +1219,7 @@ public class MainActivity extends AppCompatActivity {
 
         View btnGo = view.findViewById(R.id.btn_numpad_go);
         btnGo.setOnFocusChangeListener((v, hasFocus) -> {
-            v.animate().scaleX(hasFocus ? 1.08f : 1.0f).scaleY(hasFocus ? 1.08f : 1.0f).setDuration(100).start();
+            v.animate().scaleX(hasFocus ? 1.04f : 1.0f).scaleY(hasFocus ? 1.04f : 1.0f).setDuration(100).start();
             v.setSelected(hasFocus);
         });
         btnGo.setOnClickListener(v -> {
@@ -1381,7 +1462,41 @@ public class MainActivity extends AppCompatActivity {
             });
         }
 
+        final android.widget.ScrollView svSettings = view.findViewById(R.id.sv_player_settings);
+        int[] settingsFocusableIds = {
+                R.id.rb_isp_unicom, R.id.rb_isp_mobile, R.id.rb_isp_telecom,
+                R.id.rb_isp_all, R.id.rb_isp_custom, R.id.btn_settings_upload_m3u,
+                R.id.rb_stream_udpxy, R.id.rb_stream_local_proxy, R.id.rb_stream_direct_rtp,
+                R.id.et_settings_udpxy, R.id.rb_core_ijk, R.id.rb_core_android,
+                R.id.cb_settings_mediacodec, R.id.cb_settings_hevc, R.id.cb_settings_opensles,
+                R.id.cb_settings_textureview, R.id.cb_settings_all_channels, R.id.btn_settings_check_update
+        };
+        View.OnFocusChangeListener settingsFocusCenterListener = (v, hasFocus) -> {
+            if (hasFocus && svSettings != null && svSettings.getHeight() > 0) {
+                android.graphics.Rect rect = new android.graphics.Rect();
+                v.getDrawingRect(rect);
+                try {
+                    svSettings.offsetDescendantRectToMyCoords(v, rect);
+                    int targetY = Math.max(0, rect.centerY() - svSettings.getHeight() / 2);
+                    svSettings.smoothScrollTo(0, targetY);
+                } catch (IllegalArgumentException ignored) {
+                }
+            }
+        };
+        for (int id : settingsFocusableIds) {
+            View item = view.findViewById(id);
+            if (item != null) {
+                item.setOnFocusChangeListener(settingsFocusCenterListener);
+            }
+        }
+
         settingsDialog.show();
+        if (rgIspProvider != null) {
+            View checkedIspRadio = view.findViewById(rgIspProvider.getCheckedRadioButtonId());
+            if (checkedIspRadio != null) {
+                checkedIspRadio.post(() -> requestFocusCompat(checkedIspRadio));
+            }
+        }
     }
 
     /**

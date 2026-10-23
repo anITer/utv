@@ -3,6 +3,8 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@color/bg_primary"
+    android:clipChildren="false"
+    android:clipToPadding="false"
     android:orientation="vertical"
     android:padding="18dp">
 
@@ -11,6 +13,8 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:background="@drawable/bg_md3_card_container"
+        android:clipChildren="false"
+        android:clipToPadding="false"
         android:elevation="4dp"
         android:gravity="center_vertical"
         android:orientation="horizontal"
@@ -26,7 +30,7 @@
             android:drawablePadding="6dp"
             android:focusable="true"
             android:nextFocusDown="@id/rb_mode_dynamic_subnet"
-            android:nextFocusRight="@id/btn_export_m3u"
+            android:nextFocusRight="@id/btn_import_m3u"
             android:paddingHorizontal="16dp"
             android:text="返回播放"
             android:textSize="13sp" />
@@ -36,7 +40,10 @@
             android:layout_height="wrap_content"
             android:layout_marginStart="16dp"
             android:layout_weight="1"
+            android:ellipsize="end"
             android:fontFamily="sans-serif-medium"
+            android:includeFontPadding="false"
+            android:singleLine="true"
             android:text="北京 IPTV (联通/移动/电信) 组播扫描 &amp; 节目巡检"
             android:textColor="@color/text_primary"
             android:textSize="17sp"
@@ -81,25 +88,34 @@
         android:layout_height="0dp"
         android:layout_marginTop="14dp"
         android:layout_weight="1"
+        android:clipChildren="false"
+        android:clipToPadding="false"
         android:orientation="horizontal">
 
         <!-- 左侧扫描参数配置卡片 -->
         <ScrollView
-            android:layout_width="360dp"
+            android:id="@+id/sv_scanner_params"
+            android:layout_width="370dp"
             android:layout_height="match_parent"
             android:background="@drawable/bg_md3_card_container"
+            android:clipChildren="false"
+            android:clipToPadding="false"
             android:elevation="2dp"
             android:padding="18dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:orientation="vertical">
+                android:clipChildren="false"
+                android:clipToPadding="false"
+                android:orientation="vertical"
+                android:padding="4dp">
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:fontFamily="sans-serif-medium"
+                    android:includeFontPadding="false"
                     android:text="1. 选择扫描 / 巡检模式"
                     android:textColor="@color/md_theme_dark_primary"
                     android:textSize="14sp"
@@ -109,17 +125,23 @@
                     android:id="@+id/rg_scan_mode"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp">
+                    android:layout_marginTop="8dp"
+                    android:clipChildren="false"
+                    android:clipToPadding="false">
 
                     <RadioButton
                         android:id="@+id/rb_mode_dynamic_subnet"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
+                        android:layout_marginHorizontal="2dp"
                         android:background="@drawable/bg_badge"
                         android:buttonTint="@color/md_theme_dark_primary"
                         android:checked="true"
                         android:focusable="true"
+                        android:includeFontPadding="false"
+                        android:minHeight="38dp"
                         android:paddingHorizontal="8dp"
+                        android:paddingVertical="6dp"
                         android:text="动态扫描网段全部组播地址 (239.3.1.x)"
                         android:textColor="@color/text_primary"
                         android:textSize="13sp" />
@@ -128,11 +150,15 @@
                         android:id="@+id/rb_mode_check_playlist"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
+                        android:layout_marginHorizontal="2dp"
                         android:layout_marginTop="6dp"
                         android:background="@drawable/bg_badge"
                         android:buttonTint="@color/md_theme_dark_primary"
                         android:focusable="true"
+                        android:includeFontPadding="false"
+                        android:minHeight="38dp"
                         android:paddingHorizontal="8dp"
+                        android:paddingVertical="6dp"
                         android:text="巡检内置频道表 (check_iptv_m3u.sh 逻辑)"
                         android:textColor="@color/text_primary"
                         android:textSize="13sp" />
@@ -141,11 +167,15 @@
                         android:id="@+id/rb_mode_shell_script"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
+                        android:layout_marginHorizontal="2dp"
                         android:layout_marginTop="6dp"
                         android:background="@drawable/bg_badge"
                         android:buttonTint="@color/md_theme_dark_primary"
                         android:focusable="true"
+                        android:includeFontPadding="false"
+                        android:minHeight="38dp"
                         android:paddingHorizontal="8dp"
+                        android:paddingVertical="6dp"
                         android:text="直接执行 check_iptv_m3u.sh 脚本引擎"
                         android:textColor="@color/text_primary"
                         android:textSize="13sp" />
@@ -156,6 +186,7 @@
                     android:layout_height="wrap_content"
                     android:layout_marginTop="14dp"
                     android:fontFamily="sans-serif-medium"
+                    android:includeFontPadding="false"
                     android:text="2. 组播网段与 IP 范围配置"
                     android:textColor="@color/md_theme_dark_primary"
                     android:textSize="14sp"
@@ -165,12 +196,15 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="8dp"
+                    android:clipChildren="false"
+                    android:clipToPadding="false"
                     android:gravity="center_vertical"
                     android:orientation="horizontal">
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
+                        android:includeFontPadding="false"
                         android:text="网段前缀:"
                         android:textColor="@color/text_secondary"
                         android:textSize="13sp" />
@@ -180,11 +214,15 @@
                         android:layout_width="0dp"
                         android:layout_height="38dp"
                         android:layout_marginStart="8dp"
+                        android:layout_marginEnd="2dp"
                         android:layout_weight="1"
                         android:background="@drawable/bg_badge"
                         android:focusable="true"
                         android:fontFamily="monospace"
+                        android:gravity="center_vertical"
+                        android:includeFontPadding="false"
                         android:paddingHorizontal="12dp"
+                        android:paddingVertical="0dp"
                         android:singleLine="true"
                         android:text="239.3.1"
                         android:textColor="@color/text_primary"
@@ -195,12 +233,15 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="8dp"
+                    android:clipChildren="false"
+                    android:clipToPadding="false"
                     android:gravity="center_vertical"
                     android:orientation="horizontal">
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
+                        android:includeFontPadding="false"
                         android:text="主机范围:"
                         android:textColor="@color/text_secondary"
                         android:textSize="13sp" />
@@ -214,7 +255,10 @@
                         android:focusable="true"
                         android:fontFamily="monospace"
                         android:gravity="center"
+                        android:includeFontPadding="false"
                         android:inputType="number"
+                        android:paddingVertical="0dp"
+                        android:singleLine="true"
                         android:text="1"
                         android:textColor="@color/text_primary"
                         android:textSize="13sp" />
@@ -223,6 +267,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginHorizontal="8dp"
+                        android:includeFontPadding="false"
                         android:text="~"
                         android:textColor="@color/text_primary" />
 
@@ -234,7 +279,10 @@
                         android:focusable="true"
                         android:fontFamily="monospace"
                         android:gravity="center"
+                        android:includeFontPadding="false"
                         android:inputType="number"
+                        android:paddingVertical="0dp"
+                        android:singleLine="true"
                         android:text="254"
                         android:textColor="@color/text_primary"
                         android:textSize="13sp" />
@@ -244,12 +292,15 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="8dp"
+                    android:clipChildren="false"
+                    android:clipToPadding="false"
                     android:gravity="center_vertical"
                     android:orientation="horizontal">
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
+                        android:includeFontPadding="false"
                         android:text="udpxy代理:"
                         android:textColor="@color/text_secondary"
                         android:textSize="13sp" />
@@ -259,12 +310,16 @@
                         android:layout_width="0dp"
                         android:layout_height="38dp"
                         android:layout_marginStart="8dp"
+                        android:layout_marginEnd="2dp"
                         android:layout_weight="1"
                         android:background="@drawable/bg_badge"
                         android:focusable="true"
                         android:fontFamily="monospace"
+                        android:gravity="center_vertical"
                         android:hint="如 192.168.2.1:8012"
+                        android:includeFontPadding="false"
                         android:paddingHorizontal="12dp"
+                        android:paddingVertical="0dp"
                         android:singleLine="true"
                         android:text="192.168.2.1:8012"
                         android:textColor="@color/text_primary"
@@ -275,12 +330,15 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="8dp"
+                    android:clipChildren="false"
+                    android:clipToPadding="false"
                     android:gravity="center_vertical"
                     android:orientation="horizontal">
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
+                        android:includeFontPadding="false"
                         android:text="探测超时(ms):"
                         android:textColor="@color/text_secondary"
                         android:textSize="13sp" />
@@ -294,7 +352,10 @@
                         android:focusable="true"
                         android:fontFamily="monospace"
                         android:gravity="center"
+                        android:includeFontPadding="false"
                         android:inputType="number"
+                        android:paddingVertical="0dp"
+                        android:singleLine="true"
                         android:text="1500"
                         android:textColor="@color/text_primary"
                         android:textSize="13sp" />
@@ -304,11 +365,15 @@
                     android:id="@+id/cb_full_port_scan"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:layout_marginHorizontal="2dp"
                     android:layout_marginTop="8dp"
                     android:background="@drawable/bg_badge"
                     android:buttonTint="@color/md_theme_dark_primary"
                     android:focusable="true"
+                    android:includeFontPadding="false"
+                    android:minHeight="38dp"
                     android:paddingHorizontal="8dp"
+                    android:paddingVertical="6dp"
                     android:text="扫描全部已知联通组播端口 (较慢)"
                     android:textColor="@color/text_secondary"
                     android:textSize="12sp" />
@@ -317,13 +382,17 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="14dp"
-                    android:orientation="horizontal">
+                    android:clipChildren="false"
+                    android:clipToPadding="false"
+                    android:orientation="horizontal"
+                    android:paddingVertical="4dp">
 
                     <Button
                         android:id="@+id/btn_start_scan"
                         style="@style/Widget.BjUnicomIptv.PrimaryButton"
                         android:layout_width="0dp"
                         android:layout_height="44dp"
+                        android:layout_marginStart="2dp"
                         android:layout_weight="1"
                         android:drawableStart="@drawable/ic_flat_radar"
                         android:drawablePadding="6dp"
@@ -331,6 +400,7 @@
                         android:nextFocusRight="@id/btn_stop_scan"
                         android:paddingHorizontal="14dp"
                         android:text="开始动态扫描 (绿键)"
+                        android:textSize="13sp"
                         android:textStyle="bold" />
 
                     <Button
@@ -339,6 +409,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="44dp"
                         android:layout_marginStart="8dp"
+                        android:layout_marginEnd="2dp"
                         android:drawableStart="@drawable/ic_flat_stop"
                         android:drawablePadding="5dp"
                         android:enabled="false"
@@ -346,7 +417,8 @@
                         android:nextFocusLeft="@id/btn_start_scan"
                         android:nextFocusRight="@id/sv_scan_log"
                         android:paddingHorizontal="14dp"
-                        android:text="停止" />
+                        android:text="停止"
+                        android:textSize="13sp" />
                 </LinearLayout>
             </LinearLayout>
         </ScrollView>
