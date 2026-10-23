@@ -22,9 +22,10 @@ public class IptvSettings {
     public static final int STREAM_MODE_LOCAL_PROXY = 1;    // 内置 Android 本地组播转 HTTP 代理 (127.0.0.1)
     public static final int STREAM_MODE_DIRECT_RTP = 2;     // ijkplayer 直接播放 rtp://239.3.1.x:port
 
-    // 播放器内核模式 (参考 ijkplayer Settings)
-    public static final int PLAYER_IJK = 0;                 // IjkMediaPlayer (推荐，支持 MPEG-TS/RTP/HLS/HEVC 4K)
+    // 播放器内核模式
+    public static final int PLAYER_IJK = 0;                 // IjkMediaPlayer (支持 MPEG-TS/RTP/HLS/HEVC 4K)
     public static final int PLAYER_ANDROID_MEDIA = 1;       // AndroidMediaPlayer
+    public static final int PLAYER_UTV = 2;                 // UTVPlayer (基于 ExoPlayer + PreloadMediaSource + LoadControl)
 
     private static final String KEY_ISP_PROVIDER = "isp_provider";
     private static final String KEY_CUSTOM_M3U_NAME = "custom_m3u_name";
@@ -143,7 +144,10 @@ public class IptvSettings {
 
     public int getPlayerType() {
         int type = prefs.getInt(KEY_PLAYER_TYPE, PLAYER_IJK);
-        return type == PLAYER_ANDROID_MEDIA ? PLAYER_ANDROID_MEDIA : PLAYER_IJK;
+        if (type == PLAYER_ANDROID_MEDIA || type == PLAYER_UTV) {
+            return type;
+        }
+        return PLAYER_IJK;
     }
 
     public void setPlayerType(int playerType) {

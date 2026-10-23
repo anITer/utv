@@ -142,6 +142,132 @@ public class StartupSmokeTest {
             org.robolectric.shadows.ShadowLooper.idleMainLooper(3000, java.util.concurrent.TimeUnit.MILLISECONDS);
             assertTrue(videoView.areOffscreenPlayersStopped());
 
+            // Switch player core to UTVPlayer (PLAYER_UTV: ExoPlayer + PreloadMediaSource + UTVLoadControl)
+            settings.setPlayerType(com.bjunicom.iptv.config.IptvSettings.PLAYER_UTV);
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_UP));
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_UP));
+
+            com.bjunicom.iptv.player.UTVPlayer utvPlayer = videoView.getUtvPlayer();
+            assertNotNull(utvPlayer);
+            assertNotNull(utvPlayer.getExoPlayer());
+            assertEquals(3, com.bjunicom.iptv.player.PreloadMediaSource.MAX_PRELOAD_PERIODS);
+            assertEquals(3, utvPlayer.getPreloadPool().getSlots().length);
+            assertEquals(3, utvPlayer.getPreloadPool().getActiveProgressiveMediaPeriods().size());
+
+            // Switch to next channel on UTVPlayer -> preloaded ProgressiveMediaPeriod is promoted on the same single ExoPlayer instance
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_UP));
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_UP));
+            assertTrue(videoView.isActivePlayerPromotedFromPool());
+            assertTrue(utvPlayer.isPromotedFromPreload());
+
+            // Verify AdaptiveMediaCodecVideoRenderer.canReuseCodec() returns REUSE_RESULT_YES_WITH_FLUSH across CCTV-1 -> CCTV-2
+            com.bjunicom.iptv.player.UTVPlayer.AdaptiveMediaCodecVideoRenderer adaptiveRenderer =
+                    new com.bjunicom.iptv.player.UTVPlayer.AdaptiveMediaCodecVideoRenderer(
+                            activity,
+                            com.google.android.exoplayer2.mediacodec.MediaCodecAdapter.Factory.DEFAULT,
+                            com.google.android.exoplayer2.mediacodec.MediaCodecSelector.DEFAULT,
+                            1500L,
+                            true,
+                            null,
+                            null,
+                            50,
+                            utvPlayer);
+            com.google.android.exoplayer2.Format cctv1Format = new com.google.android.exoplayer2.Format.Builder()
+                    .setSampleMimeType(com.google.android.exoplayer2.util.MimeTypes.VIDEO_H264)
+                    .setWidth(1920)
+                    .setHeight(1080)
+                    .build();
+            com.google.android.exoplayer2.Format cctv2Format = new com.google.android.exoplayer2.Format.Builder()
+                    .setSampleMimeType(com.google.android.exoplayer2.util.MimeTypes.VIDEO_H264)
+                    .setWidth(1920)
+                    .setHeight(1080)
+                    .build();
+            com.google.android.exoplayer2.mediacodec.MediaCodecInfo hwCodecInfo =
+                    com.google.android.exoplayer2.mediacodec.MediaCodecInfo.newInstance(
+                            "c2.qti.avc.decoder",
+                            com.google.android.exoplayer2.util.MimeTypes.VIDEO_H264,
+                            com.google.android.exoplayer2.util.MimeTypes.VIDEO_H264,
+                            null,
+                            true,
+                            false,
+                            true,
+                            false,
+                            false);
+            com.google.android.exoplayer2.mediacodec.MediaCodecInfo swCodecInfo =
+                    com.google.android.exoplayer2.mediacodec.MediaCodecInfo.newInstance(
+                            "c2.android.avc.decoder",
+                            com.google.android.exoplayer2.util.MimeTypes.VIDEO_H264,
+                            com.google.android.exoplayer2.util.MimeTypes.VIDEO_H264,
+                            null,
+                            false,
+                            true,
+                            false,
+                            false,
+                            false);
+
+            // 1. Default is hardware decoding for both IjkPlayer and ExoPlayer
+            assertTrue(settings.isMediaCodecEnabled());
+            assertTrue(settings.isMediaCodecHevcEnabled());
+            assertTrue(com.bjunicom.iptv.player.UTVPlayer.isHardwareDecodingPreferred("video/avc", settings));
+            assertTrue(com.bjunicom.iptv.player.UTVPlayer.isHardwareDecodingPreferred("video/hevc", settings));
+            java.util.List<com.google.android.exoplayer2.mediacodec.MediaCodecInfo> orderedDefault =
+                    com.bjunicom.iptv.player.UTVPlayer.selectDecodersForSettings(
+                            java.util.Arrays.asList(swCodecInfo, hwCodecInfo), "video/avc", settings);
+            assertSame(hwCodecInfo, orderedDefault.get(0));
+            assertTrue(videoView.getDecoderName().contains("硬解"));
+
+            com.google.android.exoplayer2.decoder.DecoderReuseEvaluation eval =
+                    adaptiveRenderer.canReuseCodec(hwCodecInfo, cctv1Format, cctv2Format);
+            assertTrue(eval.result != com.google.android.exoplayer2.decoder.DecoderReuseEvaluation.REUSE_RESULT_NO);
+            assertTrue(utvPlayer.getCodecReuseHitCount() > 0);
+
+            // 2. When user switches to software decoding in settings, both ExoPlayer and IjkPlayer switch to software decoding
+            settings.setMediaCodecEnabled(false);
+            settings.setMediaCodecHevcEnabled(false);
+            assertFalse(com.bjunicom.iptv.player.UTVPlayer.isHardwareDecodingPreferred("video/avc", settings));
+            assertFalse(com.bjunicom.iptv.player.UTVPlayer.isHardwareDecodingPreferred("video/hevc", settings));
+            java.util.List<com.google.android.exoplayer2.mediacodec.MediaCodecInfo> orderedSw =
+                    com.bjunicom.iptv.player.UTVPlayer.selectDecodersForSettings(
+                            java.util.Arrays.asList(hwCodecInfo, swCodecInfo), "video/avc", settings);
+            assertSame(swCodecInfo, orderedSw.get(0));
+
+            // Hardware decoder is rejected when software decoding is requested
+            com.google.android.exoplayer2.decoder.DecoderReuseEvaluation rejectHwEval =
+                    adaptiveRenderer.canReuseCodec(hwCodecInfo, cctv1Format, cctv2Format);
+            assertEquals(com.google.android.exoplayer2.decoder.DecoderReuseEvaluation.REUSE_RESULT_NO, rejectHwEval.result);
+            assertEquals(com.google.android.exoplayer2.decoder.DecoderReuseEvaluation.DISCARD_REASON_APP_OVERRIDE,
+                    rejectHwEval.discardReasons);
+            assertTrue(videoView.getDecoderName().contains("软解"));
+
+            // Verify IjkPlayer also switches to FFmpeg software decoding when MediaCodec is disabled
+            settings.setPlayerType(com.bjunicom.iptv.config.IptvSettings.PLAYER_IJK);
+            assertTrue(videoView.getDecoderName().contains("FFmpeg") && videoView.getDecoderName().contains("软解"));
+
+            // Restore default hardware decoding & switch back to PLAYER_UTV to test PlaceholderSurface & idle stop
+            settings.setMediaCodecEnabled(true);
+            settings.setMediaCodecHevcEnabled(true);
+            settings.setPlayerType(com.bjunicom.iptv.config.IptvSettings.PLAYER_UTV);
+
+            // Verify PlaceholderSurface parking when external UI SurfaceView is destroyed
+            for (SurfaceHolder.Callback cb : holder.getCallbacks()) {
+                cb.surfaceDestroyed(holder);
+            }
+            assertTrue(utvPlayer.isAttachedToPlaceholderSurface());
+
+            // Advance 3000ms -> background PreloadMediaSource ProgressiveMediaPeriods are stopped automatically
+            org.robolectric.shadows.ShadowLooper.idleMainLooper(3000, java.util.concurrent.TimeUnit.MILLISECONDS);
+            assertTrue(videoView.areOffscreenPlayersStopped());
+
+            // Verify player settings dialog has the three options: IjkPlayer, ExoPlayer, MediaPlayer
+            android.view.View settingsView = android.view.LayoutInflater.from(activity)
+                    .inflate(R.layout.dialog_player_settings, null);
+            android.widget.RadioButton rbIjk = settingsView.findViewById(R.id.rb_core_ijk);
+            android.widget.RadioButton rbExo = settingsView.findViewById(R.id.rb_core_utv);
+            android.widget.RadioButton rbMedia = settingsView.findViewById(R.id.rb_core_android);
+            assertEquals("IjkPlayer", rbIjk.getText().toString());
+            assertEquals("ExoPlayer", rbExo.getText().toString());
+            assertEquals("MediaPlayer", rbMedia.getText().toString());
+
             // Restore default PLAYER_IJK
             settings.setPlayerType(com.bjunicom.iptv.config.IptvSettings.PLAYER_IJK);
         }

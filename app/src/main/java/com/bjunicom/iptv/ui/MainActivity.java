@@ -1408,6 +1408,8 @@ public class MainActivity extends AppCompatActivity {
         int playerCore = settings.getPlayerType();
         if (playerCore == IptvSettings.PLAYER_ANDROID_MEDIA) {
             rgPlayerCore.check(R.id.rb_core_android);
+        } else if (playerCore == IptvSettings.PLAYER_UTV) {
+            rgPlayerCore.check(R.id.rb_core_utv);
         } else {
             rgPlayerCore.check(R.id.rb_core_ijk);
         }
@@ -1437,6 +1439,8 @@ public class MainActivity extends AppCompatActivity {
                     int checkedCore = rgPlayerCore.getCheckedRadioButtonId();
                     if (checkedCore == R.id.rb_core_android) {
                         settings.setPlayerType(IptvSettings.PLAYER_ANDROID_MEDIA);
+                    } else if (checkedCore == R.id.rb_core_utv) {
+                        settings.setPlayerType(IptvSettings.PLAYER_UTV);
                     } else {
                         settings.setPlayerType(IptvSettings.PLAYER_IJK);
                     }
@@ -1520,7 +1524,7 @@ public class MainActivity extends AppCompatActivity {
                 R.id.rb_isp_unicom, R.id.rb_isp_mobile, R.id.rb_isp_telecom,
                 R.id.rb_isp_all, R.id.rb_isp_custom, R.id.btn_settings_upload_m3u,
                 R.id.rb_stream_udpxy, R.id.rb_stream_local_proxy, R.id.rb_stream_direct_rtp,
-                R.id.et_settings_udpxy, R.id.rb_core_ijk, R.id.rb_core_android,
+                R.id.et_settings_udpxy, R.id.rb_core_ijk, R.id.rb_core_utv, R.id.rb_core_android,
                 R.id.cb_settings_mediacodec, R.id.cb_settings_hevc, R.id.cb_settings_opensles,
                 R.id.cb_settings_textureview, R.id.cb_settings_all_channels, R.id.btn_settings_check_update
         };
