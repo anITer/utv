@@ -99,6 +99,7 @@ public class MainActivity extends AppCompatActivity {
     private GestureDetector touchGestureDetector;
 
     private IptvChannel currentChannel;
+    private int channelSwitchDirection = 1;
     private boolean fallbackToLocalProxyAttempted = false;
     private boolean udpxyUnreachableInSession = false;
     private long lastBackPressTimeMs = 0L;
@@ -605,7 +606,7 @@ public class MainActivity extends AppCompatActivity {
             }
         }
         int newCatPos = categoryAdapter.selectAdjacentCategory(delta);
-        scrollCategoryListToCenter(newCatPos);
+        centerCategoryTabAt(newCatPos);
         if (channelAdapter == null || channelAdapter.getItemCount() == 0 || drawerFocusOnCategories) {
             // 当前分类为空或用户原本就在分类栏上移动时，焦点保持在当前频道类型图标上
             focusSelectedCategoryTab();
@@ -726,7 +727,8 @@ public class MainActivity extends AppCompatActivity {
             target = all.get(0);
         }
         if (target != null) {
-            playChannel(target);
+            // 初始启动仅创建当前频道播放器，不创建后台播放器
+            playChannel(target, false);
         }
     }
 
@@ -736,7 +738,7 @@ public class MainActivity extends AppCompatActivity {
     public void playFirstChannel() {
         List<IptvChannel> all = repository.getAllChannels();
         if (!all.isEmpty()) {
-            playChannel(all.get(0));
+            playChannel(all.get(0), false);
             scrollChannelListToCenter(0);
         }
     }
@@ -746,6 +748,13 @@ public class MainActivity extends AppCompatActivity {
     }
 
     public void playChannel(IptvChannel channel) {
+        boolean isChannelSwitch = currentChannel != null
+                && channel != null
+                && !TextUtils.equals(currentChannel.getRawUrl(), channel.getRawUrl());
+        playChannel(channel, isChannelSwitch);
+    }
+
+    public void playChannel(IptvChannel channel, boolean isChannelSwitch) {
         if (channel == null) {
             return;
         }
@@ -770,9 +779,6 @@ public class MainActivity extends AppCompatActivity {
         videoView.setRawChannelUrl(channel.getRawUrl());
         videoView.setVideoPath(resolvedUrl);
         videoView.start();
-
-        // 同步更新另外两个 Player 实例离屏播放【上一个】和【下一个】相邻频道
-        updateOffscreenAdjacentPlayers(channel, localProxyPort);
     }
 
     private String resolveChannelUrl(IptvChannel ch, int localProxyPort) {
@@ -789,9 +795,9 @@ public class MainActivity extends AppCompatActivity {
     }
 
     /**
-     * 三实例级池化调度：计算当前频道的【上一个】与【下一个】频道，交由 IjkVideoView 的另外两个实例在离屏状态播放
+     * 双实例池化调度：按当前切台方向计算【下一个频道】，交由 IjkVideoView 的唯一后台实例 (mBackgroundSlot) 在离屏状态预播放
      */
-    private void updateOffscreenAdjacentPlayers(IptvChannel activeChannel, int localProxyPort) {
+    private void updateBackgroundPlayer(IptvChannel activeChannel, int localProxyPort) {
         if (activeChannel == null || videoView == null) {
             return;
         }
@@ -800,6 +806,7 @@ public class MainActivity extends AppCompatActivity {
             list = repository.getAllChannels();
         }
         if (list == null || list.size() <= 1) {
+            videoView.setBackgroundChannelPath(null, null);
             return;
         }
         int curIdx = -1;
@@ -810,19 +817,12 @@ public class MainActivity extends AppCompatActivity {
             }
         }
         if (curIdx < 0) {
+            videoView.setBackgroundChannelPath(null, null);
             return;
         }
-        int prevIdx = (curIdx - 1 + list.size()) % list.size();
-        int nextIdx = (curIdx + 1) % list.size();
-        IptvChannel prevCh = list.get(prevIdx);
+        int direction = channelSwitchDirection >= 0 ? 1 : -1;
+        int nextIdx = (curIdx + direction + list.size()) % list.size();
         IptvChannel nextCh = list.get(nextIdx);
-
-        String prevResolved = (prevCh != null && !prevCh.getRawUrl().equals(activeChannel.getRawUrl()))
-                ? resolveChannelUrl(prevCh, localProxyPort)
-                : null;
-        String prevRaw = (prevCh != null && !prevCh.getRawUrl().equals(activeChannel.getRawUrl()))
-                ? prevCh.getRawUrl()
-                : null;
 
         String nextResolved = (nextCh != null && !nextCh.getRawUrl().equals(activeChannel.getRawUrl()))
                 ? resolveChannelUrl(nextCh, localProxyPort)
@@ -831,7 +831,7 @@ public class MainActivity extends AppCompatActivity {
                 ? nextCh.getRawUrl()
                 : null;
 
-        videoView.setAdjacentChannelPaths(prevResolved, prevRaw, nextResolved, nextRaw);
+        videoView.setBackgroundChannelPath(nextResolved, nextRaw);
     }
 
     private void updateOsdWithChannel(IptvChannel ch) {
@@ -960,8 +960,9 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
         }
-        int nextIdx = (curIdx + delta + list.size()) % list.size();
-        playChannel(list.get(nextIdx));
+        channelSwitchDirection = delta >= 0 ? 1 : -1;
+        int nextIdx = (curIdx + channelSwitchDirection + list.size()) % list.size();
+        playChannel(list.get(nextIdx), true);
         scrollChannelListToCenter(nextIdx);
     }
 
@@ -980,7 +981,7 @@ public class MainActivity extends AppCompatActivity {
         drawerPanel.setVisibility(View.VISIBLE);
         updateHudButtonsVisualState();
         if (categoryAdapter != null) {
-            scrollCategoryListToCenter(categoryAdapter.getSelectedPosition());
+            centerCategoryTabAt(categoryAdapter.getSelectedPosition());
         }
         if (channelAdapter != null && channelAdapter.getItemCount() > 0) {
             drawerFocusOnCategories = false;
@@ -1024,31 +1025,76 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private void scrollCategoryListToCenter(int position) {
+    public void scrollCategoryListToCenter(int position) {
         if (rvCategories == null || categoryAdapter == null || categoryAdapter.getItemCount() == 0) {
             return;
         }
         int safePos = Math.max(0, Math.min(position, categoryAdapter.getItemCount() - 1));
-        RecyclerView.ViewHolder vh = rvCategories.findViewHolderForAdapterPosition(safePos);
         int rvWidth = rvCategories.getWidth();
+        RecyclerView.LayoutManager lm = rvCategories.getLayoutManager();
+        RecyclerView.ViewHolder vh = rvCategories.findViewHolderForAdapterPosition(safePos);
         if (vh != null && vh.itemView != null && rvWidth > 0) {
+            int itemWidth = vh.itemView.getWidth();
+            if (itemWidth > 0 && lm instanceof LinearLayoutManager) {
+                int centerOffset = (rvWidth - itemWidth) / 2;
+                ((LinearLayoutManager) lm).scrollToPositionWithOffset(safePos, centerOffset);
+                return;
+            }
             int tabCenter = (vh.itemView.getLeft() + vh.itemView.getRight()) / 2;
             int dx = tabCenter - (rvWidth / 2);
-            if (Math.abs(dx) > 2 && !rvCategories.isComputingLayout()) {
+            if (Math.abs(dx) > 1 && !rvCategories.isComputingLayout()) {
                 rvCategories.scrollBy(dx, 0);
             }
             return;
         }
-        RecyclerView.LayoutManager lm = rvCategories.getLayoutManager();
         if (lm instanceof LinearLayoutManager && rvWidth > 0) {
-            int tabWidth = rvCategories.getChildCount() > 0
-                    ? rvCategories.getChildAt(0).getWidth()
-                    : Math.round(92f * getResources().getDisplayMetrics().density);
-            int centerOffset = Math.max(0, (rvWidth - tabWidth) / 2);
+            int tabWidth = estimateCategoryTabWidth(safePos);
+            int centerOffset = (rvWidth - tabWidth) / 2;
             ((LinearLayoutManager) lm).scrollToPositionWithOffset(safePos, centerOffset);
         } else {
             rvCategories.scrollToPosition(safePos);
         }
+    }
+
+    /**
+     * 将指定位置的频道类型标签移动到分类栏中间（无论焦点在分类栏还是频道列表均确保居中）
+     */
+    private void centerCategoryTabAt(final int position) {
+        if (rvCategories == null || categoryAdapter == null || categoryAdapter.getItemCount() == 0) {
+            return;
+        }
+        final int safePos = Math.max(0, Math.min(position, categoryAdapter.getItemCount() - 1));
+        scrollCategoryListToCenter(safePos);
+        rvCategories.post(() -> {
+            scrollCategoryListToCenter(safePos);
+            RecyclerView.ViewHolder vh = rvCategories.findViewHolderForAdapterPosition(safePos);
+            int rvWidth = rvCategories.getWidth();
+            if (vh != null && vh.itemView != null && rvWidth > 0) {
+                int tabCenter = (vh.itemView.getLeft() + vh.itemView.getRight()) / 2;
+                int dx = tabCenter - (rvWidth / 2);
+                if (Math.abs(dx) > 1 && !rvCategories.isComputingLayout()) {
+                    rvCategories.scrollBy(dx, 0);
+                }
+            }
+        });
+    }
+
+    private int estimateCategoryTabWidth(int position) {
+        if (rvCategories != null && rvCategories.getChildCount() > 0) {
+            int sum = 0;
+            int count = 0;
+            for (int i = 0; i < rvCategories.getChildCount(); i++) {
+                int w = rvCategories.getChildAt(i).getWidth();
+                if (w > 0) {
+                    sum += w;
+                    count++;
+                }
+            }
+            if (count > 0) {
+                return sum / count;
+            }
+        }
+        return Math.round(92f * getResources().getDisplayMetrics().density);
     }
 
     private void focusChannelListAt(int position) {
@@ -1088,7 +1134,7 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
         int pos = categoryAdapter.getSelectedPosition();
-        scrollCategoryListToCenter(pos);
+        centerCategoryTabAt(pos);
         RecyclerView.ViewHolder immediateVh = rvCategories.findViewHolderForAdapterPosition(pos);
         if (immediateVh != null && immediateVh.itemView != null) {
             requestFocusCompat(immediateVh.itemView);

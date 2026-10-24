@@ -38,7 +38,8 @@ import java.util.regex.Pattern;
 public class LocalMulticastProxyServer {
     private static final String TAG = "LocalMulticastProxy";
     private static final Pattern PATH_PATTERN = Pattern.compile("/(rtp|udp)/([0-9.]+):(\\d+)");
-    private static final int MAX_CONCURRENT_SESSIONS = 3; // 对应三实例播放器池 (当前播放 + 上一个离屏 + 下一个离屏)
+    // 双实例播放器池（当前频道实例 + 下一个频道后台实例）之外，为硬件伴音旁路预留 1 个连接
+    private static final int MAX_CONCURRENT_SESSIONS = 3;
 
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final List<ActiveSession> activeSessions = new CopyOnWriteArrayList<>();

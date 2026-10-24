@@ -54,7 +54,7 @@ import java.util.Map;
 public class PreloadMediaSource extends BaseMediaSource {
     private static final String TAG = "PreloadMediaSource";
 
-    public static final int MAX_PRELOAD_PERIODS = 3;
+    public static final int MAX_PRELOAD_PERIODS = 1;
     private static final long PRELOAD_TARGET_BUFFER_US = 2_000_000L; // 后台 SampleQueue 预拉取目标时长 2.0s
     private static final int LOADING_CHECK_INTERVAL_BYTES = 2 * 1024 * 1024; // 2MB 检查间隔，保障完整 4K GOP 不中途阻塞
 
@@ -242,9 +242,7 @@ public class PreloadMediaSource extends BaseMediaSource {
 
         public synchronized PreloadedPeriodSlot[] getSlots() {
             return new PreloadedPeriodSlot[]{
-                    activeSlot != null ? activeSlot : new PreloadedPeriodSlot(0),
-                    prevSlot != null ? prevSlot : new PreloadedPeriodSlot(1),
-                    nextSlot != null ? nextSlot : new PreloadedPeriodSlot(2)
+                    activeSlot != null ? activeSlot : new PreloadedPeriodSlot(0)
             };
         }
 

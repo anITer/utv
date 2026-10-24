@@ -62,9 +62,9 @@ import tv.danmaku.ijk.media.player.misc.ITrackInfo;
  * 基于 ExoPlayer 的实例级池化播放器模块 (UTVPlayer)
  *
  * 核心架构特性：
- * 1. 与 IjkPlayer、MediaPlayer 完全一致的 Player 实例级三槽位池化（非全局单例）：
- *    - 由 {@link IjkVideoView} 维护 3 个独立的 {@link UTVPlayer} 实例（mActiveSlot 主屏播放 + mPrevSlot / mNextSlot 离屏静音预热）；
- *    - 切台命中相邻槽位时直接将离屏预热的 UTVPlayer 绑定至主屏 Surface 并恢复音量，实现毫秒级切台；
+ * 1. 与 IjkPlayer、MediaPlayer 完全一致的 Player 实例级双槽位池化（非全局单例）：
+ *    - 由 {@link IjkVideoView} 维护 2 个独立的 {@link UTVPlayer} 实例（mActiveSlot 主屏播放当前频道 + mBackgroundSlot 离屏静音预热下一个频道）；
+ *    - 切台命中后台槽位时直接将离屏预热的 UTVPlayer 绑定至主屏 Surface 并恢复音量，实现毫秒级切台；
  *    - 单个槽位内部重用时，通过自定义 {@link AdaptiveMediaCodecVideoRenderer} 将 MediaFormat 最大宽高固定为 3840x2160，
  *      触发 {@code canReuseCodec() -> REUSE_RESULT_YES_WITH_FLUSH} 直接 {@code codec.flush()} 复用解码器。
  * 2. ijkplayer (libijkffmpeg.so) MP2 音频解码器集成：
@@ -904,7 +904,7 @@ public class UTVPlayer extends AbstractMediaPlayer {
                 : "video/avc");
         boolean preferHw = isHardwareDecodingPreferred(mime, settings);
         boolean activeSw = !preferHw || isSoftwareDecoderName(activeVideoDecoderName);
-        String poolTag = promotedFromPreload ? "三实例离屏秒切" : "三实例池化";
+        String poolTag = "单实例";
         Format af = exoPlayer.getAudioFormat();
         boolean isMp2 = !TextUtils.isEmpty(activeAudioDecoderName)
                 || (af != null && Mp2SoftwareDecoder.isMp2MimeType(af.sampleMimeType));

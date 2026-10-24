@@ -47,16 +47,17 @@ public class StartupSmokeTest {
     }
 
     @Test
-    public void testThreeInstancePlayerPoolAndOffscreenPromotion() {
+    public void testSinglePlayerInstanceStrategyAcrossAllCores() {
         try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class)) {
             MainActivity activity = controller.create().start().resume().visible().get();
             activity.onWindowFocusChanged(true);
 
             IjkVideoView videoView = activity.findViewById(R.id.ijk_video_view);
-            assertEquals(3, IjkVideoView.PLAYER_POOL_SIZE);
-            assertEquals(3, videoView.getPlayerPoolSize());
+            assertEquals(1, IjkVideoView.PLAYER_POOL_SIZE);
+            assertEquals(1, videoView.getPlayerPoolSize());
             assertNotNull(videoView.getPlayerSlots());
-            assertEquals(3, videoView.getPlayerSlots().length);
+            assertEquals(1, videoView.getPlayerSlots().length);
+            assertEquals(null, videoView.getBackgroundSlot());
 
             SurfaceView surfaceView = (SurfaceView) videoView.getChildAt(0);
             ShadowSurfaceView.FakeSurfaceHolder holder = Shadows.shadowOf(surfaceView).getFakeSurfaceHolder();
@@ -67,102 +68,66 @@ public class StartupSmokeTest {
             org.robolectric.shadows.ShadowLooper.runUiThreadTasks();
 
             IjkVideoView.PlayerSlot initialActive = videoView.getActiveSlot();
-            IjkVideoView.PlayerSlot initialPrev = videoView.getPrevSlot();
-            IjkVideoView.PlayerSlot initialNext = videoView.getNextSlot();
             assertNotNull(initialActive);
-            assertNotNull(initialPrev);
-            assertNotNull(initialNext);
-            assertTrue(initialActive != initialPrev);
-            assertTrue(initialActive != initialNext);
-            assertTrue(initialPrev != initialNext);
+            assertNotNull(initialActive.player);
             assertNotNull(initialActive.rawChannelUrl);
-            assertNotNull(initialPrev.rawChannelUrl);
-            assertNotNull(initialNext.rawChannelUrl);
+            assertEquals(null, videoView.getBackgroundSlot());
+            assertTrue(videoView.areOffscreenPlayersStopped());
 
             String initialActiveRawUrl = initialActive.rawChannelUrl;
-            String initialNextRawUrl = initialNext.rawChannelUrl;
 
             // Hide HUD first so DPAD_UP switches to the next channel
             activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK));
             activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BACK));
 
-            // Switch to next channel -> initialNext slot is promoted to activeSlot, and initialActive becomes new prevSlot
+            // Switch to next channel (DPAD_UP) -> reuses the single activeSlot without creating any background player
             activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_UP));
             activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_UP));
 
-            assertSame(initialNext, videoView.getActiveSlot());
-            assertTrue(videoView.isActivePlayerPromotedFromPool());
-            assertEquals(initialNextRawUrl, videoView.getActiveSlot().rawChannelUrl);
-            assertSame(initialActive, videoView.getPrevSlot());
-            assertEquals(initialActiveRawUrl, videoView.getPrevSlot().rawChannelUrl);
+            assertSame(initialActive, videoView.getActiveSlot());
+            assertNotNull(videoView.getActiveSlot().player);
+            assertFalse(initialActiveRawUrl.equals(videoView.getActiveSlot().rawChannelUrl));
+            assertEquals(null, videoView.getBackgroundSlot());
+            assertTrue(videoView.areOffscreenPlayersStopped());
 
-            // Switch back to previous channel -> prevSlot (initialActive) is promoted back to activeSlot
+            // Switch back to previous channel (DPAD_DOWN) -> still reuses the single activeSlot
             activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_DOWN));
             activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_DOWN));
 
             assertSame(initialActive, videoView.getActiveSlot());
-            assertTrue(videoView.isActivePlayerPromotedFromPool());
             assertEquals(initialActiveRawUrl, videoView.getActiveSlot().rawChannelUrl);
-            assertFalse(videoView.areOffscreenPlayersStopped());
-
-            // Advance main looper by 3000ms (OFFSCREEN_IDLE_STOP_MS) without further channel switching:
-            // verify background off-screen players are automatically stopped while active player remains intact
-            org.robolectric.shadows.ShadowLooper.idleMainLooper(3000, java.util.concurrent.TimeUnit.MILLISECONDS);
+            assertEquals(null, videoView.getBackgroundSlot());
             assertTrue(videoView.areOffscreenPlayersStopped());
-            assertEquals(IjkVideoView.STATE_IDLE, videoView.getPrevSlot().state);
-            assertEquals(IjkVideoView.STATE_IDLE, videoView.getNextSlot().state);
-            assertEquals(initialActiveRawUrl, videoView.getActiveSlot().rawChannelUrl);
 
-            // Switch player core to AndroidMediaPlayer (PLAYER_ANDROID_MEDIA) and verify the 3-instance pool
-            // and 3-second idle stop work identically on AndroidMediaPlayer
+            // Switch player core to AndroidMediaPlayer (PLAYER_ANDROID_MEDIA) and verify only 1 instance is used
             com.bjunicom.iptv.config.IptvSettings settings =
                     new com.bjunicom.iptv.config.IptvSettings(activity);
             settings.setPlayerType(com.bjunicom.iptv.config.IptvSettings.PLAYER_ANDROID_MEDIA);
             activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_UP));
             activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_UP));
 
-            for (IjkVideoView.PlayerSlot slot : videoView.getPlayerSlots()) {
-                assertEquals(com.bjunicom.iptv.config.IptvSettings.PLAYER_ANDROID_MEDIA, slot.playerType);
-                assertTrue(slot.player instanceof tv.danmaku.ijk.media.player.AndroidMediaPlayer);
-            }
-            IjkVideoView.PlayerSlot mpActive = videoView.getActiveSlot();
-            IjkVideoView.PlayerSlot mpNext = videoView.getNextSlot();
-            String mpNextRawUrl = mpNext.rawChannelUrl;
+            assertEquals(1, videoView.getPlayerSlots().length);
+            assertEquals(com.bjunicom.iptv.config.IptvSettings.PLAYER_ANDROID_MEDIA, videoView.getActiveSlot().playerType);
+            assertTrue(videoView.getActiveSlot().player instanceof tv.danmaku.ijk.media.player.AndroidMediaPlayer);
+            assertEquals(null, videoView.getBackgroundSlot());
+            assertTrue(videoView.getDecoderName().contains("单实例"));
+            // Verify when AndroidMediaPlayer finishes preparing, TsHardwareAudioCompanion is NOT started (preventing dual audio playback)
+            videoView.checkAndStartHwAudioIfNeeded();
+            assertFalse(videoView.isHwAudioCompanionRunning());
 
-            // Switch to next channel on AndroidMediaPlayer -> mpNext is promoted to activeSlot
-            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_UP));
-            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_UP));
-            assertSame(mpNext, videoView.getActiveSlot());
-            assertTrue(videoView.isActivePlayerPromotedFromPool());
-            assertEquals(mpNextRawUrl, videoView.getActiveSlot().rawChannelUrl);
-            assertSame(mpActive, videoView.getPrevSlot());
-            assertTrue(videoView.getDecoderName().contains("三实例离屏秒切"));
-
-            // Advance 3000ms -> off-screen AndroidMediaPlayer instances are stopped automatically
-            org.robolectric.shadows.ShadowLooper.idleMainLooper(3000, java.util.concurrent.TimeUnit.MILLISECONDS);
-            assertTrue(videoView.areOffscreenPlayersStopped());
-
-            // Switch player core to UTVPlayer (PLAYER_UTV) and verify the 3-instance player-level pool
-            // (non-singleton: 3 independent UTVPlayer instances in mPlayerSlots) works identically to IjkPlayer and MediaPlayer
+            // Switch player core to UTVPlayer (PLAYER_UTV) and verify only 1 UTVPlayer instance is used and reused across channel switches
             settings.setPlayerType(com.bjunicom.iptv.config.IptvSettings.PLAYER_UTV);
             activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_UP));
             activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_UP));
 
-            for (IjkVideoView.PlayerSlot slot : videoView.getPlayerSlots()) {
-                assertEquals(com.bjunicom.iptv.config.IptvSettings.PLAYER_UTV, slot.playerType);
-                assertTrue(slot.player instanceof com.bjunicom.iptv.player.UTVPlayer);
-            }
-            IjkVideoView.PlayerSlot utvActive = videoView.getActiveSlot();
-            IjkVideoView.PlayerSlot utvPrev = videoView.getPrevSlot();
-            IjkVideoView.PlayerSlot utvNext = videoView.getNextSlot();
-            assertTrue(utvActive.player != utvPrev.player);
-            assertTrue(utvActive.player != utvNext.player);
-            assertTrue(utvPrev.player != utvNext.player);
-            String utvNextRawUrl = utvNext.rawChannelUrl;
+            assertEquals(1, videoView.getPlayerSlots().length);
+            assertEquals(com.bjunicom.iptv.config.IptvSettings.PLAYER_UTV, videoView.getActiveSlot().playerType);
+            assertTrue(videoView.getActiveSlot().player instanceof com.bjunicom.iptv.player.UTVPlayer);
+            assertEquals(null, videoView.getBackgroundSlot());
 
             com.bjunicom.iptv.player.UTVPlayer utvPlayer = videoView.getUtvPlayer();
             assertNotNull(utvPlayer);
-            assertSame(utvActive.player, utvPlayer);
+            assertSame(videoView.getActiveSlot().player, utvPlayer);
             assertNotNull(utvPlayer.getExoPlayer());
 
             // Verify TsExtractor factory returns a single TsExtractor (skipping sniff() in BundledExtractorsAdapter)
@@ -180,16 +145,12 @@ public class StartupSmokeTest {
             }
             assertEquals(17, com.bjunicom.iptv.player.UTVStreamDataSource.findTsSyncOffset(unalignedTs, unalignedTs.length));
 
-            // Switch to next channel on UTVPlayer -> utvNext slot is promoted to activeSlot, and utvActive becomes new prevSlot
+            // Switch to next channel on UTVPlayer -> reuses the same single UTVPlayer instance in mActiveSlot
             activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_UP));
             activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_UP));
-            assertSame(utvNext, videoView.getActiveSlot());
-            assertTrue(videoView.isActivePlayerPromotedFromPool());
-            assertEquals(utvNextRawUrl, videoView.getActiveSlot().rawChannelUrl);
-            assertSame(utvActive, videoView.getPrevSlot());
-            utvPlayer = videoView.getUtvPlayer();
-            assertTrue(utvPlayer.isPromotedFromPreload());
-            assertTrue(videoView.getDecoderName().contains("三实例离屏秒切"));
+            assertSame(utvPlayer, videoView.getUtvPlayer());
+            assertEquals(null, videoView.getBackgroundSlot());
+            assertTrue(videoView.getDecoderName().contains("单实例"));
 
             // Verify AdaptiveMediaCodecVideoRenderer.canReuseCodec() returns REUSE_RESULT_YES_WITH_FLUSH across CCTV-1 -> CCTV-2
             com.bjunicom.iptv.player.UTVPlayer.AdaptiveMediaCodecVideoRenderer adaptiveRenderer =
@@ -288,12 +249,8 @@ public class StartupSmokeTest {
                 cb.surfaceDestroyed(holder);
             }
             assertTrue(utvPlayer.isAttachedToPlaceholderSurface());
-
-            // Advance 3000ms -> off-screen UTVPlayer instances are stopped automatically
-            org.robolectric.shadows.ShadowLooper.idleMainLooper(3000, java.util.concurrent.TimeUnit.MILLISECONDS);
             assertTrue(videoView.areOffscreenPlayersStopped());
-            assertEquals(IjkVideoView.STATE_IDLE, videoView.getPrevSlot().state);
-            assertEquals(IjkVideoView.STATE_IDLE, videoView.getNextSlot().state);
+            assertEquals(null, videoView.getBackgroundSlot());
 
             // Verify player settings dialog has the three options: IjkPlayer, ExoPlayer, MediaPlayer
             android.view.View settingsView = android.view.LayoutInflater.from(activity)
@@ -424,6 +381,10 @@ public class StartupSmokeTest {
             assertEquals(android.view.View.GONE, activity.findViewById(R.id.player_hud_overlay).getVisibility());
 
             androidx.recyclerview.widget.RecyclerView rvCategories = activity.findViewById(R.id.rv_categories);
+            rvCategories.measure(
+                    android.view.View.MeasureSpec.makeMeasureSpec(420, android.view.View.MeasureSpec.EXACTLY),
+                    android.view.View.MeasureSpec.makeMeasureSpec(48, android.view.View.MeasureSpec.EXACTLY));
+            rvCategories.layout(0, 0, 420, 48);
             com.bjunicom.iptv.ui.adapter.CategoryAdapter adapter =
                     (com.bjunicom.iptv.ui.adapter.CategoryAdapter) rvCategories.getAdapter();
             assertNotNull(adapter);
@@ -436,9 +397,15 @@ public class StartupSmokeTest {
                 activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_RIGHT));
                 activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_RIGHT));
                 org.robolectric.shadows.ShadowLooper.runUiThreadTasks();
-                assertEquals(step % totalCategories, adapter.getSelectedPosition());
+                int expectedPos = step % totalCategories;
+                assertEquals(expectedPos, adapter.getSelectedPosition());
                 // Focus must never drift to the top search EditText when switching to an empty category
                 assertFalse(activity.findViewById(R.id.et_search_channel).hasFocus());
+                androidx.recyclerview.widget.RecyclerView.ViewHolder vh =
+                        rvCategories.findViewHolderForAdapterPosition(expectedPos);
+                if (vh != null && vh.itemView != null) {
+                    assertTrue(vh.itemView.findViewById(R.id.tv_category_name).isSelected());
+                }
             }
 
             // Continuously press DPAD_LEFT across all categories and wrap around backwards twice

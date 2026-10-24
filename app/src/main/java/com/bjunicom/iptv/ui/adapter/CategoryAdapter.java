@@ -178,6 +178,10 @@ public class CategoryAdapter extends RecyclerView.Adapter<CategoryAdapter.ViewHo
         });
     }
 
+    public void selectCategoryAtPosition(int position) {
+        selectCategoryAt(position);
+    }
+
     private void selectCategoryAt(int position) {
         if (position < 0 || position >= categories.size()) {
             return;
@@ -187,6 +191,17 @@ public class CategoryAdapter extends RecyclerView.Adapter<CategoryAdapter.ViewHo
         updateSelectionVisuals();
         if (listener != null) {
             listener.onCategorySelected(cat, position);
+        }
+        if (attachedRecyclerView != null) {
+            final int targetPos = position;
+            attachedRecyclerView.post(() -> {
+                if (attachedRecyclerView != null) {
+                    RecyclerView.ViewHolder vh = attachedRecyclerView.findViewHolderForAdapterPosition(targetPos);
+                    if (vh != null && vh.itemView != null) {
+                        centerTabInRecyclerView(vh.itemView);
+                    }
+                }
+            });
         }
     }
 

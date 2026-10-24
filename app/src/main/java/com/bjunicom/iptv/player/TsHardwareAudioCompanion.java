@@ -45,6 +45,10 @@ public class TsHardwareAudioCompanion {
         return activeCodecLabel;
     }
 
+    public boolean isRunning() {
+        return running;
+    }
+
     public synchronized void start(final Uri playbackUri, final String rawChannelUrl) {
         stop();
         if (playbackUri == null) {
