@@ -25,10 +25,11 @@ import java.util.regex.Pattern;
 /**
  * UTVPlayer 专用混合流数据源 (UTVStreamDataSource)
  *
- * 供 PreloadMediaSource 的 3 个 ProgressiveMediaPeriod 拉流并写入各自的 SampleQueue：
- * 1. 支持 rtp:// 与 udp:// 原生 IGMP 组播直连（自动按组播地址过滤绑定、加入 IPTV 网卡组播组并剥离 12B RTP 头）；
- * 2. 支持 http:// 与 https:// (udpxy / 本地代理 / HLS)，当外部 udpxy 不可达时自动回退至原生 IGMP 组播；
- * 3. 统计实时网络拉流吞吐率供 HUD 展示。
+ * 供 PreloadMediaSource 的 ProgressiveMediaPeriod 拉流并写入各自的 SampleQueue：
+ * 1. 支持 rtp://、udp:// 以及本地组播网关地址 (127.0.0.1/rtp/...) 直接通过原生 IGMP MulticastSocket 拉流（自动剥离 12B RTP 头）；
+ * 2. 支持 http:// 与 https:// (路由器 udpxy / HLS)，当外部 udpxy 连接失败或首包读取超时/空流时，自动无缝回退至原生 IGMP 组播；
+ * 3. 首次连接 HTTP-TS 流时自动执行 188B (0x47) 同步对齐；
+ * 4. 统计实时网络拉流吞吐率供 HUD 展示。
  */
 public class UTVStreamDataSource extends BaseDataSource {
     private static final Pattern MCAST_URI_PATTERN = Pattern.compile("(?:rtp|udp)://@?([0-9.]+):(\\d+)");
@@ -44,7 +45,7 @@ public class UTVStreamDataSource extends BaseDataSource {
             this.httpFactory = new DefaultHttpDataSource.Factory()
                     .setUserAgent("uTV-ExoPlayer/2.19.1")
                     .setConnectTimeoutMs(2500)
-                    .setReadTimeoutMs(4000)
+                    .setReadTimeoutMs(3500)
                     .setAllowCrossProtocolRedirects(true);
         }
 
@@ -56,8 +57,10 @@ public class UTVStreamDataSource extends BaseDataSource {
 
     private final DefaultHttpDataSource httpDataSource;
     private Uri currentUri;
+    private String fallbackMulticastTarget;
     private boolean opened = false;
     private boolean usingMulticast = false;
+    private boolean needsInitialTsSync = false;
 
     private MulticastSocket multicastSocket;
     private InetAddress multicastGroup;
@@ -66,6 +69,7 @@ public class UTVStreamDataSource extends BaseDataSource {
 
     private final byte[] udpPacketBuffer = new byte[2048];
     private final DatagramPacket datagramPacket = new DatagramPacket(udpPacketBuffer, udpPacketBuffer.length);
+    private final byte[] initialSyncBuffer = new byte[188 * 12];
     private int remainingPayloadOffset = 0;
     private int remainingPayloadLength = 0;
 
@@ -92,10 +96,18 @@ public class UTVStreamDataSource extends BaseDataSource {
         String uriStr = currentUri != null ? currentUri.toString() : "";
         String scheme = currentUri != null ? currentUri.getScheme() : "";
         String mcastIpPort = extractMulticastTarget(uriStr);
+        this.fallbackMulticastTarget = mcastIpPort;
+        boolean isHlsOrDash = uriStr.contains(".m3u8") || uriStr.contains(".mpd");
+        boolean isLocalLoopback = uriStr.startsWith("http://127.0.0.1:");
 
-        if ("rtp".equalsIgnoreCase(scheme) || "udp".equalsIgnoreCase(scheme)) {
+        // 若为 rtp://、udp:// 或本地 127.0.0.1 组播代理地址，直接使用原生 MulticastSocket 加入 IGMP 组播组并剥离 RTP 头，
+        // 省去本地 TCP 环回开销并避免多连接代理会话抢占
+        if ("rtp".equalsIgnoreCase(scheme)
+                || "udp".equalsIgnoreCase(scheme)
+                || (isLocalLoopback && !TextUtils.isEmpty(mcastIpPort))) {
             openMulticastSocket(mcastIpPort);
             usingMulticast = true;
+            needsInitialTsSync = false;
             opened = true;
             windowStartMs = System.currentTimeMillis();
             windowBytes = 0L;
@@ -106,6 +118,9 @@ public class UTVStreamDataSource extends BaseDataSource {
         try {
             long len = httpDataSource.open(dataSpec);
             usingMulticast = false;
+            needsInitialTsSync = !isHlsOrDash && !TextUtils.isEmpty(mcastIpPort);
+            remainingPayloadOffset = 0;
+            remainingPayloadLength = 0;
             opened = true;
             windowStartMs = System.currentTimeMillis();
             windowBytes = 0L;
@@ -115,6 +130,7 @@ public class UTVStreamDataSource extends BaseDataSource {
             if (!TextUtils.isEmpty(mcastIpPort)) {
                 openMulticastSocket(mcastIpPort);
                 usingMulticast = true;
+                needsInitialTsSync = false;
                 opened = true;
                 windowStartMs = System.currentTimeMillis();
                 windowBytes = 0L;
@@ -152,6 +168,65 @@ public class UTVStreamDataSource extends BaseDataSource {
             return 0;
         }
         if (!usingMulticast) {
+            if (remainingPayloadLength > 0) {
+                int toCopy = Math.min(length, remainingPayloadLength);
+                System.arraycopy(initialSyncBuffer, remainingPayloadOffset, buffer, offset, toCopy);
+                remainingPayloadOffset += toCopy;
+                remainingPayloadLength -= toCopy;
+                recordBytes(toCopy);
+                bytesTransferred(toCopy);
+                return toCopy;
+            }
+            if (needsInitialTsSync) {
+                needsInitialTsSync = false;
+                int totalRead = 0;
+                try {
+                    while (totalRead < 188 * 6) {
+                        int r = httpDataSource.read(
+                                initialSyncBuffer,
+                                totalRead,
+                                initialSyncBuffer.length - totalRead);
+                        if (r < 0) {
+                            break;
+                        }
+                        totalRead += r;
+                    }
+                } catch (IOException readEx) {
+                    if (totalRead == 0 && !TextUtils.isEmpty(fallbackMulticastTarget)) {
+                        // udpxy 虽然返回了 HTTP 200 OK 头，但读取首包超时：立即无缝切换至原生 IGMP 组播直连
+                        try {
+                            httpDataSource.close();
+                        } catch (Exception ignored) {
+                        }
+                        openMulticastSocket(fallbackMulticastTarget);
+                        usingMulticast = true;
+                        return readFromMulticast(buffer, offset, length);
+                    }
+                    throw readEx;
+                }
+                if (totalRead == 0) {
+                    if (!TextUtils.isEmpty(fallbackMulticastTarget)) {
+                        try {
+                            httpDataSource.close();
+                        } catch (Exception ignored) {
+                        }
+                        openMulticastSocket(fallbackMulticastTarget);
+                        usingMulticast = true;
+                        return readFromMulticast(buffer, offset, length);
+                    }
+                    return C.RESULT_END_OF_INPUT;
+                }
+                int syncPos = findTsSyncOffset(initialSyncBuffer, totalRead);
+                remainingPayloadOffset = syncPos;
+                remainingPayloadLength = totalRead - syncPos;
+                int toCopy = Math.min(length, remainingPayloadLength);
+                System.arraycopy(initialSyncBuffer, remainingPayloadOffset, buffer, offset, toCopy);
+                remainingPayloadOffset += toCopy;
+                remainingPayloadLength -= toCopy;
+                recordBytes(toCopy);
+                bytesTransferred(toCopy);
+                return toCopy;
+            }
             int n = httpDataSource.read(buffer, offset, length);
             if (n > 0) {
                 recordBytes(n);
@@ -160,6 +235,10 @@ public class UTVStreamDataSource extends BaseDataSource {
             return n;
         }
 
+        return readFromMulticast(buffer, offset, length);
+    }
+
+    private int readFromMulticast(byte[] buffer, int offset, int length) throws IOException {
         if (remainingPayloadLength <= 0) {
             if (multicastSocket == null) {
                 return C.RESULT_END_OF_INPUT;
@@ -207,6 +286,26 @@ public class UTVStreamDataSource extends BaseDataSource {
         return toCopy;
     }
 
+    public static int findTsSyncOffset(byte[] buf, int totalLen) {
+        for (int i = 0; i < Math.min(188, totalLen); i++) {
+            if ((buf[i] & 0xFF) != 0x47) {
+                continue;
+            }
+            boolean match = true;
+            for (int p = 1; p < 5; p++) {
+                int idx = i + p * 188;
+                if (idx < totalLen && (buf[idx] & 0xFF) != 0x47) {
+                    match = false;
+                    break;
+                }
+            }
+            if (match) {
+                return i;
+            }
+        }
+        return 0;
+    }
+
     private void recordBytes(int bytes) {
         long now = System.currentTimeMillis();
         windowBytes += bytes;
@@ -243,6 +342,7 @@ public class UTVStreamDataSource extends BaseDataSource {
                 multicastGroup = null;
                 remainingPayloadLength = 0;
             } else {
+                remainingPayloadLength = 0;
                 httpDataSource.close();
             }
         } finally {

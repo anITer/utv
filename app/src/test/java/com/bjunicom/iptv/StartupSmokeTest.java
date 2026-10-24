@@ -154,6 +154,21 @@ public class StartupSmokeTest {
             assertEquals(3, utvPlayer.getPreloadPool().getSlots().length);
             assertEquals(3, utvPlayer.getPreloadPool().getActiveProgressiveMediaPeriods().size());
 
+            // Verify TsExtractor factory returns a single TsExtractor (skipping sniff() in BundledExtractorsAdapter)
+            // and filters private stream_type=0x06 while using TimestampAdjuster(0L)
+            com.google.android.exoplayer2.extractor.Extractor[] extractors =
+                    com.bjunicom.iptv.player.PreloadMediaSource.PreloadPool.createIptvTsExtractorsFactory()
+                            .createExtractors(android.net.Uri.parse("http://192.168.2.1:8012/rtp/239.3.1.129:8008"), java.util.Collections.emptyMap());
+            assertEquals(1, extractors.length);
+            assertTrue(extractors[0] instanceof com.google.android.exoplayer2.extractor.ts.TsExtractor);
+
+            // Verify UTVStreamDataSource 188B TS sync alignment helper
+            byte[] unalignedTs = new byte[17 + 188 * 5];
+            for (int p = 0; p < 5; p++) {
+                unalignedTs[17 + p * 188] = 0x47;
+            }
+            assertEquals(17, com.bjunicom.iptv.player.UTVStreamDataSource.findTsSyncOffset(unalignedTs, unalignedTs.length));
+
             // Switch to next channel on UTVPlayer -> preloaded ProgressiveMediaPeriod is promoted on the same single ExoPlayer instance
             activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_UP));
             activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_UP));
@@ -500,14 +515,14 @@ public class StartupSmokeTest {
     public void testAppUpdateManagerVersionComparisonAndReleaseParsing() {
         try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class)) {
             MainActivity activity = controller.create().get();
-            assertEquals("1.2.0", com.bjunicom.iptv.update.AppUpdateManager.getCurrentVersionName(activity));
+            assertEquals("1.2.1", com.bjunicom.iptv.update.AppUpdateManager.getCurrentVersionName(activity));
         }
-        assertEquals("1.2.0", com.bjunicom.iptv.update.AppUpdateManager.CURRENT_VERSION_NAME);
-        assertTrue(com.bjunicom.iptv.update.AppUpdateManager.isNewerVersion("v1.3.0", "1.2.0"));
-        assertTrue(com.bjunicom.iptv.update.AppUpdateManager.isNewerVersion("1.2.1", "1.2.0"));
+        assertEquals("1.2.1", com.bjunicom.iptv.update.AppUpdateManager.CURRENT_VERSION_NAME);
+        assertTrue(com.bjunicom.iptv.update.AppUpdateManager.isNewerVersion("v1.3.0", "1.2.1"));
+        assertTrue(com.bjunicom.iptv.update.AppUpdateManager.isNewerVersion("1.2.2", "1.2.1"));
         assertTrue(com.bjunicom.iptv.update.AppUpdateManager.isNewerVersion("2.0", "1.9.9"));
-        assertFalse(com.bjunicom.iptv.update.AppUpdateManager.isNewerVersion("1.2.0", "1.2.0"));
-        assertFalse(com.bjunicom.iptv.update.AppUpdateManager.isNewerVersion("v1.1.0", "1.2.0"));
+        assertFalse(com.bjunicom.iptv.update.AppUpdateManager.isNewerVersion("1.2.1", "1.2.1"));
+        assertFalse(com.bjunicom.iptv.update.AppUpdateManager.isNewerVersion("v1.2.0", "1.2.1"));
 
         String sampleApiJson = "[\n" +
                 "  {\n" +
@@ -537,5 +552,74 @@ public class StartupSmokeTest {
         assertNotNull(htmlInfo);
         assertEquals("1.3.0", htmlInfo.versionName);
         assertEquals("https://github.com/anITer/utv/releases/download/v1.3.0/bj-unicom-iptv-release-signed.apk", htmlInfo.apkDownloadUrl);
+    }
+
+    @Test
+    public void testMp2AudioSoftwareFallbackDecoderAndRenderer() throws Exception {
+        // 1. Construct a valid MPEG-1 Layer II (MP2) 192kbps 48kHz Stereo frame (576 bytes):
+        // Sync=0xFFF, ID=1(MPEG-1), Layer=10(Layer II), Protection=1(no CRC),
+        // BitrateIdx=10(192kbps), SampleRateIdx=1(48000Hz), Padding=0, Mode=00(Stereo) -> 0xFFFDa400
+        int headerInt = 0xFFFDA400;
+        com.bjunicom.iptv.player.Mp2SoftwareDecoder.FrameHeader hdr =
+                com.bjunicom.iptv.player.Mp2SoftwareDecoder.parseHeader(headerInt);
+        assertNotNull(hdr);
+        assertEquals(2, hdr.layer);
+        assertFalse(hdr.lsf);
+        assertEquals(48000, hdr.sampleRate);
+        assertEquals(192, hdr.bitrateKbps);
+        assertEquals(2, hdr.channels);
+        assertEquals(576, hdr.frameSize);
+
+        byte[] mp2Frame = new byte[576];
+        mp2Frame[0] = (byte) 0xFF;
+        mp2Frame[1] = (byte) 0xFD;
+        mp2Frame[2] = (byte) 0xA4;
+        mp2Frame[3] = (byte) 0x00;
+        // Set subband 0 left/right bit allocation index = 1 (stepIdx=2 -> 3 bits/sample) and non-zero samples
+        mp2Frame[4] = (byte) 0x11;
+        for (int i = 16; i < 120; i++) {
+            mp2Frame[i] = (byte) 0x5A;
+        }
+
+        com.bjunicom.iptv.player.Mp2SoftwareDecoder.Mp2Decoder decoder =
+                new com.bjunicom.iptv.player.Mp2SoftwareDecoder.Mp2Decoder();
+        byte[] pcm = decoder.decodeStreamChunk(mp2Frame, 0, mp2Frame.length);
+        assertNotNull(pcm);
+        // 1152 samples * 2 channels * 2 bytes (16-bit PCM) = 4608 bytes
+        assertEquals(1152 * 2 * 2, pcm.length);
+        assertEquals(48000, decoder.getSampleRate());
+        assertEquals(2, decoder.getChannelCount());
+
+        // 2. Verify UTVPlayer registers Mp2DecoderAudioRenderer and supports audio/mpeg-L2
+        try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class)) {
+            MainActivity activity = controller.create().get();
+            com.bjunicom.iptv.player.UTVPlayer utvPlayer =
+                    com.bjunicom.iptv.player.UTVPlayer.getSharedInstance(activity);
+            com.bjunicom.iptv.player.UTVPlayer.UTVRenderersFactory rf =
+                    new com.bjunicom.iptv.player.UTVPlayer.UTVRenderersFactory(activity, utvPlayer);
+            com.google.android.exoplayer2.Renderer[] renderers = rf.createRenderers(
+                    new android.os.Handler(android.os.Looper.getMainLooper()),
+                    new com.google.android.exoplayer2.video.VideoRendererEventListener() {},
+                    new com.google.android.exoplayer2.audio.AudioRendererEventListener() {},
+                    cues -> {},
+                    metadata -> {});
+            com.bjunicom.iptv.player.UTVPlayer.Mp2DecoderAudioRenderer mp2Renderer = null;
+            for (com.google.android.exoplayer2.Renderer r : renderers) {
+                if (r instanceof com.bjunicom.iptv.player.UTVPlayer.Mp2DecoderAudioRenderer) {
+                    mp2Renderer = (com.bjunicom.iptv.player.UTVPlayer.Mp2DecoderAudioRenderer) r;
+                    break;
+                }
+            }
+            assertNotNull(mp2Renderer);
+            com.google.android.exoplayer2.Format mp2Format = new com.google.android.exoplayer2.Format.Builder()
+                    .setSampleMimeType(com.google.android.exoplayer2.util.MimeTypes.AUDIO_MPEG_L2)
+                    .setSampleRate(48000)
+                    .setChannelCount(2)
+                    .build();
+            int support = mp2Renderer.supportsFormat(mp2Format);
+            assertEquals(com.google.android.exoplayer2.C.FORMAT_HANDLED,
+                    com.google.android.exoplayer2.RendererCapabilities.getFormatSupport(support));
+            utvPlayer.releaseGlobalInstance();
+        }
     }
 }

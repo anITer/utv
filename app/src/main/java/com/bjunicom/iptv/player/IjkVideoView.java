@@ -21,6 +21,7 @@ import com.bjunicom.iptv.IptvApplication;
 import com.bjunicom.iptv.config.IptvSettings;
 import com.bjunicom.iptv.network.StreamUrlResolver;
 
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
@@ -1511,11 +1512,63 @@ public class IjkVideoView extends FrameLayout {
                 } else {
                     mHwAudioCompanion.stop();
                 }
+            } else if (mp instanceof AndroidMediaPlayer) {
+                if (needsCompanionAudioForAndroidMediaPlayer((AndroidMediaPlayer) mp)) {
+                    mHwAudioCompanion.start(mUri, mRawChannelUrl);
+                } else {
+                    mHwAudioCompanion.stop();
+                }
             } else {
                 mHwAudioCompanion.stop();
             }
         } catch (Throwable t) {
             Log.w(TAG, "checkAndStartHwAudioIfNeeded failed", t);
+        }
+    }
+
+    /**
+     * 检查 AndroidMediaPlayer 当前播放的 MPEG-TS 流是否包含系统不支持硬解的 MP2 (audio/mpeg-L2) 音频轨道：
+     * 若系统无原生 audio/mpeg-L2 解码器，则启动 TsHardwareAudioCompanion 的 MP2 软解伴音，保持视频继续走系统硬解。
+     */
+    private boolean needsCompanionAudioForAndroidMediaPlayer(AndroidMediaPlayer amp) {
+        if (hasSystemAudioDecoderForMime(Mp2SoftwareDecoder.MIME_AUDIO_MPEG_L2)) {
+            return false;
+        }
+        try {
+            ITrackInfo[] tracks = amp.getTrackInfo();
+            if (tracks != null) {
+                boolean hasSupportedAudio = false;
+                for (ITrackInfo t : tracks) {
+                    if (t != null && t.getTrackType() == ITrackInfo.MEDIA_TRACK_TYPE_AUDIO) {
+                        IMediaFormat fmt = t.getFormat();
+                        String mime = fmt != null ? fmt.getString(IMediaFormat.KEY_MIME) : null;
+                        if (Mp2SoftwareDecoder.isMp2MimeType(mime)) {
+                            return true;
+                        }
+                        if (!TextUtils.isEmpty(mime) && !"unknown".equalsIgnoreCase(mime)) {
+                            hasSupportedAudio = true;
+                        }
+                    }
+                }
+                if (hasSupportedAudio) {
+                    return false;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        // 对于组播 MPEG-TS 流（如 rtp:// / udp://），若系统 MediaPlayer 未报告可用音轨且系统无 MP2 解码器，开启伴音软解兜底
+        return !isHlsUri(mUri) && (!TextUtils.isEmpty(mRawChannelUrl)
+                && (mRawChannelUrl.startsWith("rtp://") || mRawChannelUrl.startsWith("udp://")));
+    }
+
+    private static boolean hasSystemAudioDecoderForMime(String mimeType) {
+        try {
+            List< com.google.android.exoplayer2.mediacodec.MediaCodecInfo > infos =
+                    com.google.android.exoplayer2.mediacodec.MediaCodecSelector.DEFAULT
+                            .getDecoderInfos(mimeType, false, false);
+            return infos != null && !infos.isEmpty();
+        } catch (Throwable ignored) {
+            return false;
         }
     }
 

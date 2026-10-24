@@ -418,6 +418,7 @@ public class TsHardwareAudioCompanion {
 
         boolean initialized = false;
         MediaCodec codec = null;
+        Mp2SoftwareDecoder.Mp2Decoder swMp2Decoder = null;
         AudioTrack audioTrack = null;
         boolean passthroughMode = false;
         int sampleRate = 48000;
@@ -433,29 +434,37 @@ public class TsHardwareAudioCompanion {
             if (mimeType == null) {
                 return;
             }
-            String[] candidateMimes = "audio/mpeg-L2".equals(mimeType)
-                    ? new String[]{"audio/mpeg-L2", MediaFormat.MIMETYPE_AUDIO_MPEG}
-                    : new String[]{mimeType};
+            // 注意：绝不能将 audio/mpeg-L2 (MP2) 回退给 MediaFormat.MIMETYPE_AUDIO_MPEG (MP3 MediaCodec)！
+            // 先尝试查询是否存在真正的 audio/mpeg-L2 硬件/系统 MediaCodec；若无，则直接回退至内置 Mp2SoftwareDecoder 纯软解。
+            try {
+                MediaFormat format = MediaFormat.createAudioFormat(mimeType, 48000, 2);
+                MediaCodec mc = MediaCodec.createDecoderByType(mimeType);
+                mc.configure(format, null, null, 0);
+                mc.start();
+                this.codec = mc;
+                this.audioTrack = createPcmAudioTrack(48000, 2);
+                this.passthroughMode = false;
+                activeCodecLabel = mimeType + " (硬件伴音)";
+                return;
+            } catch (Throwable t) {
+                if (this.codec != null) {
+                    try {
+                        this.codec.release();
+                    } catch (Throwable ignored) {
+                    }
+                    this.codec = null;
+                }
+            }
 
-            for (String candidate : candidateMimes) {
+            if (Mp2SoftwareDecoder.isMp2MimeType(mimeType)) {
                 try {
-                    MediaFormat format = MediaFormat.createAudioFormat(candidate, 48000, 2);
-                    MediaCodec mc = MediaCodec.createDecoderByType(candidate);
-                    mc.configure(format, null, null, 0);
-                    mc.start();
-                    this.codec = mc;
+                    this.swMp2Decoder = new Mp2SoftwareDecoder.Mp2Decoder();
                     this.audioTrack = createPcmAudioTrack(48000, 2);
                     this.passthroughMode = false;
-                    activeCodecLabel = candidate + " (硬件伴音)";
+                    activeCodecLabel = "MP2 (软解伴音)";
                     return;
                 } catch (Throwable t) {
-                    if (this.codec != null) {
-                        try {
-                            this.codec.release();
-                        } catch (Throwable ignored) {
-                        }
-                        this.codec = null;
-                    }
+                    Log.w(TAG, "Failed to init MP2 software audio companion: " + t.getMessage());
                 }
             }
 
@@ -480,6 +489,34 @@ public class TsHardwareAudioCompanion {
             }
             if (passthroughMode && audioTrack != null) {
                 audioTrack.write(data, offset, length);
+                return;
+            }
+            if (swMp2Decoder != null) {
+                try {
+                    byte[] pcm = swMp2Decoder.decodeStreamChunk(data, offset, length);
+                    if (pcm != null && pcm.length > 0) {
+                        int sr = swMp2Decoder.getSampleRate() > 0 ? swMp2Decoder.getSampleRate() : 48000;
+                        int ch = swMp2Decoder.getChannelCount() > 0
+                                ? Math.min(2, Math.max(1, swMp2Decoder.getChannelCount())) : 2;
+                        if (sr != sampleRate || ch != channelCount || audioTrack == null) {
+                            if (audioTrack != null) {
+                                try {
+                                    audioTrack.stop();
+                                    audioTrack.release();
+                                } catch (Throwable ignored) {
+                                }
+                            }
+                            sampleRate = sr;
+                            channelCount = ch;
+                            audioTrack = createPcmAudioTrack(sr, ch);
+                        }
+                        if (audioTrack != null) {
+                            audioTrack.write(pcm, 0, pcm.length);
+                        }
+                    }
+                } catch (Throwable t) {
+                    Log.w(TAG, "MP2 software decode error: " + t.getMessage());
+                }
                 return;
             }
             if (codec == null) {
@@ -539,6 +576,10 @@ public class TsHardwareAudioCompanion {
         }
 
         void releaseNow() {
+            if (swMp2Decoder != null) {
+                swMp2Decoder.reset();
+                swMp2Decoder = null;
+            }
             if (codec != null) {
                 try {
                     codec.stop();

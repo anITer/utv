@@ -181,17 +181,27 @@ public class LocalMulticastProxyServer {
             String groupKey = mcastIp + ":" + mcastPort;
 
             synchronized (sessionGateLock) {
-                // 清理已断开或相同组播地址的旧连接，并保持最多 MAX_CONCURRENT_SESSIONS (3) 路并发组播流
+                // 清理已断开的旧连接，并保持最多 MAX_CONCURRENT_SESSIONS 路并发连接
                 for (ActiveSession session : activeSessions) {
-                    if (session.client.isClosed() || groupKey.equals(session.groupKey)) {
+                    if (session.client.isClosed() || !session.client.isConnected()) {
                         activeSessions.remove(session);
                         session.closeQuietly();
                     }
                 }
                 while (activeSessions.size() >= MAX_CONCURRENT_SESSIONS) {
-                    ActiveSession oldest = activeSessions.remove(0);
-                    if (oldest != null) {
-                        oldest.closeQuietly();
+                    ActiveSession toEvict = null;
+                    for (ActiveSession s : activeSessions) {
+                        if (!groupKey.equals(s.groupKey)) {
+                            toEvict = s;
+                            break;
+                        }
+                    }
+                    if (toEvict == null) {
+                        toEvict = activeSessions.get(0);
+                    }
+                    activeSessions.remove(toEvict);
+                    if (toEvict != null) {
+                        toEvict.closeQuietly();
                     }
                 }
 
@@ -293,19 +303,12 @@ public class LocalMulticastProxyServer {
     }
 
     /**
-     * 优先将 MulticastSocket 绑定到具体的组播地址 (groupAddr:mcastPort)：
-     * 在 Linux/Android 内核中，绑定具体组播 IP 可在内核层直接过滤掉同端口其它组播组的报文（规避 IP_MULTICAST_ALL=1 引起的同端口串流）；
-     * 若宿主内核不支持绑定组播 IP，则平滑回退至绑定通配端口 (0.0.0.0:mcastPort)。
+     * 统一将 MulticastSocket 绑定到通配地址端口 (0.0.0.0:mcastPort)：
+     * 在 Android TV / 机顶盒内核中，绑定具体组播 IP 虽然不抛异常但会导致内核收不到任何组播包，
+     * 因此统一绑定通配端口并通过 joinMulticastOnAllInterfaces 加入组播组。
      */
     public static void bindMulticastSocketWithGroupFilter(
             MulticastSocket socket, InetAddress groupAddr, int mcastPort) throws IOException {
-        if (groupAddr != null && groupAddr.isMulticastAddress()) {
-            try {
-                socket.bind(new InetSocketAddress(groupAddr, mcastPort));
-                return;
-            } catch (IOException ignored) {
-            }
-        }
         socket.bind(new InetSocketAddress(mcastPort));
     }
 
@@ -319,7 +322,7 @@ public class LocalMulticastProxyServer {
             String[] preferredNames = {"eth0.3964", "eth0", "eth1", "usb0", "rndis0", "wlan0"};
             for (String name : preferredNames) {
                 NetworkInterface nif = NetworkInterface.getByName(name);
-                if (nif != null && nif.isUp() && !nif.isLoopback() && nif.supportsMulticast() && hasIpv4Address(nif)) {
+                if (nif != null && nif.isUp() && !nif.isLoopback() && hasIpv4Address(nif)) {
                     list.add(nif);
                 }
             }
@@ -346,28 +349,21 @@ public class LocalMulticastProxyServer {
     }
 
     /**
-     * 按优先级在首选 IPTV 网卡上加入 IGMP 组播组：
-     * - 若高优先级有线网卡 (eth0.3964 / eth0 / eth1 / usb0) 成功 Join，则不再向低优先级 Wi-Fi 重复 Join，避免多网卡桥接时收到双倍重复组播包；
-     * - 若首选网卡 Join 失败则自动尝试下一候选网卡；
-     * - 返回实际成功 Join 的网卡列表，供 Leave 时精确退组。
+     * 将组播 Socket 同时加入所有候选网卡的 IGMP 组播组，确保无论组播流从有线口还是 Wi-Fi 进入均可接收
      */
     public static List<NetworkInterface> joinMulticastOnAllInterfaces(
             MulticastSocket socket, InetAddress groupAddr, int mcastPort) {
         List<NetworkInterface> joinedInterfaces = new ArrayList<>();
         List<NetworkInterface> candidates = getCandidateMulticastInterfaces();
         if (!candidates.isEmpty()) {
+            try {
+                socket.setNetworkInterface(candidates.get(0));
+            } catch (Exception ignored) {
+            }
             for (NetworkInterface nif : candidates) {
                 try {
-                    if (joinedInterfaces.isEmpty()) {
-                        socket.setNetworkInterface(nif);
-                    }
                     socket.joinGroup(new InetSocketAddress(groupAddr, mcastPort), nif);
                     joinedInterfaces.add(nif);
-                    String name = nif.getName();
-                    if (name != null && (name.startsWith("eth") || name.startsWith("usb") || name.startsWith("rndis"))) {
-                        // 有线 IPTV 专口已成功加入，不再重复加入无线网卡以避免重复流
-                        break;
-                    }
                 } catch (Exception ignored) {
                 }
             }
