@@ -57,6 +57,15 @@ import tv.danmaku.ijk.media.player.AbstractMediaPlayer;
 import tv.danmaku.ijk.media.player.IMediaPlayer;
 import tv.danmaku.ijk.media.player.MediaInfo;
 import tv.danmaku.ijk.media.player.misc.ITrackInfo;
+import com.google.android.exoplayer2.audio.AudioProcessor;
+import com.google.android.exoplayer2.audio.AudioSink.UnexpectedDiscontinuityException;
+import com.google.android.exoplayer2.audio.AudioSink.WriteException;
+import com.google.android.exoplayer2.audio.AudioSink.InitializationException;
+import com.google.android.exoplayer2.audio.AudioSink.ConfigurationException;
+import com.google.android.exoplayer2.PlaybackParameters;
+import com.google.android.exoplayer2.audio.AuxEffectInfo;
+import com.google.android.exoplayer2.audio.AudioAttributes;
+import java.nio.ByteBuffer;
 
 /**
  * 基于 ExoPlayer 的实例级池化播放器模块 (UTVPlayer)
@@ -344,6 +353,13 @@ public class UTVPlayer extends AbstractMediaPlayer {
                                                    Format format,
                                                    Format[] streamFormats) {
             CodecMaxValues base = super.getCodecMaxValues(codecInfo, format, streamFormats);
+            // 仅对 HEVC(4K) 放大到 3840x2160 以支持跨频道解码器复用；
+            // 对 H.264 1080P 等低分辨率流若同样放大，MTK 解码器会按 4K 分配缓冲区，
+            // 随后 setPortMode(DynamicANWBuffer) 失败(err -1010)，表现为"只有声音没有画面"。
+            boolean isHevc = format != null && MimeTypes.VIDEO_H265.equals(format.sampleMimeType);
+            if (!isHevc) {
+                return base;
+            }
             int width = Math.max(base.width, MAX_ADAPTIVE_WIDTH);
             int height = Math.max(base.height, MAX_ADAPTIVE_HEIGHT);
             int inputSize = Math.max(base.inputSize, MAX_ADAPTIVE_INPUT_SIZE);
@@ -364,8 +380,13 @@ public class UTVPlayer extends AbstractMediaPlayer {
                     codecOperatingRate,
                     deviceNeedsNoPostProcessWorkaround,
                     tunnelingAudioSessionId);
-            mediaFormat.setInteger(MediaFormat.KEY_MAX_WIDTH, MAX_ADAPTIVE_WIDTH);
-            mediaFormat.setInteger(MediaFormat.KEY_MAX_HEIGHT, MAX_ADAPTIVE_HEIGHT);
+            // 同上：只对 HEVC 声明 4K 上限。对 1080P 的 H.264 流声明 4K 会让
+            // MTK 解码器按 4K 分配输出缓冲，导致 DynamicANWBuffer 连接失败、画面不出。
+            boolean isHevc = format != null && MimeTypes.VIDEO_H265.equals(format.sampleMimeType);
+            if (isHevc) {
+                mediaFormat.setInteger(MediaFormat.KEY_MAX_WIDTH, MAX_ADAPTIVE_WIDTH);
+                mediaFormat.setInteger(MediaFormat.KEY_MAX_HEIGHT, MAX_ADAPTIVE_HEIGHT);
+            }
             return mediaFormat;
         }
 
@@ -450,6 +471,177 @@ public class UTVPlayer extends AbstractMediaPlayer {
     }
 
     /**
+     * 容错 AudioSink：把 DefaultAudioSink 的 UnexpectedDiscontinuityException 降级为告警。
+     *
+     * IPTV 组播在 UDP 丢包时，MP2 音频帧的 PTS 会出现跳变，DefaultAudioSink.handleBuffer()
+     * 检测到时间戳不连续后抛 UnexpectedDiscontinuityException。该异常沿
+     * MediaCodecAudioRenderer.processOutputBuffer() → ExoPlayerImplInternal.doSomeWork()
+     * 冒泡，会终止整个播放循环，视频渲染器随之停摆——用户看到"有声音但画面卡死"。
+     *
+     * 直播场景下丢包导致的时间戳跳变无法避免，正确处理是让音频链路自行重新对齐，
+     * 而不是让整个播放器崩溃。这里吞掉该异常并跳过该帧，继续后续 handleBuffer 调用。
+     */
+    static final class DiscontinuityTolerantAudioSink implements AudioSink {
+        private final AudioSink delegate;
+        private long droppedDiscontinuities;
+
+        DiscontinuityTolerantAudioSink(AudioSink delegate) {
+            this.delegate = delegate;
+        }
+
+        long getDroppedDiscontinuities() {
+            return droppedDiscontinuities;
+        }
+
+        @Override
+        public void setListener(Listener listener) {
+            delegate.setListener(listener);
+        }
+
+        @Override
+        public boolean supportsFormat(Format format) {
+            return delegate.supportsFormat(format);
+        }
+
+        @Override
+        public int getFormatSupport(Format format) {
+            return delegate.getFormatSupport(format);
+        }
+
+        @Override
+        public long getCurrentPositionUs(boolean sourceEnded) {
+            return delegate.getCurrentPositionUs(sourceEnded);
+        }
+
+        @Override
+        public void configure(Format inputFormat, int specifiedBufferSize, int[] outputChannels)
+                throws ConfigurationException {
+            delegate.configure(inputFormat, specifiedBufferSize, outputChannels);
+        }
+
+        @Override
+        public void play() {
+            delegate.play();
+        }
+
+        @Override
+        public void handleDiscontinuity() {
+            delegate.handleDiscontinuity();
+        }
+
+        @Override
+        public boolean handleBuffer(ByteBuffer buffer, long presentationTimeUs, int encodedAccessUnitCount)
+                throws InitializationException, WriteException {
+            try {
+                return delegate.handleBuffer(buffer, presentationTimeUs, encodedAccessUnitCount);
+            } catch (InitializationException | WriteException e) {
+                throw e;
+            } catch (Exception e) {
+                // UnexpectedDiscontinuityException 是受检异常但未在 handleBuffer 签名中声明，
+                // 由 DefaultAudioSink 以未声明受检异常的形式抛出。直播丢包导致的 PTS 跳变
+                // 若向上冒泡会终止 ExoPlayerImplInternal 播放循环（画面卡死），此处降级为告警。
+                if (e instanceof UnexpectedDiscontinuityException) {
+                    droppedDiscontinuities++;
+                    Log.w(TAG, "Audio discontinuity tolerated (#" + droppedDiscontinuities
+                            + "): " + e.getMessage());
+                    return false;
+                }
+                throw new WriteException(0, null, false);
+            }
+        }
+
+        @Override
+        public void playToEndOfStream() throws WriteException {
+            delegate.playToEndOfStream();
+        }
+
+        @Override
+        public boolean isEnded() {
+            return delegate.isEnded();
+        }
+
+        @Override
+        public boolean hasPendingData() {
+            return delegate.hasPendingData();
+        }
+
+        @Override
+        public void setPlaybackParameters(PlaybackParameters playbackParameters) {
+            delegate.setPlaybackParameters(playbackParameters);
+        }
+
+        @Override
+        public PlaybackParameters getPlaybackParameters() {
+            return delegate.getPlaybackParameters();
+        }
+
+        @Override
+        public void setSkipSilenceEnabled(boolean skipSilenceEnabled) {
+            delegate.setSkipSilenceEnabled(skipSilenceEnabled);
+        }
+
+        @Override
+        public boolean getSkipSilenceEnabled() {
+            return delegate.getSkipSilenceEnabled();
+        }
+
+        @Override
+        public void setAudioAttributes(AudioAttributes audioAttributes) {
+            delegate.setAudioAttributes(audioAttributes);
+        }
+
+        @Override
+        public AudioAttributes getAudioAttributes() {
+            return delegate.getAudioAttributes();
+        }
+
+        @Override
+        public void setAudioSessionId(int audioSessionId) {
+            delegate.setAudioSessionId(audioSessionId);
+        }
+
+        @Override
+        public void setAuxEffectInfo(AuxEffectInfo auxEffectInfo) {
+            delegate.setAuxEffectInfo(auxEffectInfo);
+        }
+
+        @Override
+        public void enableTunnelingV21() {
+            delegate.enableTunnelingV21();
+        }
+
+        @Override
+        public void disableTunneling() {
+            delegate.disableTunneling();
+        }
+
+        @Override
+        public void setVolume(float volume) {
+            delegate.setVolume(volume);
+        }
+
+        @Override
+        public void pause() {
+            delegate.pause();
+        }
+
+        @Override
+        public void flush() {
+            delegate.flush();
+        }
+
+        @Override
+        public void experimentalFlushWithoutAudioTrackRelease() {
+            delegate.experimentalFlushWithoutAudioTrackRelease();
+        }
+
+        @Override
+        public void reset() {
+            delegate.reset();
+        }
+    }
+
+    /**
      * 注入 AdaptiveMediaCodecVideoRenderer、UTVMediaCodecSelector 与 Mp2DecoderAudioRenderer 的 RenderersFactory
      */
     public static final class UTVRenderersFactory extends DefaultRenderersFactory {
@@ -464,6 +656,23 @@ public class UTVPlayer extends AbstractMediaPlayer {
             if (owner != null) {
                 setMediaCodecSelector(new UTVMediaCodecSelector(owner.getSettings()));
             }
+        }
+
+        /**
+         * MP2 伴音在 IPTV 组播丢包时 PTS 会跳变，DefaultAudioSink 会抛
+         * UnexpectedDiscontinuityException，该异常从 ExoPlayerImplInternal.doSomeWork()
+         * 冒泡会直接终止整条播放循环 —— 表现为"有声音、画面卡死"。
+         * 这里给 MP2 专用链路包一层容错 AudioSink，把时间戳跳变降级为告警，
+         * 让视频渲染器继续出帧。
+         */
+        @Override
+        protected AudioSink buildAudioSink(Context context,
+                                           boolean enableFloatOutput,
+                                           boolean enableAudioTrackPlaybackParams,
+                                           boolean enableOffload) {
+            AudioSink inner = super.buildAudioSink(
+                    context, enableFloatOutput, enableAudioTrackPlaybackParams, enableOffload);
+            return inner == null ? null : new DiscontinuityTolerantAudioSink(inner);
         }
 
         @Override
@@ -503,12 +712,17 @@ public class UTVPlayer extends AbstractMediaPlayer {
                 mp2Sink = audioSink;
             }
             out.add(new Mp2DecoderAudioRenderer(eventHandler, eventListener, mp2Sink, owner));
+            // 标准 MediaCodecAudioRenderer 用的是父类传入的 audioSink 参数，
+            // 不经过 buildAudioSink() 覆盖，因此这里也要包一层容错，
+            // 否则 AAC/AC3 等走 MediaCodec 音频渲染器的频道仍会因 PTS 跳变终止播放循环。
+            AudioSink tolerantSink = audioSink == null
+                    ? null : new DiscontinuityTolerantAudioSink(audioSink);
             super.buildAudioRenderers(
                     context,
                     extensionRendererMode,
                     mediaCodecSelector,
                     enableDecoderFallback,
-                    audioSink,
+                    tolerantSink,
                     eventHandler,
                     eventListener,
                     out);
