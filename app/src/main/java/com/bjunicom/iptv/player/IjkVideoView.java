@@ -126,6 +126,10 @@ public class IjkVideoView extends FrameLayout {
             }
             try {
                 IMediaPlayer rawPlayer = unwrapPlayer(player);
+                if (rawPlayer instanceof UTVPlayer) {
+                    ((UTVPlayer) rawPlayer).parkToPlaceholderSurface();
+                    return;
+                }
                 Surface offscreen = ensureOffscreenSurface();
                 if (offscreen != null && offscreen.isValid()) {
                     // 直接将底层 IjkMediaPlayer 或 AndroidMediaPlayer (MediaPlayer) 切换至离屏 Surface，
@@ -200,7 +204,6 @@ public class IjkVideoView extends FrameLayout {
     private PlayerSlot mActiveSlot = null;
     private PlayerSlot mPrevSlot = null;
     private PlayerSlot mNextSlot = null;
-    private UTVPlayer mUtvPlayer = null;
     private final Runnable mStopOffscreenRunnable = this::stopOffscreenPlayers;
 
     private Uri mUri;
@@ -298,23 +301,25 @@ public class IjkVideoView extends FrameLayout {
     }
 
     public boolean isActivePlayerPromotedFromPool() {
-        if (mSettings.getPlayerType() == IptvSettings.PLAYER_UTV && mUtvPlayer != null) {
-            return mUtvPlayer.isPromotedFromPreload();
-        }
         return mActiveSlot != null && mActiveSlot.promotedFromOffscreen;
     }
 
     public UTVPlayer getUtvPlayer() {
-        if (mUtvPlayer == null) {
-            mUtvPlayer = UTVPlayer.getSharedInstance(mAppContext);
+        if (mActiveSlot != null && mActiveSlot.player instanceof UTVPlayer) {
+            return (UTVPlayer) mActiveSlot.player;
         }
-        return mUtvPlayer;
+        if (mMediaPlayer instanceof UTVPlayer) {
+            return (UTVPlayer) mMediaPlayer;
+        }
+        for (PlayerSlot slot : mPlayerSlots) {
+            if (slot != null && slot.player instanceof UTVPlayer) {
+                return (UTVPlayer) slot.player;
+            }
+        }
+        return null;
     }
 
     public boolean areOffscreenPlayersStopped() {
-        if (mSettings.getPlayerType() == IptvSettings.PLAYER_UTV && mUtvPlayer != null) {
-            return mUtvPlayer.areBackgroundPreloadPeriodsStopped();
-        }
         for (PlayerSlot slot : mPlayerSlots) {
             if (slot != null && slot != mActiveSlot && slot.state != STATE_IDLE) {
                 return false;
@@ -326,13 +331,10 @@ public class IjkVideoView extends FrameLayout {
     /**
      * 当用户切台 3 秒后没有继续切台时调用：
      * 停止并重置除当前主屏实例 (mActiveSlot) 以外的两个后台离屏播放器 (mPrevSlot 与 mNextSlot)，
-     * 若当前为 UTVPlayer 模式则停止后台 2 个预拉流 ProgressiveMediaPeriod，断开其后台流连接并释放资源。
+     * 断开其后台流连接并释放资源（IjkPlayer、MediaPlayer、UTVPlayer 三种内核统一按槽位停止）。
      */
     public void stopOffscreenPlayers() {
         removeCallbacks(mStopOffscreenRunnable);
-        if (mUtvPlayer != null) {
-            mUtvPlayer.stopBackgroundPreloadPeriods();
-        }
         for (PlayerSlot slot : mPlayerSlots) {
             if (slot != null && slot != mActiveSlot) {
                 stopAndResetOffscreenSlot(slot);
@@ -352,21 +354,25 @@ public class IjkVideoView extends FrameLayout {
         }
         if (slot.player != null && slot.state != STATE_IDLE) {
             IMediaPlayer rawPlayer = unwrapPlayer(slot.player);
-            // AndroidMediaPlayer 在 STATE_PREPARING 状态直接调 stop() 会抛 IllegalStateException，
-            // 仅在已进入 PREPARED/PLAYING/PAUSED 时调用 stop()，随后统一 reset()
-            if (slot.state == STATE_PREPARED || slot.state == STATE_PLAYING || slot.state == STATE_PAUSED) {
+            if (rawPlayer instanceof UTVPlayer) {
+                ((UTVPlayer) rawPlayer).stopAndPark();
+            } else {
+                // AndroidMediaPlayer 在 STATE_PREPARING 状态直接调 stop() 会抛 IllegalStateException，
+                // 仅在已进入 PREPARED/PLAYING/PAUSED 时调用 stop()，随后统一 reset()
+                if (slot.state == STATE_PREPARED || slot.state == STATE_PLAYING || slot.state == STATE_PAUSED) {
+                    try {
+                        slot.player.stop();
+                    } catch (Throwable ignored) {
+                    }
+                }
                 try {
-                    slot.player.stop();
+                    rawPlayer.setSurface(null);
                 } catch (Throwable ignored) {
                 }
-            }
-            try {
-                rawPlayer.setSurface(null);
-            } catch (Throwable ignored) {
-            }
-            try {
-                slot.player.reset();
-            } catch (Throwable ignored) {
+                try {
+                    slot.player.reset();
+                } catch (Throwable ignored) {
+                }
             }
         }
         slot.resetMetadata();
@@ -462,7 +468,7 @@ public class IjkVideoView extends FrameLayout {
 
     /**
      * 设置并更新上一个、下一个频道的离屏播放实例 (mPrevSlot 与 mNextSlot)，
-     * 或在 UTVPlayer 模式下驱动 PreloadMediaSource 维护 3 个独立的 ProgressiveMediaPeriod 预拉流池，
+     * 对 IjkPlayer、MediaPlayer、UTVPlayer 统一使用三槽位 Player 级缓存，
      * 并启动/重置 3 秒无切台自动停止后台播放器的计时器。
      */
     public void setAdjacentChannelPaths(String prevPath,
@@ -474,15 +480,7 @@ public class IjkVideoView extends FrameLayout {
         mPendingNextUri = !TextUtils.isEmpty(nextPath) ? resolvePlaybackUri(Uri.parse(nextPath)) : null;
         mPendingNextRawUrl = nextRawUrl;
 
-        if (mSettings.getPlayerType() == IptvSettings.PLAYER_UTV) {
-            getUtvPlayer().preloadAdjacentChannels(
-                    mPendingPrevUri, mPendingPrevRawUrl,
-                    mPendingNextUri, mPendingNextRawUrl);
-            scheduleStopOffscreenPlayers();
-            return;
-        }
-
-        if (mSurfaceHolder != null) {
+        if (mSurfaceHolder != null || mSettings.getPlayerType() == IptvSettings.PLAYER_UTV) {
             syncOffscreenAdjacentSlots();
         }
         scheduleStopOffscreenPlayers();
@@ -493,7 +491,7 @@ public class IjkVideoView extends FrameLayout {
     }
 
     /**
-     * 核心切台与三实例池化调度逻辑：
+     * 核心切台与三实例池化调度逻辑（IjkPlayer / MediaPlayer / UTVPlayer 统一采用 Player 级三槽位池化）：
      * 1. 检查目标频道是否已由离屏实例 (mPrevSlot 或 mNextSlot) 在后台离屏播放/准备中；
      * 2. 若命中离屏实例：
      *    - 先将旧 mActiveSlot 切换绑定至其专属离屏 Surface 并静音（保留其播放状态直接作为新的相邻离屏实例）；
@@ -518,10 +516,6 @@ public class IjkVideoView extends FrameLayout {
         }
 
         Uri playbackUri = resolvePlaybackUri(mUri);
-        if (playerType == IptvSettings.PLAYER_UTV) {
-            openWithUtvPlayer(playbackUri);
-            return;
-        }
         PlayerSlot hitSlot = findMatchingSlot(playbackUri, mRawChannelUrl);
 
         if (hitSlot != null && hitSlot != mActiveSlot) {
@@ -560,48 +554,10 @@ public class IjkVideoView extends FrameLayout {
         mPrepareStartTime = System.currentTimeMillis();
         mCurrentState = STATE_PREPARING;
         loadSlotWithStream(mActiveSlot, playbackUri, mRawChannelUrl, true);
-        scheduleStopOffscreenPlayers();
-    }
-
-    /**
-     * 使用 UTVPlayer (全局单实例 ExoPlayer + PreloadMediaSource + UTVLoadControl + PlaceholderSurface) 打开频道流：
-     * - 在同一个 ExoPlayer 实例中切换 MediaSource，触发 MediaCodecVideoRenderer.canReuseCodec() 直接 flush() 复用解码器；
-     * - 通过 setVideoSurfaceView 动态绑定主屏 SurfaceView，若外部 SurfaceView 尚未就绪或已销毁则挂靠在 PlaceholderSurface 上后台预解码首帧。
-     */
-    private void openWithUtvPlayer(Uri playbackUri) {
-        try {
-            UTVPlayer utvPlayer = getUtvPlayer();
-            mMediaPlayer = utvPlayer;
-            mPrepareStartTime = System.currentTimeMillis();
-            mCurrentState = STATE_PREPARING;
-
-            if (mActiveSlot == null) {
-                mActiveSlot = mPlayerSlots[0];
-            }
-            mActiveSlot.player = utvPlayer;
-            mActiveSlot.playerType = IptvSettings.PLAYER_UTV;
-            mActiveSlot.codecConfigSignature = buildCurrentCodecConfigSignature();
-            mActiveSlot.uri = playbackUri;
-            mActiveSlot.rawChannelUrl = mRawChannelUrl;
-            mActiveSlot.state = STATE_PREPARING;
-            mActiveSlot.prepareStartTime = mPrepareStartTime;
-
-            attachSlotListeners(mActiveSlot, utvPlayer);
-            bindSurfaceHolder(utvPlayer, mSurfaceHolder);
-            utvPlayer.setRawChannelUrl(mRawChannelUrl);
-            utvPlayer.setDataSource(mAppContext, playbackUri, mHeaders);
-            utvPlayer.setVolume(1.0f, 1.0f);
-            utvPlayer.setScreenOnWhilePlaying(true);
-            utvPlayer.prepareAsync();
-            scheduleStopOffscreenPlayers();
-        } catch (Throwable ex) {
-            Log.w(TAG, "Unable to open stream with UTVPlayer: " + playbackUri, ex);
-            mCurrentState = STATE_ERROR;
-            mTargetState = STATE_ERROR;
-            if (mOnErrorListener != null) {
-                mOnErrorListener.onError(mMediaPlayer, MediaPlayer.MEDIA_ERROR_UNKNOWN, 0);
-            }
+        if (mSurfaceHolder != null || playerType == IptvSettings.PLAYER_UTV) {
+            syncOffscreenAdjacentSlots();
         }
+        scheduleStopOffscreenPlayers();
     }
 
     private PlayerSlot findMatchingSlot(Uri playbackUri, String rawChannelUrl) {
@@ -626,6 +582,9 @@ public class IjkVideoView extends FrameLayout {
 
         mActiveSlot = promotedSlot;
         mActiveSlot.promotedFromOffscreen = true;
+        if (mActiveSlot.player instanceof UTVPlayer) {
+            ((UTVPlayer) mActiveSlot.player).setPromotedFromPreload(true);
+        }
         mMediaPlayer = mActiveSlot.player;
         rebalancePrevNextPointers();
 
@@ -758,6 +717,10 @@ public class IjkVideoView extends FrameLayout {
             slot.promotedFromOffscreen = false;
 
             IMediaPlayer mp = slot.player;
+            if (mp instanceof UTVPlayer) {
+                ((UTVPlayer) mp).setRawChannelUrl(rawUrl);
+                ((UTVPlayer) mp).setPromotedFromPreload(false);
+            }
             attachSlotListeners(slot, mp);
             mp.setDataSource(mAppContext, playbackUri, mHeaders);
 
@@ -798,9 +761,6 @@ public class IjkVideoView extends FrameLayout {
      * 立即清理或重置不匹配的旧实例，确保全部 3 个槽位均应用最新的硬解/软解与内核设置。
      */
     private void ensureAllSlotsMatchPlayerType(int desiredPlayerType) {
-        if (desiredPlayerType != IptvSettings.PLAYER_UTV && mUtvPlayer != null) {
-            mUtvPlayer.stopAndPark();
-        }
         String currentSig = buildCurrentCodecConfigSignature();
         for (PlayerSlot slot : mPlayerSlots) {
             if (slot != null && slot.player != null) {
@@ -825,10 +785,14 @@ public class IjkVideoView extends FrameLayout {
         if (canReuseExisting) {
             try {
                 IMediaPlayer internal = unwrapPlayer(slot.player);
-                internal.setSurface(null);
-                slot.player.reset();
-                if (internal instanceof IjkMediaPlayer) {
-                    configureIjkOptions((IjkMediaPlayer) internal, rawUrl);
+                if (internal instanceof UTVPlayer) {
+                    ((UTVPlayer) internal).prepareForSlotReuse();
+                } else {
+                    internal.setSurface(null);
+                    slot.player.reset();
+                    if (internal instanceof IjkMediaPlayer) {
+                        configureIjkOptions((IjkMediaPlayer) internal, rawUrl);
+                    }
                 }
                 slot.resetMetadata();
                 slot.playerType = desiredPlayerType;
@@ -852,6 +816,8 @@ public class IjkVideoView extends FrameLayout {
     private IMediaPlayer createConfiguredPlayer(int playerType, String rawUrl) {
         IMediaPlayer mediaPlayer;
         switch (playerType) {
+            case IptvSettings.PLAYER_UTV:
+                return new UTVPlayer(mAppContext);
             case IptvSettings.PLAYER_IJK:
                 try {
                     IjkMediaPlayer ijkPlayer = new IjkMediaPlayer();
@@ -1116,8 +1082,8 @@ public class IjkVideoView extends FrameLayout {
         slot.player = null;
         slot.playerType = -1;
         if (mp instanceof UTVPlayer) {
-            // 切换播放器类型或释放槽位时，立即停止 ExoPlayer 的音视频流与后台预拉流，并挂靠回 PlaceholderSurface
-            ((UTVPlayer) mp).stopAndPark();
+            // 切换播放器类型或释放槽位时，立即停止并销毁该槽位的 UTVPlayer (ExoPlayer) 实例
+            ((UTVPlayer) mp).releasePlayer();
             return;
         }
         if (mp instanceof TextureMediaPlayer) {
@@ -1151,9 +1117,6 @@ public class IjkVideoView extends FrameLayout {
     public void releaseAllSlots(boolean cleartargetstate) {
         removeCallbacks(mStopOffscreenRunnable);
         mHwAudioCompanion.stop();
-        if (mUtvPlayer != null) {
-            mUtvPlayer.stopAndPark();
-        }
         for (PlayerSlot slot : mPlayerSlots) {
             if (slot != null) {
                 releaseSlotPlayerOnly(slot);
@@ -1283,10 +1246,11 @@ public class IjkVideoView extends FrameLayout {
     public String getDecoderName() {
         int playerType = mSettings.getPlayerType();
         if (playerType == IptvSettings.PLAYER_UTV) {
-            if (mUtvPlayer != null) {
-                return mUtvPlayer.getDecoderSummaryLabel();
+            UTVPlayer utvPlayer = getUtvPlayer();
+            if (utvPlayer != null) {
+                return utvPlayer.getDecoderSummaryLabel();
             }
-            return "UTVPlayer (Exo池化硬解)";
+            return "UTVPlayer (Exo三实例池化硬解)";
         }
         String poolTag = isActivePlayerPromotedFromPool() ? "三实例离屏秒切" : "三实例池化";
         if (playerType == IptvSettings.PLAYER_ANDROID_MEDIA) {

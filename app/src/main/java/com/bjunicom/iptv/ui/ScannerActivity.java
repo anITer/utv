@@ -62,6 +62,7 @@ public class ScannerActivity extends AppCompatActivity {
     private ScanStatistics lastStats;
     private List<IptvChannel> lastScannedChannels;
     private AlertDialog lastCompletionDialog;
+    private boolean logScrollBarEnabled = false;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final StringBuilder logBuffer = new StringBuilder();
 
@@ -169,6 +170,76 @@ public class ScannerActivity extends AppCompatActivity {
                 v.setOnFocusChangeListener(focusScale);
             }
         }
+
+        setupLogPreviewScrollBarBehavior();
+    }
+
+    public boolean isLogPreviewScrollBarEnabled() {
+        return logScrollBarEnabled && svLog != null && svLog.isVerticalScrollBarEnabled();
+    }
+
+    private void setLogPreviewScrollBarEnabled(boolean enabled) {
+        logScrollBarEnabled = enabled;
+        if (svLog == null) {
+            return;
+        }
+        svLog.setVerticalScrollBarEnabled(enabled);
+        svLog.setHorizontalScrollBarEnabled(false);
+        svLog.setScrollbarFadingEnabled(!enabled);
+        svLog.invalidate();
+    }
+
+    private void setupLogPreviewScrollBarBehavior() {
+        if (svLog == null) {
+            return;
+        }
+        setLogPreviewScrollBarEnabled(false);
+        svLog.setOnFocusChangeListener((v, hasFocus) -> {
+            v.setSelected(hasFocus);
+            // 选中成为焦点或失去焦点时默认不启用 scrollbar，只有成为焦点后再次按 OK 键才启用 scrollbar
+            setLogPreviewScrollBarEnabled(false);
+        });
+        svLog.setOnKeyListener((v, keyCode, event) -> {
+            if (!svLog.hasFocus()) {
+                return false;
+            }
+            boolean isOkKey = (keyCode == KeyEvent.KEYCODE_DPAD_CENTER
+                    || keyCode == KeyEvent.KEYCODE_ENTER
+                    || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER);
+            if (isOkKey) {
+                if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
+                    if (!logScrollBarEnabled) {
+                        setLogPreviewScrollBarEnabled(true);
+                    }
+                }
+                return true;
+            }
+            if (!logScrollBarEnabled) {
+                if (keyCode == KeyEvent.KEYCODE_DPAD_UP
+                        || keyCode == KeyEvent.KEYCODE_DPAD_DOWN
+                        || keyCode == KeyEvent.KEYCODE_DPAD_LEFT
+                        || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                    if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                        int dir = keyCode == KeyEvent.KEYCODE_DPAD_UP ? View.FOCUS_UP
+                                : (keyCode == KeyEvent.KEYCODE_DPAD_DOWN ? View.FOCUS_DOWN
+                                : (keyCode == KeyEvent.KEYCODE_DPAD_LEFT ? View.FOCUS_LEFT : View.FOCUS_RIGHT));
+                        View next = v.focusSearch(dir);
+                        if (next != null && next != v) {
+                            next.requestFocus();
+                        }
+                    }
+                    return true;
+                }
+                return false;
+            }
+            if (keyCode == KeyEvent.KEYCODE_BACK) {
+                if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                    setLogPreviewScrollBarEnabled(false);
+                }
+                return true;
+            }
+            return false;
+        });
     }
 
     private List<IptvChannel> getTargetChannelsForAction() {

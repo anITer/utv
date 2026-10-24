@@ -5,7 +5,8 @@
     android:background="@drawable/bg_md3_dialog_surface"
     android:clipChildren="false"
     android:clipToPadding="false"
-    android:padding="18dp">
+    android:padding="18dp"
+    android:scrollbars="none">
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -115,12 +116,14 @@
                 android:focusable="true"
                 android:fontFamily="monospace"
                 android:gravity="top|start"
-                android:hint="选择本地 .m3u/.m3u8 文件上传，或在此处直接粘贴 M3U 文本内容 / 输入本地文件路径 (如 /sdcard/Download/iptv.m3u)..."
+                android:hint="选择本地 .m3u/.m3u8 文件、扫描系统 Download 目录与外接 U 盘，或在此直接粘贴 M3U 内容 / 输入文件路径 (如 /sdcard/Download/iptv.m3u)..."
                 android:includeFontPadding="false"
                 android:inputType="textMultiLine|textNoSuggestions"
                 android:minLines="4"
+                android:nextFocusDown="@id/btn_inspect_m3u_content"
+                android:nextFocusUp="@id/btn_scan_local_m3u_files"
                 android:padding="10dp"
-                android:scrollbars="vertical"
+                android:scrollbars="none"
                 android:textColor="@color/text_primary"
                 android:textColorHint="@color/text_muted"
                 android:textSize="12sp" />

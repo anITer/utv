@@ -142,17 +142,28 @@ public class StartupSmokeTest {
             org.robolectric.shadows.ShadowLooper.idleMainLooper(3000, java.util.concurrent.TimeUnit.MILLISECONDS);
             assertTrue(videoView.areOffscreenPlayersStopped());
 
-            // Switch player core to UTVPlayer (PLAYER_UTV: ExoPlayer + PreloadMediaSource + UTVLoadControl)
+            // Switch player core to UTVPlayer (PLAYER_UTV) and verify the 3-instance player-level pool
+            // (non-singleton: 3 independent UTVPlayer instances in mPlayerSlots) works identically to IjkPlayer and MediaPlayer
             settings.setPlayerType(com.bjunicom.iptv.config.IptvSettings.PLAYER_UTV);
             activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_UP));
             activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_UP));
 
+            for (IjkVideoView.PlayerSlot slot : videoView.getPlayerSlots()) {
+                assertEquals(com.bjunicom.iptv.config.IptvSettings.PLAYER_UTV, slot.playerType);
+                assertTrue(slot.player instanceof com.bjunicom.iptv.player.UTVPlayer);
+            }
+            IjkVideoView.PlayerSlot utvActive = videoView.getActiveSlot();
+            IjkVideoView.PlayerSlot utvPrev = videoView.getPrevSlot();
+            IjkVideoView.PlayerSlot utvNext = videoView.getNextSlot();
+            assertTrue(utvActive.player != utvPrev.player);
+            assertTrue(utvActive.player != utvNext.player);
+            assertTrue(utvPrev.player != utvNext.player);
+            String utvNextRawUrl = utvNext.rawChannelUrl;
+
             com.bjunicom.iptv.player.UTVPlayer utvPlayer = videoView.getUtvPlayer();
             assertNotNull(utvPlayer);
+            assertSame(utvActive.player, utvPlayer);
             assertNotNull(utvPlayer.getExoPlayer());
-            assertEquals(3, com.bjunicom.iptv.player.PreloadMediaSource.MAX_PRELOAD_PERIODS);
-            assertEquals(3, utvPlayer.getPreloadPool().getSlots().length);
-            assertEquals(3, utvPlayer.getPreloadPool().getActiveProgressiveMediaPeriods().size());
 
             // Verify TsExtractor factory returns a single TsExtractor (skipping sniff() in BundledExtractorsAdapter)
             // and filters private stream_type=0x06 while using TimestampAdjuster(0L)
@@ -169,11 +180,16 @@ public class StartupSmokeTest {
             }
             assertEquals(17, com.bjunicom.iptv.player.UTVStreamDataSource.findTsSyncOffset(unalignedTs, unalignedTs.length));
 
-            // Switch to next channel on UTVPlayer -> preloaded ProgressiveMediaPeriod is promoted on the same single ExoPlayer instance
+            // Switch to next channel on UTVPlayer -> utvNext slot is promoted to activeSlot, and utvActive becomes new prevSlot
             activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_UP));
             activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_UP));
+            assertSame(utvNext, videoView.getActiveSlot());
             assertTrue(videoView.isActivePlayerPromotedFromPool());
+            assertEquals(utvNextRawUrl, videoView.getActiveSlot().rawChannelUrl);
+            assertSame(utvActive, videoView.getPrevSlot());
+            utvPlayer = videoView.getUtvPlayer();
             assertTrue(utvPlayer.isPromotedFromPreload());
+            assertTrue(videoView.getDecoderName().contains("三实例离屏秒切"));
 
             // Verify AdaptiveMediaCodecVideoRenderer.canReuseCodec() returns REUSE_RESULT_YES_WITH_FLUSH across CCTV-1 -> CCTV-2
             com.bjunicom.iptv.player.UTVPlayer.AdaptiveMediaCodecVideoRenderer adaptiveRenderer =
@@ -262,6 +278,10 @@ public class StartupSmokeTest {
             settings.setMediaCodecEnabled(true);
             settings.setMediaCodecHevcEnabled(true);
             settings.setPlayerType(com.bjunicom.iptv.config.IptvSettings.PLAYER_UTV);
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_UP));
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_UP));
+            utvPlayer = videoView.getUtvPlayer();
+            assertNotNull(utvPlayer);
 
             // Verify PlaceholderSurface parking when external UI SurfaceView is destroyed
             for (SurfaceHolder.Callback cb : holder.getCallbacks()) {
@@ -269,9 +289,11 @@ public class StartupSmokeTest {
             }
             assertTrue(utvPlayer.isAttachedToPlaceholderSurface());
 
-            // Advance 3000ms -> background PreloadMediaSource ProgressiveMediaPeriods are stopped automatically
+            // Advance 3000ms -> off-screen UTVPlayer instances are stopped automatically
             org.robolectric.shadows.ShadowLooper.idleMainLooper(3000, java.util.concurrent.TimeUnit.MILLISECONDS);
             assertTrue(videoView.areOffscreenPlayersStopped());
+            assertEquals(IjkVideoView.STATE_IDLE, videoView.getPrevSlot().state);
+            assertEquals(IjkVideoView.STATE_IDLE, videoView.getNextSlot().state);
 
             // Verify player settings dialog has the three options: IjkPlayer, ExoPlayer, MediaPlayer
             android.view.View settingsView = android.view.LayoutInflater.from(activity)
@@ -598,10 +620,10 @@ public class StartupSmokeTest {
         // 2. Verify UTVPlayer registers Mp2DecoderAudioRenderer and supports audio/mpeg-L2
         try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class)) {
             MainActivity activity = controller.create().get();
-            com.bjunicom.iptv.player.UTVPlayer utvPlayer =
-                    com.bjunicom.iptv.player.UTVPlayer.getSharedInstance(activity);
+            com.bjunicom.iptv.player.UTVPlayer sampleUtv =
+                    new com.bjunicom.iptv.player.UTVPlayer(activity);
             com.bjunicom.iptv.player.UTVPlayer.UTVRenderersFactory rf =
-                    new com.bjunicom.iptv.player.UTVPlayer.UTVRenderersFactory(activity, utvPlayer);
+                    new com.bjunicom.iptv.player.UTVPlayer.UTVRenderersFactory(activity, sampleUtv);
             com.google.android.exoplayer2.Renderer[] renderers = rf.createRenderers(
                     new android.os.Handler(android.os.Looper.getMainLooper()),
                     new com.google.android.exoplayer2.video.VideoRendererEventListener() {},
@@ -624,6 +646,7 @@ public class StartupSmokeTest {
             int support = mp2Renderer.supportsFormat(mp2Format);
             assertEquals(com.google.android.exoplayer2.C.FORMAT_HANDLED,
                     com.google.android.exoplayer2.RendererCapabilities.getFormatSupport(support));
+            sampleUtv.releasePlayer();
 
             // 3. Verify switching from UTVPlayer (ExoPlayer) to IjkPlayer or MediaPlayer stops ExoPlayer audio
             IjkVideoView videoView = activity.findViewById(R.id.ijk_video_view);
@@ -631,17 +654,17 @@ public class StartupSmokeTest {
             settings.setPlayerType(com.bjunicom.iptv.config.IptvSettings.PLAYER_UTV);
             videoView.setRawChannelUrl("rtp://239.3.1.129:8008");
             videoView.setVideoPath("http://127.0.0.1:18080/rtp/239.3.1.129:8008");
-            assertTrue(utvPlayer.getExoPlayer().getPlayWhenReady());
+            com.bjunicom.iptv.player.UTVPlayer activeUtvPlayer = videoView.getUtvPlayer();
+            assertNotNull(activeUtvPlayer);
+            assertTrue(activeUtvPlayer.getExoPlayer().getPlayWhenReady());
 
-            // Switch player core to PLAYER_IJK -> UTVPlayer must stop and mute immediately
+            // Switch player core to PLAYER_IJK -> UTVPlayer slot must stop and mute immediately
             settings.setPlayerType(com.bjunicom.iptv.config.IptvSettings.PLAYER_IJK);
             videoView.setVideoPath("http://127.0.0.1:18080/rtp/239.3.1.129:8008");
-            assertFalse(utvPlayer.getExoPlayer().getPlayWhenReady());
+            assertFalse(activeUtvPlayer.getExoPlayer().getPlayWhenReady());
             assertEquals(com.google.android.exoplayer2.Player.STATE_IDLE,
-                    utvPlayer.getExoPlayer().getPlaybackState());
-            assertEquals(0f, utvPlayer.getExoPlayer().getVolume(), 0.001f);
-
-            utvPlayer.releaseGlobalInstance();
+                    activeUtvPlayer.getExoPlayer().getPlaybackState());
+            assertEquals(0f, activeUtvPlayer.getExoPlayer().getVolume(), 0.001f);
         }
     }
 
@@ -722,6 +745,129 @@ public class StartupSmokeTest {
             repo.clearAppliedDefaultM3u();
             org.robolectric.shadows.ShadowLooper.runUiThreadTasks();
             assertEquals(initialDefaultCount, repo.getAllChannels().size());
+        }
+    }
+
+    @Test
+    public void testScanDeviceM3uFilesSupportsSystemDownloadAndExternalUsbDirs() throws Exception {
+        // 1. Verify /proc/mounts USB mount point parser and volume root extraction
+        java.util.List<String> procMountsSample = java.util.Arrays.asList(
+                "/dev/fuse /storage/emulated rw,nosuid,nodev,noexec 0 0",
+                "/dev/block/vold/public:8,1 /mnt/media_rw/1A2B-3C4D vfat rw,dirsync,nosuid,nodev 0 0",
+                "/dev/fuse /storage/1A2B-3C4D fuse rw,nosuid,nodev,noexec,noatime 0 0",
+                "/dev/block/sda1 /mnt/usb/sda1 exfat rw,nosuid,nodev 0 0",
+                "/dev/block/sdb1 /mnt/usb_storage/USB_DISK0 ntfs rw,nosuid,nodev 0 0"
+        );
+        java.util.List<String> usbMounts =
+                com.bjunicom.iptv.ui.CustomM3uDialogHelper.parseUsbMountPointsFromProcMounts(procMountsSample);
+        assertEquals(4, usbMounts.size());
+        assertTrue(usbMounts.contains("/mnt/media_rw/1A2B-3C4D"));
+        assertTrue(usbMounts.contains("/storage/1A2B-3C4D"));
+        assertTrue(usbMounts.contains("/mnt/usb/sda1"));
+        assertTrue(usbMounts.contains("/mnt/usb_storage/USB_DISK0"));
+        assertFalse(usbMounts.contains("/storage/emulated"));
+
+        java.io.File appUsbDir = new java.io.File("/storage/1A2B-3C4D/Android/data/com.bjunicom.iptv/files");
+        java.io.File extractedRoot =
+                com.bjunicom.iptv.ui.CustomM3uDialogHelper.extractVolumeRootFromAppExternalDir(appUsbDir);
+        assertNotNull(extractedRoot);
+        assertEquals("/storage/1A2B-3C4D", extractedRoot.getAbsolutePath());
+
+        // 2. Verify scanning both System Download directory and External USB Drive directory
+        try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class)) {
+            MainActivity activity = controller.create().start().resume().visible().get();
+
+            java.io.File sysDownloadDir = android.os.Environment.getExternalStoragePublicDirectory(
+                    android.os.Environment.DIRECTORY_DOWNLOADS);
+            sysDownloadDir.mkdirs();
+            java.io.File downloadM3u = new java.io.File(sysDownloadDir, "system_download_iptv.m3u");
+            try (java.io.FileOutputStream fos = new java.io.FileOutputStream(downloadM3u)) {
+                fos.write(("#EXTM3U\n#EXTINF:-1,CCTV-1\nrtp://239.3.1.129:8008\n")
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            }
+
+            java.io.File simulatedUsbRoot = new java.io.File(activity.getCacheDir(), "simulated_usb_drive_1A2B");
+            java.io.File usbSubFolder = new java.io.File(simulatedUsbRoot, "iptv_playlists");
+            usbSubFolder.mkdirs();
+            java.io.File usbRootM3u = new java.io.File(simulatedUsbRoot, "usb_root_channels.m3u");
+            java.io.File usbSubM3u = new java.io.File(usbSubFolder, "usb_sub_channels.m3u8");
+            try (java.io.FileOutputStream fos = new java.io.FileOutputStream(usbRootM3u)) {
+                fos.write(("#EXTM3U\n#EXTINF:-1,CCTV-2\nrtp://239.3.1.130:8008\n")
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            }
+            try (java.io.FileOutputStream fos = new java.io.FileOutputStream(usbSubM3u)) {
+                fos.write(("#EXTM3U\n#EXTINF:-1,CCTV-4K\nrtp://239.3.1.244:2000\n")
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            }
+
+            com.bjunicom.iptv.ui.CustomM3uDialogHelper.clearCustomUsbScanRoots();
+            com.bjunicom.iptv.ui.CustomM3uDialogHelper.addCustomUsbScanRoot(simulatedUsbRoot);
+            try {
+                com.bjunicom.iptv.ui.CustomM3uDialogHelper helper =
+                        new com.bjunicom.iptv.ui.CustomM3uDialogHelper(activity, null);
+                java.util.List<java.io.File> found = helper.scanDeviceM3uFiles();
+                assertTrue(found.contains(usbRootM3u));
+                assertTrue(found.contains(usbSubM3u));
+                assertTrue(found.contains(downloadM3u));
+
+                java.util.List<java.io.File> usbDirs =
+                        com.bjunicom.iptv.ui.CustomM3uDialogHelper.collectExternalUsbDirectories(activity);
+                java.util.List<java.io.File> downloadDirs =
+                        com.bjunicom.iptv.ui.CustomM3uDialogHelper.collectSystemDownloadDirectories(activity);
+                assertEquals("[外接U盘]", com.bjunicom.iptv.ui.CustomM3uDialogHelper
+                        .formatScannedFileSourceTag(usbRootM3u, usbDirs, downloadDirs));
+                assertEquals("[外接U盘]", com.bjunicom.iptv.ui.CustomM3uDialogHelper
+                        .formatScannedFileSourceTag(usbSubM3u, usbDirs, downloadDirs));
+                assertEquals("[系统Download]", com.bjunicom.iptv.ui.CustomM3uDialogHelper
+                        .formatScannedFileSourceTag(downloadM3u, usbDirs, downloadDirs));
+
+                helper.showLocalM3uFilesPickerDialog();
+                assertNotNull(helper.getLastLocalFilesDialog());
+                assertTrue(helper.getLastLocalFilesDialog().isShowing());
+                helper.getLastLocalFilesDialog().dismiss();
+
+                // 3. Verify M3U content preview window disables scrollbar by default when selected/focused,
+                // and only enables scrollbar after becoming focused and pressing OK key again
+                helper.showUploadAndInspectDialog();
+                org.robolectric.shadows.ShadowLooper.runUiThreadTasks();
+                android.widget.EditText etContent = helper.getContentPreviewView();
+                assertNotNull(etContent);
+                assertFalse(etContent.isVerticalScrollBarEnabled());
+                assertFalse(helper.isContentPreviewScrollBarEnabled());
+
+                // Move focus to the content preview window -> scrollbar remains disabled by default
+                etContent.requestFocus();
+                assertTrue(etContent.hasFocus());
+                assertFalse(etContent.isVerticalScrollBarEnabled());
+                assertFalse(helper.isContentPreviewScrollBarEnabled());
+
+                // Pressing DPAD_DOWN while scrollbar is disabled navigates focus down to btn_inspect_m3u_content
+                etContent.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_DOWN));
+                etContent.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_DOWN));
+                assertFalse(etContent.hasFocus());
+
+                // Focus content preview window again and press OK (KEYCODE_DPAD_CENTER) -> scrollbar is now enabled
+                etContent.requestFocus();
+                assertTrue(etContent.hasFocus());
+                assertFalse(helper.isContentPreviewScrollBarEnabled());
+                etContent.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER));
+                etContent.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_CENTER));
+                assertTrue(etContent.isVerticalScrollBarEnabled());
+                assertTrue(helper.isContentPreviewScrollBarEnabled());
+
+                // Pressing BACK while scrollbar is enabled exits scrollbar mode back to normal focus mode
+                etContent.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK));
+                etContent.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BACK));
+                assertFalse(etContent.isVerticalScrollBarEnabled());
+                assertFalse(helper.isContentPreviewScrollBarEnabled());
+            } finally {
+                com.bjunicom.iptv.ui.CustomM3uDialogHelper.clearCustomUsbScanRoots();
+                downloadM3u.delete();
+                usbSubM3u.delete();
+                usbRootM3u.delete();
+                usbSubFolder.delete();
+                simulatedUsbRoot.delete();
+            }
         }
     }
 }

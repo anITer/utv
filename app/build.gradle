@@ -65,6 +65,7 @@ android {
         pickFirst 'lib/*/libijkffmpeg.so'
         pickFirst 'lib/*/libijksdl.so'
         pickFirst 'lib/*/libijkplayer.so'
+        pickFirst 'lib/*/libijkmp2jni.so'
     }
 }
 

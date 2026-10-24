@@ -492,7 +492,9 @@
                 android:background="@drawable/bg_badge"
                 android:focusable="true"
                 android:nextFocusLeft="@id/btn_start_scan"
-                android:padding="12dp">
+                android:nextFocusUp="@id/btn_export_m3u"
+                android:padding="12dp"
+                android:scrollbars="none">
 
                 <TextView
                     android:id="@+id/tv_scan_console_log"

@@ -2,12 +2,10 @@ package com.bjunicom.iptv.player;
 
 import android.content.Context;
 import android.graphics.SurfaceTexture;
-import android.media.MediaCrypto;
 import android.media.MediaFormat;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
-import android.os.Looper;
 import android.text.TextUtils;
 import android.util.Log;
 import android.view.Surface;
@@ -31,7 +29,6 @@ import com.google.android.exoplayer2.audio.AudioRendererEventListener;
 import com.google.android.exoplayer2.audio.AudioSink;
 import com.google.android.exoplayer2.audio.DecoderAudioRenderer;
 import com.google.android.exoplayer2.decoder.CryptoConfig;
-import com.google.android.exoplayer2.decoder.DecoderCounters;
 import com.google.android.exoplayer2.decoder.DecoderException;
 import com.google.android.exoplayer2.decoder.DecoderReuseEvaluation;
 import com.google.android.exoplayer2.mediacodec.MediaCodecAdapter;
@@ -50,6 +47,7 @@ import com.google.android.exoplayer2.video.VideoSize;
 import java.io.FileDescriptor;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -61,21 +59,19 @@ import tv.danmaku.ijk.media.player.MediaInfo;
 import tv.danmaku.ijk.media.player.misc.ITrackInfo;
 
 /**
- * 基于 ExoPlayer + 自定义 PreloadMediaSource 与 UTVLoadControl 的极速池化播放器模块 (UTVPlayer)
+ * 基于 ExoPlayer 的实例级池化播放器模块 (UTVPlayer)
  *
  * 核心架构特性：
- * 1. 全局单实例 ExoPlayer + 解码器池化与不销毁（原生支持 canReuseCodec）：
- *    - 全局仅维护单一 ExoPlayer 实例；
- *    - 通过自定义 AdaptiveMediaCodecVideoRenderer 将 MediaFormat 最大宽高固定配置为 3840x2160
- *      (KEY_MAX_WIDTH=3840, KEY_MAX_HEIGHT=2160)，当在同一个 ExoPlayer 实例中切换 MediaSource（如从 CCTV-1 切到 CCTV-2）时，
- *      MediaCodecVideoRenderer.canReuseCodec() 评估通过 (REUSE_RESULT_YES_WITH_FLUSH)，直接调用 codec.flush() 复用同一个硬件解码器而不销毁重建。
- * 2. 后台预拉流池（自定义 PreloadMediaSource）：
- *    - 在后台维护 3 个独立的 ProgressiveMediaPeriod（当前频道 + 上一频道 + 下一频道），在用户还没切台时就提前 prepare()
- *      并拉取组播/HTTP-TS 流写入各自的 SampleQueue。
- * 3. SurfaceView 动态绑定与 PlaceholderSurface 离屏挂靠（原生支持）：
- *    - 调用 setVideoSurfaceView(newSurfaceView) 底层直接触发 MediaCodec.setOutputSurface()；
- *    - 配合 ExoPlayer 内置的 PlaceholderSurface（EGL 创建的 1x1 离屏 Surface），即使外部 UI 的 SurfaceView 销毁了，
- *      解码器依然挂靠在 PlaceholderSurface 上在后台继续预解码首帧。
+ * 1. 与 IjkPlayer、MediaPlayer 完全一致的 Player 实例级三槽位池化（非全局单例）：
+ *    - 由 {@link IjkVideoView} 维护 3 个独立的 {@link UTVPlayer} 实例（mActiveSlot 主屏播放 + mPrevSlot / mNextSlot 离屏静音预热）；
+ *    - 切台命中相邻槽位时直接将离屏预热的 UTVPlayer 绑定至主屏 Surface 并恢复音量，实现毫秒级切台；
+ *    - 单个槽位内部重用时，通过自定义 {@link AdaptiveMediaCodecVideoRenderer} 将 MediaFormat 最大宽高固定为 3840x2160，
+ *      触发 {@code canReuseCodec() -> REUSE_RESULT_YES_WITH_FLUSH} 直接 {@code codec.flush()} 复用解码器。
+ * 2. ijkplayer (libijkffmpeg.so) MP2 音频解码器集成：
+ *    - 对 IPTV 普遍采用的 MP2 (audio/mpeg-L2) 伴音，通过 {@link Mp2DecoderAudioRenderer} 调用 ijkplayer 内置的
+ *      FFmpeg MP2 解码器输出 16-bit PCM 送入独立 AudioSink，彻底解决 ExoPlayer 音频严重失真问题。
+ * 3. SurfaceView 动态绑定与 PlaceholderSurface 离屏挂靠：
+ *    - 离屏预热或外部 SurfaceView 销毁时自动挂靠在 PlaceholderSurface 上，避免离屏 BufferQueue 积压阻塞。
  */
 public class UTVPlayer extends AbstractMediaPlayer {
     private static final String TAG = "UTVPlayer";
@@ -83,8 +79,6 @@ public class UTVPlayer extends AbstractMediaPlayer {
     public static final int MAX_ADAPTIVE_WIDTH = 3840;
     public static final int MAX_ADAPTIVE_HEIGHT = 2160;
     public static final int MAX_ADAPTIVE_INPUT_SIZE = 4 * 1024 * 1024;
-
-    private static volatile UTVPlayer sSharedInstance;
 
     private final Context appContext;
     private final IptvSettings settings;
@@ -106,6 +100,7 @@ public class UTVPlayer extends AbstractMediaPlayer {
 
     private Uri currentUri;
     private String currentRawChannelUrl;
+    private float currentVolume = 1.0f;
     private int videoWidth = 0;
     private int videoHeight = 0;
     private int videoSarNum = 1;
@@ -195,7 +190,9 @@ public class UTVPlayer extends AbstractMediaPlayer {
     }
 
     /**
-     * 支持硬解/软解动态切换的自定义 MediaCodecSelector
+     * 支持硬解/软解动态切换的自定义 MediaCodecSelector：
+     * 对 MP2 (audio/mpeg-L2) 音频强制交由内置的 ijkplayer FFmpeg MP2 解码渲染器处理，
+     * 避免部分机顶盒/电视固件将 audio/mpeg-L2 错误映射至系统 MP3 解码器或残缺 OMX 组件导致破音失真。
      */
     public static final class UTVMediaCodecSelector implements MediaCodecSelector {
         private final IptvSettings settings;
@@ -209,9 +206,9 @@ public class UTVPlayer extends AbstractMediaPlayer {
                                                     boolean requiresSecureDecoder,
                                                     boolean requiresTunnelingDecoder)
                 throws com.google.android.exoplayer2.mediacodec.MediaCodecUtil.DecoderQueryException {
-            // 注意：绝不能将 audio/mpeg-L2 (MP2) 强行替换为 audio/mpeg (MP3)！
-            // 系统 MP3 解码器 (c2.android.mp3.decoder) 无法解码 Layer II 帧，强行替换会导致音频解码报错并阻塞 AudioSink 主时钟。
-            // 若系统无原生 audio/mpeg-L2 MediaCodec，这里返回空列表，ExoPlayer 将自动回退至 Mp2DecoderAudioRenderer 软解。
+            if (Mp2SoftwareDecoder.isMp2MimeType(mimeType)) {
+                return Collections.emptyList();
+            }
             List<MediaCodecInfo> defaults = MediaCodecSelector.DEFAULT.getDecoderInfos(
                     mimeType, requiresSecureDecoder, requiresTunnelingDecoder);
             return selectDecodersForSettings(defaults, mimeType, settings);
@@ -219,9 +216,9 @@ public class UTVPlayer extends AbstractMediaPlayer {
     }
 
     /**
-     * 专用于 MP2 (audio/mpeg-L2) 的 ExoPlayer 软解音频渲染器：
-     * 当设备 MediaCodec 不支持 audio/mpeg-L2 硬解时，自动回退到此软解渲染器解码为 16-bit PCM 送入 AudioSink，
-     * 同时保持视频链路继续使用 MediaCodec 硬解与 canReuseCodec 秒切复用。
+     * 专用于 MP2 (audio/mpeg-L2) 的 ijkplayer FFmpeg 音频解码渲染器：
+     * 调用 ijkplayer (libijkffmpeg.so) 的 FFmpeg MP2 解码器将 MP2 帧解码为 16-bit PCM 送入独立 AudioSink，
+     * 彻底解决 ExoPlayer 播放 MP2 伴音严重失真的问题，同时保持视频链路 MediaCodec 硬解。
      */
     public static final class Mp2DecoderAudioRenderer
             extends DecoderAudioRenderer<Mp2SoftwareDecoder.ExoMp2SimpleDecoder> {
@@ -267,10 +264,11 @@ public class UTVPlayer extends AbstractMediaPlayer {
         protected Mp2SoftwareDecoder.ExoMp2SimpleDecoder createDecoder(Format format,
                                                                        @Nullable CryptoConfig cryptoConfig)
                 throws DecoderException {
+            Mp2SoftwareDecoder.ExoMp2SimpleDecoder decoder = new Mp2SoftwareDecoder.ExoMp2SimpleDecoder(format);
             if (owner != null) {
-                owner.activeAudioDecoderName = "MP2软解";
+                owner.activeAudioDecoderName = "ijkffmpeg-mp2";
             }
-            return new Mp2SoftwareDecoder.ExoMp2SimpleDecoder(format);
+            return decoder;
         }
 
         @Override
@@ -302,7 +300,7 @@ public class UTVPlayer extends AbstractMediaPlayer {
     /**
      * 自定义 MediaCodecVideoRenderer：
      * 1. 强制将 CodecMaxValues 与 MediaFormat 的最大宽高设为 3840x2160；
-     * 2. 在同一个 ExoPlayer 实例切换 MediaSource 时，通过 canReuseCodec() 返回 REUSE_RESULT_YES_WITH_FLUSH，
+     * 2. 在同一个 UTVPlayer 槽位切换 MediaSource 时，通过 canReuseCodec() 返回 REUSE_RESULT_YES_WITH_FLUSH，
      *    使 ExoPlayer 直接 flush() 复用同一个解码器，不销毁重建；
      * 3. 当用户在设置中切换硬解/软解时，canReuseCodec() 自动识别并返回 REUSE_RESULT_NO (DISCARD_REASON_APP_OVERRIDE)，
      *    立即切换至目标软解或硬解解码器。
@@ -452,7 +450,7 @@ public class UTVPlayer extends AbstractMediaPlayer {
     }
 
     /**
-     * 注入 AdaptiveMediaCodecVideoRenderer 与 UTVMediaCodecSelector 的 RenderersFactory
+     * 注入 AdaptiveMediaCodecVideoRenderer、UTVMediaCodecSelector 与 Mp2DecoderAudioRenderer 的 RenderersFactory
      */
     public static final class UTVRenderersFactory extends DefaultRenderersFactory {
         private final UTVPlayer owner;
@@ -499,6 +497,12 @@ public class UTVPlayer extends AbstractMediaPlayer {
                                            Handler eventHandler,
                                            AudioRendererEventListener eventListener,
                                            ArrayList<Renderer> out) {
+            // 为 Mp2DecoderAudioRenderer 分配独立的 AudioSink，避免与 MediaCodecAudioRenderer 争抢同一个 AudioSink.Listener
+            AudioSink mp2Sink = buildAudioSink(context, false, false, false);
+            if (mp2Sink == null) {
+                mp2Sink = audioSink;
+            }
+            out.add(new Mp2DecoderAudioRenderer(eventHandler, eventListener, mp2Sink, owner));
             super.buildAudioRenderers(
                     context,
                     extensionRendererMode,
@@ -508,25 +512,7 @@ public class UTVPlayer extends AbstractMediaPlayer {
                     eventHandler,
                     eventListener,
                     out);
-            // 将 Mp2DecoderAudioRenderer 注册在 MediaCodecAudioRenderer 之后：
-            // 1. 对 AAC / AC3 / EAC3 等系统 MediaCodec 支持的格式，优先使用硬件/系统 MediaCodecAudioRenderer；
-            // 2. 对 MP2 (audio/mpeg-L2) 且系统无对应 MediaCodec 时，自动回退至 Mp2DecoderAudioRenderer 纯软解。
-            out.add(new Mp2DecoderAudioRenderer(eventHandler, eventListener, audioSink, owner));
         }
-    }
-
-    /**
-     * 获取全局单实例 UTVPlayer（保持全局单实例 ExoPlayer，切台时不销毁解码器）
-     */
-    public static UTVPlayer getSharedInstance(Context context) {
-        if (sSharedInstance == null) {
-            synchronized (UTVPlayer.class) {
-                if (sSharedInstance == null) {
-                    sSharedInstance = new UTVPlayer(context.getApplicationContext());
-                }
-            }
-        }
-        return sSharedInstance;
     }
 
     public UTVPlayer(Context context) {
@@ -543,7 +529,7 @@ public class UTVPlayer extends AbstractMediaPlayer {
         this.preloadPool.bindPlaybackLooper(exoPlayer.getPlaybackLooper());
         this.exoPlayer.addListener(playerListener);
 
-        // 初始将 ExoPlayer 挂靠在 PlaceholderSurface 上，确保即使无 SurfaceView 也能在后台预解码首帧
+        // 初始将 UTVPlayer 挂靠在 PlaceholderSurface 上，确保离屏槽位预热时也能解码首帧
         parkToPlaceholderSurface();
     }
 
@@ -577,6 +563,10 @@ public class UTVPlayer extends AbstractMediaPlayer {
 
     public boolean isPromotedFromPreload() {
         return promotedFromPreload;
+    }
+
+    public void setPromotedFromPreload(boolean promoted) {
+        this.promotedFromPreload = promoted;
     }
 
     public void setRawChannelUrl(String rawChannelUrl) {
@@ -644,8 +634,7 @@ public class UTVPlayer extends AbstractMediaPlayer {
     /**
      * 将解码器挂靠在 ExoPlayer MediaCodecVideoRenderer 内置的 PlaceholderSurface (EGL 1x1 离屏 Surface) 上：
      * 调用 exoPlayer.clearVideoSurface() 会触发 MediaCodecVideoRenderer.setOutput(null)，
-     * 自动切换至其内部 placeholderSurface 并启用 skipOutputBuffer 机制（避免离屏 BufferQueue 积压阻塞），
-     * 即使外部 UI 的 SurfaceView 销毁了，解码器依然能挂靠在 PlaceholderSurface 上在后台继续预解码首帧。
+     * 自动切换至其内部 placeholderSurface 并启用 skipOutputBuffer 机制（避免离屏 BufferQueue 积压阻塞）。
      */
     public void parkToPlaceholderSurface() {
         attachedToPlaceholderSurface = true;
@@ -656,28 +645,16 @@ public class UTVPlayer extends AbstractMediaPlayer {
     }
 
     /**
-     * 在后台维护 3 个独立的 ProgressiveMediaPeriod（当前频道 + 上一频道 + 下一频道），
-     * 在用户尚未切台时提前 prepare 并拉取组播流写入各自的 SampleQueue。
+     * 当复用当前 PlayerSlot 加载新频道时调用：
+     * 仅重置状态标记并挂靠至 PlaceholderSurface，保留底层 ExoPlayer 的 MediaCodec 实例，
+     * 以便接下来 prepareAsync() 切换 MediaSource 时触发 canReuseCodec() 直接 flush() 复用解码器。
      */
-    public void preloadAdjacentChannels(@Nullable Uri prevUri,
-                                        @Nullable String prevRawUrl,
-                                        @Nullable Uri nextUri,
-                                        @Nullable String nextRawUrl) {
-        preloadPool.preloadThreeChannelWindow(
-                currentUri, currentRawChannelUrl,
-                prevUri, prevRawUrl,
-                nextUri, nextRawUrl);
-    }
-
-    /**
-     * 当用户切台 3 秒后未继续切台时，停止后台预拉流的 ProgressiveMediaPeriod
-     */
-    public void stopBackgroundPreloadPeriods() {
-        preloadPool.stopBackgroundPreloadPeriods(currentUri, currentRawChannelUrl);
-    }
-
-    public boolean areBackgroundPreloadPeriodsStopped() {
-        return preloadPool.areBackgroundPreloadPeriodsStopped(currentUri, currentRawChannelUrl);
+    public void prepareForSlotReuse() {
+        preparedNotified = false;
+        promotedFromPreload = false;
+        videoWidth = 0;
+        videoHeight = 0;
+        parkToPlaceholderSurface();
     }
 
     // ==================== IMediaPlayer 接口实现 ====================
@@ -755,8 +732,7 @@ public class UTVPlayer extends AbstractMediaPlayer {
         lastAppliedCodecConfigSignature = currentSig;
 
         MediaSource mediaSource = buildMediaSourceForUri(currentUri, currentRawChannelUrl);
-        // 在同一个全局单实例 ExoPlayer 中切换 MediaSource：
-        // MediaCodecVideoRenderer 自动调用 canReuseCodec() 评估并直接 flush() 复用同一个解码器
+        exoPlayer.setVolume(currentVolume);
         exoPlayer.setMediaSource(mediaSource, /* resetPosition= */ true);
         exoPlayer.prepare();
         exoPlayer.setPlayWhenReady(true);
@@ -766,20 +742,15 @@ public class UTVPlayer extends AbstractMediaPlayer {
         String uriStr = uri.toString().toLowerCase(Locale.US);
         String rawLower = rawUrl != null ? rawUrl.toLowerCase(Locale.US) : "";
         if (uriStr.contains(".m3u8") || rawLower.contains(".m3u8")) {
-            promotedFromPreload = false;
             return new HlsMediaSource.Factory(dataSourceFactory)
                     .setAllowChunklessPreparation(true)
                     .createMediaSource(MediaItem.fromUri(uri));
         }
         if (uriStr.contains(".mpd") || rawLower.contains(".mpd")) {
-            promotedFromPreload = false;
             return new DashMediaSource.Factory(dataSourceFactory)
                     .createMediaSource(MediaItem.fromUri(uri));
         }
-        PreloadMediaSource preloadSource = preloadPool.obtainMediaSource(uri, rawUrl);
-        PreloadMediaSource.PreloadedPeriodSlot slot = preloadSource.getBoundSlot();
-        promotedFromPreload = (slot != null && slot.promotedFromPreload);
-        return preloadSource;
+        return preloadPool.obtainMediaSource(uri, rawUrl);
     }
 
     @Override
@@ -789,7 +760,7 @@ public class UTVPlayer extends AbstractMediaPlayer {
 
     @Override
     public void stop() throws IllegalStateException {
-        exoPlayer.stop();
+        stopAndPark();
     }
 
     @Override
@@ -836,15 +807,16 @@ public class UTVPlayer extends AbstractMediaPlayer {
 
     @Override
     public void release() {
-        // 停止当前音视频流与后台预拉流并挂靠回 PlaceholderSurface
-        reset();
+        releasePlayer();
     }
 
     /**
-     * 停止 ExoPlayer 当前播放及后台预拉流，静音并挂靠回 PlaceholderSurface（用于切换至其他播放器内核或停止播放时）
+     * 停止当前 UTVPlayer 槽位的音视频流，静音并挂靠回 PlaceholderSurface（用于 3 秒空闲停止离屏实例或重置槽位时）
      */
     public void stopAndPark() {
         preparedNotified = false;
+        promotedFromPreload = false;
+        currentVolume = 0f;
         try {
             preloadPool.releaseAll();
         } catch (Throwable ignored) {
@@ -860,10 +832,10 @@ public class UTVPlayer extends AbstractMediaPlayer {
     }
 
     /**
-     * 彻底销毁全局单实例 ExoPlayer 及 PlaceholderSurface（仅在应用退出时调用）
+     * 彻底销毁当前 UTVPlayer 实例及其底层 ExoPlayer 与 PlaceholderSurface（在切换至其他播放器内核或释放槽位时调用）
      */
-    public synchronized void releaseGlobalInstance() {
-        preloadPool.releaseAll();
+    public synchronized void releasePlayer() {
+        stopAndPark();
         try {
             exoPlayer.release();
         } catch (Throwable ignored) {
@@ -889,7 +861,6 @@ public class UTVPlayer extends AbstractMediaPlayer {
             }
             fallbackSurfaceTexture = null;
         }
-        sSharedInstance = null;
     }
 
     @Override
@@ -899,7 +870,8 @@ public class UTVPlayer extends AbstractMediaPlayer {
 
     @Override
     public void setVolume(float leftVolume, float rightVolume) {
-        exoPlayer.setVolume(Math.max(leftVolume, rightVolume));
+        currentVolume = Math.max(leftVolume, rightVolume);
+        exoPlayer.setVolume(currentVolume);
     }
 
     @Override
@@ -914,11 +886,11 @@ public class UTVPlayer extends AbstractMediaPlayer {
         info.mVideoDecoder = "MediaCodec";
         info.mVideoDecoderImpl = activeVideoDecoderName;
         Format af = exoPlayer.getAudioFormat();
-        boolean isMp2Sw = !TextUtils.isEmpty(activeAudioDecoderName)
+        boolean isMp2 = !TextUtils.isEmpty(activeAudioDecoderName)
                 || (af != null && Mp2SoftwareDecoder.isMp2MimeType(af.sampleMimeType));
-        info.mAudioDecoder = isMp2Sw ? "Mp2SoftwareDecoder" : "MediaCodec";
-        info.mAudioDecoderImpl = isMp2Sw
-                ? "MP2软解"
+        info.mAudioDecoder = isMp2 ? "IjkFfmpegMp2Decoder" : "MediaCodec";
+        info.mAudioDecoderImpl = isMp2
+                ? "ijkffmpeg-mp2"
                 : ((af != null && !TextUtils.isEmpty(af.sampleMimeType)) ? af.sampleMimeType : "ExoAudio");
         return info;
     }
@@ -932,16 +904,16 @@ public class UTVPlayer extends AbstractMediaPlayer {
                 : "video/avc");
         boolean preferHw = isHardwareDecodingPreferred(mime, settings);
         boolean activeSw = !preferHw || isSoftwareDecoderName(activeVideoDecoderName);
-        String preloadTag = promotedFromPreload ? "+SampleQueue秒切" : "";
+        String poolTag = promotedFromPreload ? "三实例离屏秒切" : "三实例池化";
         Format af = exoPlayer.getAudioFormat();
-        boolean isMp2Sw = !TextUtils.isEmpty(activeAudioDecoderName)
+        boolean isMp2 = !TextUtils.isEmpty(activeAudioDecoderName)
                 || (af != null && Mp2SoftwareDecoder.isMp2MimeType(af.sampleMimeType));
-        String audioTag = isMp2Sw ? "+音频MP2软解" : "";
+        String audioTag = isMp2 ? "+IjkMP2解码" : "";
         if (activeSw) {
-            return "ExoPlayer (软解" + preloadTag + audioTag + ")";
+            return "ExoPlayer (" + poolTag + "软解" + audioTag + ")";
         }
-        String reuseTag = codecReuseHitCount.get() > 0 ? "canReuseCodec硬解复用" : "池化硬解";
-        return "ExoPlayer (" + reuseTag + preloadTag + audioTag + ")";
+        String reuseTag = codecReuseHitCount.get() > 0 ? (poolTag + "+canReuseCodec硬解") : (poolTag + "硬解");
+        return "ExoPlayer (" + reuseTag + audioTag + ")";
     }
 
     public Format getCurrentVideoFormat() {

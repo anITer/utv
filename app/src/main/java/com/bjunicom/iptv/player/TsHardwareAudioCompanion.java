@@ -577,7 +577,7 @@ public class TsHardwareAudioCompanion {
 
         void releaseNow() {
             if (swMp2Decoder != null) {
-                swMp2Decoder.reset();
+                swMp2Decoder.release();
                 swMp2Decoder = null;
             }
             if (codec != null) {
