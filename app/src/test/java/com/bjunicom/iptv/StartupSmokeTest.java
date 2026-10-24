@@ -413,15 +413,20 @@ public class StartupSmokeTest {
             for (int step = 1; step <= totalCategories * 2; step++) {
                 activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_RIGHT));
                 activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_RIGHT));
+                org.robolectric.shadows.ShadowLooper.runUiThreadTasks();
                 assertEquals(step % totalCategories, adapter.getSelectedPosition());
+                // Focus must never drift to the top search EditText when switching to an empty category
+                assertFalse(activity.findViewById(R.id.et_search_channel).hasFocus());
             }
 
             // Continuously press DPAD_LEFT across all categories and wrap around backwards twice
             for (int step = 1; step <= totalCategories * 2; step++) {
                 activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_LEFT));
                 activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_LEFT));
+                org.robolectric.shadows.ShadowLooper.runUiThreadTasks();
                 int expected = ((totalCategories * 2 - step) % totalCategories + totalCategories) % totalCategories;
                 assertEquals(expected, adapter.getSelectedPosition());
+                assertFalse(activity.findViewById(R.id.et_search_channel).hasFocus());
             }
 
             // Advance main looper by 6000ms (HUD_AUTO_HIDE_MS) and verify both channel drawer and HUD auto-hide

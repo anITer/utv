@@ -464,8 +464,8 @@
         android:layout_gravity="start"
         android:background="@drawable/bg_md3_drawer_sheet"
         android:clickable="true"
-        android:clipChildren="false"
-        android:clipToPadding="false"
+        android:clipChildren="true"
+        android:clipToPadding="true"
         android:descendantFocusability="afterDescendants"
         android:elevation="18dp"
         android:orientation="vertical"
@@ -473,80 +473,16 @@
         android:paddingVertical="16dp"
         android:visibility="gone">
 
-        <!-- 抽屉顶部 Header：标题 + 虚拟数字盘入口 + 仅看可用过滤 -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:clipChildren="false"
-            android:clipToPadding="false"
-            android:gravity="center_vertical"
-            android:orientation="horizontal"
-            android:paddingHorizontal="4dp"
-            android:paddingVertical="4dp">
-
-            <TextView
-                android:id="@+id/tv_drawer_title"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_marginEnd="6dp"
-                android:layout_weight="1"
-                android:ellipsize="end"
-                android:fontFamily="sans-serif-medium"
-                android:includeFontPadding="false"
-                android:letterSpacing="0.01"
-                android:singleLine="true"
-                android:text="uTV (215频道)"
-                android:textColor="@color/text_primary"
-                android:textSize="16sp"
-                android:textStyle="bold" />
-
-            <Button
-                android:id="@+id/btn_drawer_numpad"
-                style="@style/Widget.BjUnicomIptv.HudButton"
-                android:layout_width="wrap_content"
-                android:layout_height="36dp"
-                android:layout_marginEnd="8dp"
-                android:drawableStart="@drawable/ic_flat_dialpad"
-                android:drawablePadding="5dp"
-                android:focusable="true"
-                android:nextFocusDown="@id/et_search_channel"
-                android:nextFocusRight="@id/cb_only_available"
-                android:paddingHorizontal="12dp"
-                android:text="数字选台"
-                android:textColor="@color/accent_amber"
-                android:textSize="12sp" />
-
-            <CheckBox
-                android:id="@+id/cb_only_available"
-                android:layout_width="wrap_content"
-                android:layout_height="36dp"
-                android:background="@drawable/bg_badge"
-                android:buttonTint="@color/md_theme_dark_primary"
-                android:focusable="true"
-                android:gravity="center_vertical"
-                android:includeFontPadding="false"
-                android:minHeight="0dp"
-                android:nextFocusDown="@id/et_search_channel"
-                android:nextFocusLeft="@id/btn_drawer_numpad"
-                android:paddingHorizontal="10dp"
-                android:paddingVertical="0dp"
-                android:singleLine="true"
-                android:text="仅看可用"
-                android:textColor="@color/text_secondary"
-                android:textSize="12sp" />
-        </LinearLayout>
-
         <!-- Material 3 Pill Search Bar -->
         <EditText
             android:id="@+id/et_search_channel"
             android:layout_width="match_parent"
             android:layout_height="42dp"
             android:layout_marginHorizontal="4dp"
-            android:layout_marginTop="8dp"
             android:background="@drawable/bg_md3_search_bar"
             android:drawableStart="@drawable/ic_md_search"
             android:drawablePadding="10dp"
-            android:focusable="true"
+            android:focusable="false"
             android:focusableInTouchMode="false"
             android:gravity="center_vertical"
             android:hint="搜索频道名 / 台号 / 239.3.1.x..."
@@ -554,7 +490,6 @@
             android:includeFontPadding="false"
             android:inputType="text"
             android:nextFocusDown="@id/rv_categories"
-            android:nextFocusUp="@id/cb_only_available"
             android:paddingHorizontal="14dp"
             android:paddingVertical="0dp"
             android:singleLine="true"
@@ -570,7 +505,11 @@
             android:layout_marginTop="8dp"
             android:clipChildren="false"
             android:clipToPadding="false"
+            android:descendantFocusability="afterDescendants"
+            android:elevation="4dp"
             android:focusable="true"
+            android:nextFocusDown="@id/rv_channels"
+            android:nextFocusUp="@id/et_search_channel"
             android:paddingHorizontal="4dp"
             android:paddingVertical="4dp" />
 
@@ -579,13 +518,15 @@
             android:id="@+id/rv_channels"
             android:layout_width="match_parent"
             android:layout_height="0dp"
-            android:layout_marginTop="6dp"
+            android:layout_marginTop="8dp"
             android:layout_weight="1"
-            android:clipChildren="false"
-            android:clipToPadding="false"
-            android:focusable="true"
-            android:paddingHorizontal="4dp"
-            android:paddingVertical="6dp"
+            android:clipChildren="true"
+            android:clipToPadding="true"
+            android:descendantFocusability="afterDescendants"
+            android:focusable="false"
+            android:nextFocusUp="@id/rv_categories"
+            android:paddingHorizontal="6dp"
+            android:paddingVertical="4dp"
             android:scrollbars="vertical" />
 
         <!-- 抽屉底部操作指引 -->

@@ -52,7 +52,7 @@ public class CategoryAdapter extends RecyclerView.Adapter<CategoryAdapter.ViewHo
         if (!categories.contains(selectedCategory)) {
             selectedCategory = categories.isEmpty() ? "全部频道" : categories.get(0);
         }
-        updateSelectionVisuals();
+        notifyDataSetChanged();
     }
 
     @Override
@@ -81,9 +81,6 @@ public class CategoryAdapter extends RecyclerView.Adapter<CategoryAdapter.ViewHo
                         ((ViewHolder) vh).tvName.setSelected(isSelected);
                     }
                 }
-            }
-            if (!attachedRecyclerView.isComputingLayout()) {
-                notifyDataSetChanged();
             }
         } else {
             notifyDataSetChanged();

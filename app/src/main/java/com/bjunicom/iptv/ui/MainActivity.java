@@ -88,8 +88,6 @@ public class MainActivity extends AppCompatActivity {
     private boolean drawerFocusOnCategories = false;
     private CustomM3uDialogHelper customM3uDialogHelper;
 
-    private TextView tvDrawerTitle;
-    private CheckBox cbOnlyAvailable;
     private EditText etSearchChannel;
     private RecyclerView rvCategories;
     private RecyclerView rvChannels;
@@ -237,17 +235,9 @@ public class MainActivity extends AppCompatActivity {
         btnFavoriteChannel = findViewById(R.id.btn_favorite_channel);
         btnPrevChannel = findViewById(R.id.btn_prev_channel);
 
-        tvDrawerTitle = findViewById(R.id.tv_drawer_title);
-        cbOnlyAvailable = findViewById(R.id.cb_only_available);
         etSearchChannel = findViewById(R.id.et_search_channel);
         rvCategories = findViewById(R.id.rv_categories);
         rvChannels = findViewById(R.id.rv_channels);
-
-        cbOnlyAvailable.setChecked(settings.isOnlyShowAvailable());
-        cbOnlyAvailable.setOnCheckedChangeListener((buttonView, isChecked) -> {
-            settings.setOnlyShowAvailable(isChecked);
-            refreshChannelList();
-        });
 
         etSearchChannel.addTextChangedListener(new TextWatcher() {
             @Override
@@ -283,7 +273,6 @@ public class MainActivity extends AppCompatActivity {
         findViewById(R.id.btn_next_channel).setOnClickListener(v -> switchAdjacentChannel(1));
 
         findViewById(R.id.btn_numpad_dialog).setOnClickListener(v -> showVirtualNumpadDialog());
-        findViewById(R.id.btn_drawer_numpad).setOnClickListener(v -> showVirtualNumpadDialog());
 
         btnFavoriteChannel.setOnClickListener(v -> toggleCurrentChannelFavorite());
 
@@ -331,65 +320,27 @@ public class MainActivity extends AppCompatActivity {
             }
         }
 
-        int[] drawerBtnIds = {
-                R.id.btn_drawer_numpad,
-                R.id.cb_only_available
-        };
-        View.OnFocusChangeListener drawerFocusListener = (v, hasFocus) -> {
-            v.animate()
-                    .scaleX(hasFocus ? 1.04f : 1.0f)
-                    .scaleY(hasFocus ? 1.04f : 1.0f)
-                    .setDuration(120)
-                    .start();
-            v.setSelected(hasFocus);
-            if (!hasFocus) {
-                v.setFocusableInTouchMode(false);
-            }
-        };
-        for (int id : drawerBtnIds) {
-            View btn = findViewById(id);
-            if (btn != null) {
-                btn.setFocusable(true);
-                btn.setBackgroundTintList(null);
-                btn.setOnFocusChangeListener(drawerFocusListener);
-                btn.setOnKeyListener((v, keyCode, event) -> {
-                    if (event.getAction() != KeyEvent.ACTION_DOWN) {
-                        return false;
-                    }
-                    if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
-                        drawerFocusOnCategories = true;
-                        focusSelectedCategoryTab();
-                        return true;
-                    } else if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT || keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
-                        if (v.getId() == R.id.btn_drawer_numpad) {
-                            requestFocusCompat(cbOnlyAvailable);
-                        } else {
-                            requestFocusCompat(findViewById(R.id.btn_drawer_numpad));
-                        }
-                        return true;
-                    }
-                    return false;
-                });
-            }
-        }
-
         if (etSearchChannel != null) {
+            etSearchChannel.setFocusable(false);
+            etSearchChannel.setFocusableInTouchMode(false);
             etSearchChannel.setOnClickListener(v -> {
+                etSearchChannel.setFocusable(true);
                 etSearchChannel.setFocusableInTouchMode(true);
                 etSearchChannel.requestFocus();
             });
             etSearchChannel.setOnFocusChangeListener((v, hasFocus) -> {
                 if (!hasFocus) {
+                    v.setFocusable(false);
                     v.setFocusableInTouchMode(false);
                 }
             });
             etSearchChannel.setOnKeyListener((v, keyCode, event) -> {
                 if (event.getAction() == KeyEvent.ACTION_DOWN) {
                     if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                        etSearchChannel.setFocusable(false);
+                        etSearchChannel.setFocusableInTouchMode(false);
+                        drawerFocusOnCategories = true;
                         focusSelectedCategoryTab();
-                        return true;
-                    } else if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
-                        requestFocusCompat(findViewById(R.id.btn_drawer_numpad));
                         return true;
                     }
                 }
@@ -524,6 +475,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void setupCategoryList() {
         rvCategories.setLayoutManager(new LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false));
+        rvCategories.setItemAnimator(null);
         categoryAdapter = new CategoryAdapter(repository.getCategoryGroups(),
                 new CategoryAdapter.OnCategoryInteractionListener() {
                     @Override
@@ -542,7 +494,10 @@ public class MainActivity extends AppCompatActivity {
                     @Override
                     public void onRequestHeaderFocus() {
                         drawerFocusOnCategories = false;
-                        requestFocusCompat(findViewById(R.id.btn_drawer_numpad));
+                        if (etSearchChannel != null) {
+                            etSearchChannel.setFocusable(true);
+                            requestFocusCompat(etSearchChannel);
+                        }
                     }
 
                     @Override
@@ -556,6 +511,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void setupChannelList() {
         rvChannels.setLayoutManager(new LinearLayoutManager(this));
+        rvChannels.setItemAnimator(null);
         channelAdapter = new ChannelAdapter(new ChannelAdapter.OnChannelActionListener() {
             @Override
             public void onChannelClicked(IptvChannel channel, int position) {
@@ -604,13 +560,48 @@ public class MainActivity extends AppCompatActivity {
         if (categoryAdapter == null) {
             return;
         }
+        boolean targetEmpty = isAdjacentCategoryEmpty(delta);
+        if (targetEmpty) {
+            // 即将切换到空的频道分类（如尚未收藏频道的「★ 我的收藏」）：
+            // 在清空旧频道列表前先将焦点转移到分类栏标签上，防止旧频道项移除时系统默认焦点乱飘，
+            // 但保留原 drawerFocusOnCategories 状态，以便再切到下一个非空分类时能自动把焦点落回频道列表
+            if (rvCategories != null && rvCategories.getChildCount() > 0) {
+                int curPos = categoryAdapter.getSelectedPosition();
+                RecyclerView.ViewHolder curVh = rvCategories.findViewHolderForAdapterPosition(curPos);
+                if (curVh != null && curVh.itemView != null) {
+                    requestFocusCompat(curVh.itemView);
+                } else {
+                    requestFocusCompat(rvCategories.getChildAt(0));
+                }
+            } else if (rvCategories != null) {
+                requestFocusCompat(rvCategories);
+            }
+        }
         int newCatPos = categoryAdapter.selectAdjacentCategory(delta);
         scrollCategoryListToCenter(newCatPos);
-        if (drawerFocusOnCategories || channelAdapter == null || channelAdapter.getItemCount() == 0) {
+        if (channelAdapter == null || channelAdapter.getItemCount() == 0 || drawerFocusOnCategories) {
+            // 当前分类为空或用户原本就在分类栏上移动时，焦点保持在当前频道类型图标上
             focusSelectedCategoryTab();
         } else {
             focusChannelListAt(channelAdapter.getPlayingChannelIndex());
         }
+    }
+
+    private boolean isAdjacentCategoryEmpty(int delta) {
+        if (categoryAdapter == null || categoryAdapter.getItemCount() == 0 || repository == null) {
+            return false;
+        }
+        List<String> groups = repository.getCategoryGroups();
+        if (groups == null || groups.isEmpty()) {
+            return false;
+        }
+        int curIdx = categoryAdapter.getSelectedPosition();
+        int size = groups.size();
+        int nextIdx = ((curIdx + delta) % size + size) % size;
+        String nextCategory = groups.get(nextIdx);
+        String query = etSearchChannel != null && etSearchChannel.getText() != null
+                ? etSearchChannel.getText().toString() : "";
+        return repository.filterChannels(nextCategory, query, false).isEmpty();
     }
 
     private void setupPlayerListeners() {
@@ -688,22 +679,9 @@ public class MainActivity extends AppCompatActivity {
     public void refreshChannelList() {
         String category = categoryAdapter != null ? categoryAdapter.getSelectedCategory() : ChannelRepository.GROUP_ALL;
         String query = etSearchChannel != null ? etSearchChannel.getText().toString() : "";
-        boolean onlyAvailable = cbOnlyAvailable != null && cbOnlyAvailable.isChecked();
 
-        List<IptvChannel> filtered = repository.filterChannels(category, query, onlyAvailable);
+        List<IptvChannel> filtered = repository.filterChannels(category, query, false);
         channelAdapter.submitList(filtered);
-
-        List<IptvChannel> all = repository.getAllChannels();
-        int availableCount = 0;
-        for (IptvChannel c : all) {
-            if (Boolean.TRUE.equals(c.getConnected())) {
-                availableCount++;
-            }
-        }
-        String statsSuffix = availableCount > 0
-                ? String.format(Locale.US, " (%d/%d 可用)", availableCount, all.size())
-                : String.format(Locale.US, " (共%d频道)", all.size());
-        tvDrawerTitle.setText("uTV" + statsSuffix);
         updateIspButtonsVisualState();
     }
 
@@ -958,14 +936,15 @@ public class MainActivity extends AppCompatActivity {
             hudOverlay.setVisibility(View.GONE);
         }
         drawerPanel.setVisibility(View.VISIBLE);
-        drawerFocusOnCategories = false;
         updateHudButtonsVisualState();
         if (categoryAdapter != null) {
             scrollCategoryListToCenter(categoryAdapter.getSelectedPosition());
         }
         if (channelAdapter != null && channelAdapter.getItemCount() > 0) {
+            drawerFocusOnCategories = false;
             focusChannelListAt(channelAdapter.getPlayingChannelIndex());
         } else {
+            drawerFocusOnCategories = true;
             focusSelectedCategoryTab();
         }
         scheduleHideHud();
@@ -1072,22 +1051,25 @@ public class MainActivity extends AppCompatActivity {
         if (immediateVh != null && immediateVh.itemView != null) {
             requestFocusCompat(immediateVh.itemView);
             scrollCategoryListToCenter(pos);
+        } else if (rvCategories.getChildCount() > 0) {
+            // 若目标分类标签尚未完成绑定，先临时挂靠在分类栏可见标签上，避免焦点逃逸到顶部搜索框
+            requestFocusCompat(rvCategories.getChildAt(0));
         }
         rvCategories.post(() -> {
-            scrollCategoryListToCenter(pos);
-            RecyclerView.ViewHolder vh = rvCategories.findViewHolderForAdapterPosition(pos);
+            int targetPos = categoryAdapter.getSelectedPosition();
+            scrollCategoryListToCenter(targetPos);
+            RecyclerView.ViewHolder vh = rvCategories.findViewHolderForAdapterPosition(targetPos);
             if (vh != null && vh.itemView != null) {
                 requestFocusCompat(vh.itemView);
-                scrollCategoryListToCenter(pos);
+                scrollCategoryListToCenter(targetPos);
             } else {
                 rvCategories.post(() -> {
-                    scrollCategoryListToCenter(pos);
-                    RecyclerView.ViewHolder delayedVh = rvCategories.findViewHolderForAdapterPosition(pos);
+                    int delayedPos = categoryAdapter.getSelectedPosition();
+                    scrollCategoryListToCenter(delayedPos);
+                    RecyclerView.ViewHolder delayedVh = rvCategories.findViewHolderForAdapterPosition(delayedPos);
                     if (delayedVh != null && delayedVh.itemView != null) {
                         requestFocusCompat(delayedVh.itemView);
-                        scrollCategoryListToCenter(pos);
-                    } else {
-                        requestFocusCompat(rvCategories);
+                        scrollCategoryListToCenter(delayedPos);
                     }
                 });
             }
@@ -1655,13 +1637,7 @@ public class MainActivity extends AppCompatActivity {
                 if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
                     View focused = getCurrentFocus();
                     int focusedId = focused != null ? focused.getId() : View.NO_ID;
-                    if (focusedId == R.id.btn_drawer_numpad) {
-                        requestFocusCompat(cbOnlyAvailable);
-                        return true;
-                    } else if (focusedId == R.id.cb_only_available) {
-                        requestFocusCompat(findViewById(R.id.btn_drawer_numpad));
-                        return true;
-                    } else if (focusedId == R.id.et_search_channel
+                    if (focusedId == R.id.et_search_channel
                             && etSearchChannel.getText() != null
                             && etSearchChannel.getText().length() > 0) {
                         return super.dispatchKeyEvent(event);

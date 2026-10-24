@@ -164,7 +164,7 @@ public class ChannelAdapter extends RecyclerView.Adapter<ChannelAdapter.ViewHold
                     .scaleY(hasFocus ? 1.015f : 1.0f)
                     .setDuration(100)
                     .start();
-            v.setElevation(hasFocus ? 8f : 0f);
+            v.setElevation(hasFocus ? 2f : 0f);
             if (hasFocus) {
                 centerItemInRecyclerView(v);
             }
