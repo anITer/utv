@@ -506,11 +506,11 @@ public class IjkVideoView extends FrameLayout {
             return;
         }
         int playerType = mSettings.getPlayerType();
+        mHwAudioCompanion.stop();
+        ensureAllSlotsMatchPlayerType(playerType);
         if (playerType != IptvSettings.PLAYER_UTV && mSurfaceHolder == null) {
             return;
         }
-        mHwAudioCompanion.stop();
-        ensureAllSlotsMatchPlayerType(playerType);
 
         AudioManager am = (AudioManager) mAppContext.getSystemService(Context.AUDIO_SERVICE);
         if (am != null) {
@@ -798,6 +798,9 @@ public class IjkVideoView extends FrameLayout {
      * 立即清理或重置不匹配的旧实例，确保全部 3 个槽位均应用最新的硬解/软解与内核设置。
      */
     private void ensureAllSlotsMatchPlayerType(int desiredPlayerType) {
+        if (desiredPlayerType != IptvSettings.PLAYER_UTV && mUtvPlayer != null) {
+            mUtvPlayer.stopAndPark();
+        }
         String currentSig = buildCurrentCodecConfigSignature();
         for (PlayerSlot slot : mPlayerSlots) {
             if (slot != null && slot.player != null) {
@@ -1113,8 +1116,8 @@ public class IjkVideoView extends FrameLayout {
         slot.player = null;
         slot.playerType = -1;
         if (mp instanceof UTVPlayer) {
-            // UTVPlayer 为全局单实例 ExoPlayer，切台或释放槽位时不销毁解码器，仅挂靠回 PlaceholderSurface
-            ((UTVPlayer) mp).parkToPlaceholderSurface();
+            // 切换播放器类型或释放槽位时，立即停止 ExoPlayer 的音视频流与后台预拉流，并挂靠回 PlaceholderSurface
+            ((UTVPlayer) mp).stopAndPark();
             return;
         }
         if (mp instanceof TextureMediaPlayer) {
@@ -1148,6 +1151,9 @@ public class IjkVideoView extends FrameLayout {
     public void releaseAllSlots(boolean cleartargetstate) {
         removeCallbacks(mStopOffscreenRunnable);
         mHwAudioCompanion.stop();
+        if (mUtvPlayer != null) {
+            mUtvPlayer.stopAndPark();
+        }
         for (PlayerSlot slot : mPlayerSlots) {
             if (slot != null) {
                 releaseSlotPlayerOnly(slot);

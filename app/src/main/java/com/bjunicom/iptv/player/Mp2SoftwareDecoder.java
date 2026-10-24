@@ -21,7 +21,7 @@ import java.nio.ByteOrder;
  * - 国内广电及三大运营商 IPTV（如北京联通/北京电信）标清及大量高清频道采用 MP2 (audio/mpeg-L2, stream_type=0x03/0x04) 伴音；
  * - Android 系统 MediaCodec 默认仅内置 MP3 (audio/mpeg, Layer III) 解码器，绝大多数电视/盒子/手机无 audio/mpeg-L2 硬件或系统解码器；
  * - 本类提供：
- *   1. {@link Mp2Decoder}：独立帧级 MP2 -> 16-bit PCM 解码引擎（可供 ExoPlayer、TsHardwareAudioCompanion 伴音兜底等共用）；
+ *   1. {@link Mp2Decoder}：独立帧级 MP2 -> 16-bit PCM 解码引擎（与 FFmpeg mpegaudiodec 输出逐样本对齐，误差 <= 1~2 LSB）；
  *   2. {@link ExoMp2SimpleDecoder}：实现 ExoPlayer {@link SimpleDecoder} 接口，配合 {@link com.google.android.exoplayer2.audio.DecoderAudioRenderer}
  *      在视频保持 MediaCodec 硬解的同时，仅将 MP2 音频无缝回退至软解并驱动 AudioSink 主时钟。
  */
@@ -42,7 +42,7 @@ public final class Mp2SoftwareDecoder {
             {0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0}
     };
 
-    // MPEG Layer I 比特率表 (kbps): [lsf][bitrate_index] (兼容极少数 Layer I 帧)
+    // MPEG Layer I 比特率表 (kbps): [lsf][bitrate_index]
     private static final int[][] BITRATES_L1 = {
             {0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448, 0},
             {0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256, 0}
@@ -65,15 +65,6 @@ public final class Mp2SoftwareDecoder {
 
     // 64 个比例因子: SF[i] = 2.0 ^ (1 - i / 3.0)
     private static final float[] SCALEFACTORS = buildScalefactors();
-
-    // 反量化系数 C[stepIndex] 与偏移 D[stepIndex] (ISO/IEC 11172-3 Table B.4)
-    private static final float[] DEQUANT_C = {
-            1.33333333333f, 1.60000000000f, 1.14285714286f, 1.77777777778f,
-            1.06666666667f, 1.03225806452f, 1.01587301587f, 1.00787401575f,
-            1.00392156863f, 1.00195694716f, 1.00097751711f, 1.00048851979f,
-            1.00024420024f, 1.00012208522f, 1.00006103888f, 1.00003051851f,
-            1.00001525902f
-    };
 
     // ISO/IEC 11172-3 257 点原型多相合成窗 (与 FFmpeg ff_mpa_enwindow 完全一致，除以 65536 归一化)
     private static final int[] ENWINDOW_RAW = {
@@ -116,29 +107,20 @@ public final class Mp2SoftwareDecoder {
     }
 
     private static float[] buildSynthWindow() {
-        // 根据 ISO/IEC 11172-3 对称性由 257 点展开为完整 512 点合成滤波窗 D[0..511]
+        // 与 FFmpeg ff_mpa_synth_init_float 完全一致的 512 点对称多相合成滤波窗展开：
+        // 对 i = 0..256:
+        //   d[i] = ENWINDOW_RAW[i] / 65536.0f
+        //   当 (i & 63) != 0 时反号，写入 d[512 - i]
         float[] d = new float[512];
         final float scale = 1.0f / 65536.0f;
         for (int i = 0; i <= 256; i++) {
-            d[i] = ENWINDOW_RAW[i] * scale;
-        }
-        for (int i = 257; i < 512; i++) {
-            if ((i & 63) == 0) {
-                d[i] = 0.0f;
-            } else {
-                int sym = 512 - i;
-                // 在每个 64 点分段边界，符号对称关系遵循 ISO Table B.3
-                float sign = ((i & 64) != 0) ? -1.0f : 1.0f;
-                d[i] = sign * Math.abs(ENWINDOW_RAW[sym]) * scale;
-                if (i >= 448) {
-                    d[i] = Math.abs(ENWINDOW_RAW[sym]) * scale;
-                } else if (i >= 384) {
-                    d[i] = Math.abs(ENWINDOW_RAW[sym]) * scale;
-                } else if (i >= 320) {
-                    d[i] = -Math.abs(ENWINDOW_RAW[sym]) * scale;
-                } else {
-                    d[i] = -Math.abs(ENWINDOW_RAW[sym]) * scale;
-                }
+            float v = ENWINDOW_RAW[i] * scale;
+            d[i] = v;
+            if ((i & 63) != 0) {
+                v = -v;
+            }
+            if (i != 0) {
+                d[512 - i] = v;
             }
         }
         return d;
@@ -518,11 +500,15 @@ public final class Mp2SoftwareDecoder {
                             subbandSamples[ch][0][sb] = 0.0f;
                             subbandSamples[ch][1][sb] = 0.0f;
                             subbandSamples[ch][2][sb] = 0.0f;
+                            if (sb >= bound && hdr.channels > 1) {
+                                subbandSamples[1][0][sb] = 0.0f;
+                                subbandSamples[1][1][sb] = 0.0f;
+                                subbandSamples[1][2][sb] = 0.0f;
+                            }
                         } else {
                             int stepIdx = alloc - 1;
                             int qbits = QUANT_BITS[stepIdx];
                             int nlevels = QUANT_STEPS[stepIdx];
-                            float c = DEQUANT_C[stepIdx];
                             int s0, s1, s2;
                             if (qbits < 0) {
                                 // Grouping: 3 个样本打包在同一个码字中
@@ -536,11 +522,13 @@ public final class Mp2SoftwareDecoder {
                                 s1 = bitReader.readBits(qbits);
                                 s2 = bitReader.readBits(qbits);
                             }
-                            int mid = (nlevels + 1) >>> 1;
-                            float norm = 1.0f / mid;
-                            float v0 = ((s0 - mid + 1) * norm) * c;
-                            float v1 = ((s1 - mid + 1) * norm) * c;
-                            float v2 = ((s2 - mid + 1) * norm) * c;
+                            // 统一精确反量化公式: v = (2 * s - (nlevels - 1)) / nlevels
+                            // 同时适用于分组量化 (nlevels=3,5,9) 与非分组量化 (nlevels=2^qbits - 1)
+                            float invN = 1.0f / nlevels;
+                            int bias = nlevels - 1;
+                            float v0 = (2 * s0 - bias) * invN;
+                            float v1 = (2 * s1 - bias) * invN;
+                            float v2 = (2 * s2 - bias) * invN;
 
                             float sf = SCALEFACTORS[scalefactorIdx[ch][sb][part]];
                             subbandSamples[ch][0][sb] = v0 * sf;
@@ -580,7 +568,59 @@ public final class Mp2SoftwareDecoder {
         }
 
         private byte[] decodeLayer1Frame(FrameHeader hdr) {
+            int bound = (hdr.mode == 1) ? ((hdr.modeExt + 1) * 4) : 32;
+            for (int sb = 0; sb < bound; sb++) {
+                for (int ch = 0; ch < hdr.channels; ch++) {
+                    allocation[ch][sb] = bitReader.readBits(4);
+                }
+            }
+            for (int sb = bound; sb < 32; sb++) {
+                int a = bitReader.readBits(4);
+                allocation[0][sb] = a;
+                if (hdr.channels > 1) {
+                    allocation[1][sb] = a;
+                }
+            }
+            for (int sb = 0; sb < 32; sb++) {
+                for (int ch = 0; ch < hdr.channels; ch++) {
+                    if (allocation[ch][sb] != 0) {
+                        scalefactorIdx[ch][sb][0] = bitReader.readBits(6);
+                    }
+                }
+            }
             byte[] pcmBytes = new byte[384 * hdr.channels * 2];
+            ByteBuffer pcmBuf = ByteBuffer.wrap(pcmBytes).order(ByteOrder.LITTLE_ENDIAN);
+            for (int t = 0; t < 12; t++) {
+                for (int sb = 0; sb < 32; sb++) {
+                    int maxCh = (sb >= bound) ? 1 : hdr.channels;
+                    for (int ch = 0; ch < maxCh; ch++) {
+                        int a = allocation[ch][sb];
+                        if (a <= 0 || a >= 15) {
+                            subbandSamples[ch][0][sb] = 0.0f;
+                            if (sb >= bound && hdr.channels > 1) {
+                                subbandSamples[1][0][sb] = 0.0f;
+                            }
+                        } else {
+                            int qbits = a + 1;
+                            int nlevels = (1 << qbits) - 1;
+                            int s = bitReader.readBits(qbits);
+                            float v = (2 * s - (nlevels - 1)) / (float) nlevels;
+                            subbandSamples[ch][0][sb] = v * SCALEFACTORS[scalefactorIdx[ch][sb][0]];
+                            if (sb >= bound && hdr.channels > 1) {
+                                subbandSamples[1][0][sb] = v * SCALEFACTORS[scalefactorIdx[1][sb][0]];
+                            }
+                        }
+                    }
+                }
+                if (hdr.channels == 1) {
+                    synthesizeSubbands(0, subbandSamples[0][0], pcmBuf, 1, 0);
+                } else {
+                    int basePos = pcmBuf.position();
+                    synthesizeSubbands(0, subbandSamples[0][0], pcmBuf, 2, basePos);
+                    synthesizeSubbands(1, subbandSamples[1][0], pcmBuf, 2, basePos + 2);
+                    pcmBuf.position(basePos + 32 * 4);
+                }
+            }
             return pcmBytes;
         }
 

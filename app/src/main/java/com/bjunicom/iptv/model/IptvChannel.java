@@ -308,6 +308,38 @@ public class IptvChannel implements Serializable {
                 updatedTitle);
     }
 
+    /**
+     * 创建当前频道实体的深拷贝，避免扫描过程中直接原地修改仓库中的默认频道对象
+     */
+    public IptvChannel copy() {
+        IptvChannel c = new IptvChannel();
+        c.index = this.index;
+        c.channelNumber = this.channelNumber;
+        c.rawExtInfLine = this.rawExtInfLine;
+        c.rawTitle = this.rawTitle;
+        c.displayName = this.displayName;
+        c.tvgId = this.tvgId;
+        c.tvgName = this.tvgName;
+        c.tvgLogo = this.tvgLogo;
+        c.groupTitleRaw = this.groupTitleRaw;
+        c.groups = this.groups != null ? new ArrayList<>(this.groups) : new ArrayList<>();
+        c.rawUrl = this.rawUrl;
+        c.multicastIp = this.multicastIp;
+        c.multicastPort = this.multicastPort;
+        c.resolutionTag = this.resolutionTag;
+        c.videoTrackInfo = this.videoTrackInfo;
+        c.audioTrackInfo = this.audioTrackInfo;
+        c.screenshotPath = this.screenshotPath;
+        c.connected = this.connected;
+        c.actualResolutionFlag = this.actualResolutionFlag;
+        c.resolutionMismatch = this.resolutionMismatch;
+        c.latencyMs = this.latencyMs;
+        c.discoveredByScan = this.discoveredByScan;
+        c.favorite = this.favorite;
+        c.ispName = this.ispName;
+        return c;
+    }
+
     private static boolean isEmpty(CharSequence s) {
         return s == null || s.length() == 0;
     }

@@ -71,15 +71,30 @@
             style="@style/Widget.BjUnicomIptv.HudButton"
             android:layout_width="wrap_content"
             android:layout_height="38dp"
+            android:layout_marginEnd="8dp"
             android:drawableStart="@drawable/ic_flat_export"
             android:drawablePadding="6dp"
             android:focusable="true"
             android:nextFocusDown="@id/sv_scan_log"
             android:nextFocusLeft="@id/btn_import_m3u"
-            android:paddingHorizontal="16dp"
-            android:text="导出 M3U / CSV"
+            android:nextFocusRight="@id/btn_apply_scan_m3u"
+            android:paddingHorizontal="14dp"
+            android:text="保存到本地"
             android:textColor="@color/md_theme_dark_primary"
             android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/btn_apply_scan_m3u"
+            style="@style/Widget.BjUnicomIptv.PrimaryButton"
+            android:layout_width="wrap_content"
+            android:layout_height="38dp"
+            android:focusable="true"
+            android:nextFocusDown="@id/sv_scan_log"
+            android:nextFocusLeft="@id/btn_export_m3u"
+            android:paddingHorizontal="14dp"
+            android:text="立即应用"
+            android:textSize="13sp"
+            android:textStyle="bold" />
     </LinearLayout>
 
     <!-- 主体左右双栏 Material 3 Surface Container 卡片 -->

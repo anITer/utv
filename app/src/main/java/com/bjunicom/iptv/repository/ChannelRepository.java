@@ -1,6 +1,7 @@
 package com.bjunicom.iptv.repository;
 
 import android.content.Context;
+import android.os.Environment;
 import android.text.TextUtils;
 
 import com.bjunicom.iptv.config.IptvSettings;
@@ -13,13 +14,16 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * 频道数据仓库
@@ -63,12 +67,22 @@ public class ChannelRepository {
     public static final String GROUP_SD_ALL = "标清频道";
     public static final String GROUP_DISCOVERED = "动态扫描发现";
 
+    public interface OnChannelsChangedListener {
+        void onChannelsChanged();
+
+        default void onChannelsImportedAndPlayFirst() {
+            onChannelsChanged();
+        }
+    }
+
     private static volatile ChannelRepository instance;
 
     private final Context appContext;
     private final IptvSettings settings;
     private final List<IptvChannel> allChannels = new ArrayList<>();
     private final Map<String, IptvChannel> knownMulticastMap = new LinkedHashMap<>();
+    private final List<OnChannelsChangedListener> listeners = new CopyOnWriteArrayList<>();
+    private volatile File lastSavedLocalM3uFile;
 
     private ChannelRepository(Context context) {
         this.appContext = context.getApplicationContext();
@@ -88,6 +102,38 @@ public class ChannelRepository {
         return instance;
     }
 
+    public void addOnChannelsChangedListener(OnChannelsChangedListener listener) {
+        if (listener != null && !listeners.contains(listener)) {
+            listeners.add(listener);
+        }
+    }
+
+    public void removeOnChannelsChangedListener(OnChannelsChangedListener listener) {
+        listeners.remove(listener);
+    }
+
+    public void notifyChannelsChanged() {
+        for (OnChannelsChangedListener l : listeners) {
+            try {
+                l.onChannelsChanged();
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    public void notifyChannelsImportedAndPlayFirst() {
+        for (OnChannelsChangedListener l : listeners) {
+            try {
+                l.onChannelsImportedAndPlayFirst();
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    public File getLastSavedLocalM3uFile() {
+        return lastSavedLocalM3uFile;
+    }
+
     public synchronized void reloadChannels() {
         allChannels.clear();
         knownMulticastMap.clear();
@@ -96,7 +142,13 @@ public class ChannelRepository {
         boolean includeAll = settings.isIncludeAllRepoChannels();
         List<IptvChannel> baseList = new ArrayList<>();
 
-        if (ispProvider == IptvSettings.ISP_BEIJING_MOBILE) {
+        // 若用户曾通过扫描后「立即应用」替换了当前运营商的默认 M3U，则优先直接加载替换后的默认 M3U 内容
+        File appliedDefaultFile = getAppliedDefaultM3uFile();
+        List<IptvChannel> appliedDefaultList = loadAppliedDefaultWithIsp(appliedDefaultFile, ispProvider);
+
+        if (!appliedDefaultList.isEmpty()) {
+            baseList.addAll(appliedDefaultList);
+        } else if (ispProvider == IptvSettings.ISP_BEIJING_MOBILE) {
             String assetName = includeAll ? ASSET_MOBILE_ALL : ASSET_MOBILE_LATEST;
             baseList.addAll(loadFromAssetsWithIsp(assetName, GROUP_ISP_MOBILE, false));
         } else if (ispProvider == IptvSettings.ISP_BEIJING_TELECOM) {
@@ -142,11 +194,50 @@ public class ChannelRepository {
                 knownMulticastMap.put(ch.getMulticastKey(), ch);
             }
         }
+    }
 
-        // 如果存在动态扫描保存的 modified_iptv*.m3u，合并检测状态与新发现的组播地址
-        File scannedFile = new File(getScanRootDir(), getCustomScannedFileName());
-        if (scannedFile.exists()) {
-            mergeFromModifiedM3u(scannedFile);
+    public File getAppliedDefaultM3uFile() {
+        return new File(getScanRootDir(), getCustomScannedFileName());
+    }
+
+    private String getIspGroupNameForProvider(int ispProvider) {
+        switch (ispProvider) {
+            case IptvSettings.ISP_BEIJING_MOBILE:
+                return GROUP_ISP_MOBILE;
+            case IptvSettings.ISP_BEIJING_TELECOM:
+                return GROUP_ISP_TELECOM;
+            case IptvSettings.ISP_CUSTOM_M3U:
+                return GROUP_ISP_CUSTOM;
+            case IptvSettings.ISP_BEIJING_UNICOM:
+            default:
+                return GROUP_ISP_UNICOM;
+        }
+    }
+
+    private List<IptvChannel> loadAppliedDefaultWithIsp(File file, int ispProvider) {
+        if (file == null || !file.exists() || file.length() == 0) {
+            return new ArrayList<>();
+        }
+        try (InputStream is = new FileInputStream(file)) {
+            List<IptvChannel> list = M3uParser.parse(is);
+            if (list.isEmpty()) {
+                return list;
+            }
+            String defaultIspName = getIspGroupNameForProvider(ispProvider);
+            for (IptvChannel ch : list) {
+                ch.setConnected(true);
+                if (TextUtils.isEmpty(ch.getIspName())) {
+                    ch.setIspName(defaultIspName);
+                }
+                List<String> groups = new ArrayList<>(ch.getGroups());
+                if (!groups.contains(defaultIspName) && ispProvider != IptvSettings.ISP_ALL_MERGED) {
+                    groups.add(defaultIspName);
+                }
+                ch.setGroups(groups);
+            }
+            return list;
+        } catch (IOException e) {
+            return new ArrayList<>();
         }
     }
 
@@ -263,6 +354,9 @@ public class ChannelRepository {
             if (report.probedCount > 0) {
                 mergeScanResults(report.channels, true);
             }
+            if (!allChannels.isEmpty()) {
+                settings.setLastChannelUrl(allChannels.get(0).getRawUrl());
+            }
         } else {
             for (IptvChannel ch : report.channels) {
                 ch.setIspName(GROUP_ISP_CUSTOM);
@@ -276,6 +370,24 @@ public class ChannelRepository {
         }
 
         return report;
+    }
+
+    /**
+     * 从本地 M3U 文件读取并执行导入操作，更新频道列表
+     */
+    public synchronized M3uParser.M3uInspectionReport importLocalM3uFile(File localM3uFile,
+                                                                         boolean switchToCustomSource) {
+        if (localM3uFile == null || !localM3uFile.exists()) {
+            return M3uParser.inspectAndParse("", "empty.m3u");
+        }
+        try (InputStream is = new FileInputStream(localM3uFile)) {
+            byte[] buf = new byte[(int) localM3uFile.length()];
+            int read = is.read(buf);
+            String content = read > 0 ? new String(buf, 0, read, StandardCharsets.UTF_8) : "";
+            return importCustomM3uContent(content, localM3uFile.getName(), switchToCustomSource);
+        } catch (IOException e) {
+            return M3uParser.inspectAndParse("", localM3uFile.getName());
+        }
     }
 
     private List<IptvChannel> loadFromAssetsWithIsp(String fileName, String ispName, boolean appendIspToDisplay) {
@@ -390,6 +502,159 @@ public class ChannelRepository {
             }
         } catch (IOException ignored) {
         }
+    }
+
+    /**
+     * 从扫描结果中提取有效频道列表：
+     * - 若扫描结果中存在连通 (connected == true) 的频道，仅保留连通可用的频道；
+     * - 若在离线/无组播环境中全部为 false/null，则保留非空扫描列表兜底。
+     */
+    public synchronized List<IptvChannel> extractEffectiveScannedChannels(List<IptvChannel> scannedChannels) {
+        List<IptvChannel> source = (scannedChannels != null && !scannedChannels.isEmpty())
+                ? scannedChannels
+                : allChannels;
+        List<IptvChannel> connectedList = new ArrayList<>();
+        List<IptvChannel> allValid = new ArrayList<>();
+        for (IptvChannel ch : source) {
+            if (ch == null || TextUtils.isEmpty(ch.getRawUrl())) {
+                continue;
+            }
+            IptvChannel copy = ch.copy();
+            allValid.add(copy);
+            if (Boolean.TRUE.equals(ch.getConnected())) {
+                connectedList.add(copy);
+            }
+        }
+        return !connectedList.isEmpty() ? connectedList : allValid;
+    }
+
+    /**
+     * 将扫描结果构建为标准 M3U 文本内容
+     */
+    public synchronized String buildScannedM3uContent(List<IptvChannel> scannedChannels) {
+        List<IptvChannel> effective = extractEffectiveScannedChannels(scannedChannels);
+        return M3uParser.toM3uContent(effective, false, null);
+    }
+
+    /**
+     * 选项一：「保存到本地」—— 将扫描结果存储为本地 M3U 文件（不替换当前默认使用的频道表）
+     */
+    public synchronized File saveScannedM3uToLocalFile(List<IptvChannel> scannedChannels, String customFileName) {
+        String m3uContent = buildScannedM3uContent(scannedChannels);
+        String safeName = TextUtils.isEmpty(customFileName)
+                ? ("iptv_scanned_" + new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date()) + ".m3u")
+                : customFileName.trim();
+        if (!safeName.toLowerCase(Locale.ROOT).endsWith(".m3u")
+                && !safeName.toLowerCase(Locale.ROOT).endsWith(".m3u8")) {
+            safeName = safeName + ".m3u";
+        }
+
+        File localScanFile = new File(getScanRootDir(), safeName);
+        try (FileOutputStream fos = new FileOutputStream(localScanFile)) {
+            fos.write(m3uContent.getBytes(StandardCharsets.UTF_8));
+        } catch (IOException ignored) {
+        }
+
+        // 同时尝试写入系统公共 Download 目录，方便用户在文件管理器中直接查看
+        try {
+            File downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+            if (downloadDir != null && (downloadDir.exists() || downloadDir.mkdirs()) && downloadDir.canWrite()) {
+                File pubFile = new File(downloadDir, safeName);
+                try (FileOutputStream fos = new FileOutputStream(pubFile)) {
+                    fos.write(m3uContent.getBytes(StandardCharsets.UTF_8));
+                }
+                lastSavedLocalM3uFile = pubFile;
+                return pubFile;
+            }
+        } catch (Throwable ignored) {
+        }
+        lastSavedLocalM3uFile = localScanFile;
+        return localScanFile;
+    }
+
+    /**
+     * 选项二：「立即应用」——
+     * 1. 先将扫描后的结果保存为本地 M3U 文件；
+     * 2. 执行导入该本地 M3U 文件的操作更新频道列表；
+     * 3. 将第一个频道设为当前播放频道并通知播放页立即跳转到第一个频道。
+     *
+     * @return 更新后生效的频道数量
+     */
+    public synchronized int applyScannedResultAsDefaultM3u(List<IptvChannel> scannedChannels) {
+        List<IptvChannel> effective = extractEffectiveScannedChannels(scannedChannels);
+        if (effective.isEmpty()) {
+            return 0;
+        }
+
+        // 1. 先保存到本地 .m3u 文件
+        File localM3uFile = saveScannedM3uToLocalFile(effective, null);
+
+        // 2. 执行导入该本地 .m3u 文件的操作更新频道列表
+        M3uParser.M3uInspectionReport report = importLocalM3uFile(localM3uFile, true);
+        if (!report.isValid() || allChannels.isEmpty()) {
+            return 0;
+        }
+
+        // 回填本次扫描实测的音视频轨道、分辨率与延迟元数据
+        Map<String, IptvChannel> metaByKey = new LinkedHashMap<>();
+        for (IptvChannel ch : effective) {
+            metaByKey.put(ch.getMulticastKey(), ch);
+        }
+        for (IptvChannel ch : allChannels) {
+            IptvChannel meta = metaByKey.get(ch.getMulticastKey());
+            if (meta != null) {
+                if (meta.getConnected() != null) {
+                    ch.setConnected(meta.getConnected());
+                } else {
+                    ch.setConnected(true);
+                }
+                if (!TextUtils.isEmpty(meta.getActualResolutionFlag())) {
+                    ch.setActualResolutionFlag(meta.getActualResolutionFlag());
+                }
+                if (!TextUtils.isEmpty(meta.getVideoTrackInfo())) {
+                    ch.setVideoTrackInfo(meta.getVideoTrackInfo());
+                }
+                if (!TextUtils.isEmpty(meta.getAudioTrackInfo())) {
+                    ch.setAudioTrackInfo(meta.getAudioTrackInfo());
+                }
+                if (meta.getLatencyMs() > 0) {
+                    ch.setLatencyMs(meta.getLatencyMs());
+                }
+                ch.setDiscoveredByScan(meta.isDiscoveredByScan());
+                ch.setResolutionMismatch(meta.isResolutionMismatch());
+            }
+        }
+
+        // 3. 记录第一个频道为目标播放频道，并触发播放页刷新列表且跳转到第一个频道
+        settings.setLastChannelUrl(allChannels.get(0).getRawUrl());
+        notifyChannelsImportedAndPlayFirst();
+        return allChannels.size();
+    }
+
+    /**
+     * 清除已应用的扫描替换文件，恢复内置默认 M3U 播放列表
+     */
+    public synchronized void clearAppliedDefaultM3u() {
+        String[] files = {
+                CUSTOM_SCANNED_M3U_UNICOM,
+                CUSTOM_SCANNED_M3U_MOBILE,
+                CUSTOM_SCANNED_M3U_TELECOM,
+                CUSTOM_SCANNED_M3U_ALL,
+                CUSTOM_SCANNED_M3U_CUSTOM,
+                CUSTOM_UPLOADED_M3U_FILE
+        };
+        File root = getScanRootDir();
+        for (String name : files) {
+            File f = new File(root, name);
+            if (f.exists()) {
+                f.delete();
+            }
+        }
+        if (settings.getIspProvider() == IptvSettings.ISP_CUSTOM_M3U) {
+            settings.setIspProvider(IptvSettings.ISP_BEIJING_UNICOM);
+        }
+        reloadChannels();
+        notifyChannelsChanged();
     }
 
     public File getScanRootDir() {

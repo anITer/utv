@@ -624,7 +624,104 @@ public class StartupSmokeTest {
             int support = mp2Renderer.supportsFormat(mp2Format);
             assertEquals(com.google.android.exoplayer2.C.FORMAT_HANDLED,
                     com.google.android.exoplayer2.RendererCapabilities.getFormatSupport(support));
+
+            // 3. Verify switching from UTVPlayer (ExoPlayer) to IjkPlayer or MediaPlayer stops ExoPlayer audio
+            IjkVideoView videoView = activity.findViewById(R.id.ijk_video_view);
+            com.bjunicom.iptv.config.IptvSettings settings = new com.bjunicom.iptv.config.IptvSettings(activity);
+            settings.setPlayerType(com.bjunicom.iptv.config.IptvSettings.PLAYER_UTV);
+            videoView.setRawChannelUrl("rtp://239.3.1.129:8008");
+            videoView.setVideoPath("http://127.0.0.1:18080/rtp/239.3.1.129:8008");
+            assertTrue(utvPlayer.getExoPlayer().getPlayWhenReady());
+
+            // Switch player core to PLAYER_IJK -> UTVPlayer must stop and mute immediately
+            settings.setPlayerType(com.bjunicom.iptv.config.IptvSettings.PLAYER_IJK);
+            videoView.setVideoPath("http://127.0.0.1:18080/rtp/239.3.1.129:8008");
+            assertFalse(utvPlayer.getExoPlayer().getPlayWhenReady());
+            assertEquals(com.google.android.exoplayer2.Player.STATE_IDLE,
+                    utvPlayer.getExoPlayer().getPlaybackState());
+            assertEquals(0f, utvPlayer.getExoPlayer().getVolume(), 0.001f);
+
             utvPlayer.releaseGlobalInstance();
+        }
+    }
+
+    @Test
+    public void testScanCompletedSaveToLocalAndApplyReplacesDefaultAndRefreshesList() throws Exception {
+        try (ActivityController<MainActivity> mainCtrl = Robolectric.buildActivity(MainActivity.class);
+             ActivityController<com.bjunicom.iptv.ui.ScannerActivity> scanCtrl =
+                     Robolectric.buildActivity(com.bjunicom.iptv.ui.ScannerActivity.class)) {
+            MainActivity mainActivity = mainCtrl.create().start().resume().visible().get();
+            com.bjunicom.iptv.ui.ScannerActivity scannerActivity = scanCtrl.create().start().resume().visible().get();
+
+            com.bjunicom.iptv.repository.ChannelRepository repo =
+                    com.bjunicom.iptv.repository.ChannelRepository.getInstance(mainActivity);
+            repo.clearAppliedDefaultM3u();
+            int initialDefaultCount = repo.getAllChannels().size();
+            assertTrue(initialDefaultCount > 50);
+
+            // Prepare 2 scanned channels (1 connected=true [CCTV-4K], 1 connected=false)
+            com.bjunicom.iptv.model.IptvChannel ch1 = com.bjunicom.iptv.parser.M3uParser.buildChannel(
+                    1,
+                    "#EXTINF:-1 tvg-id=\"85\" tvg-name=\"CCTV4K\" group-title=\"[高清]央视;4K\",CCTV-4K超高清[85][4K]",
+                    "rtp://239.3.1.244:2000");
+            ch1.setConnected(true);
+            ch1.setActualResolutionFlag("4K");
+            ch1.setVideoTrackInfo("#1 hevc, 3840x2160,50fps");
+
+            com.bjunicom.iptv.model.IptvChannel ch2 = com.bjunicom.iptv.parser.M3uParser.buildChannel(
+                    2,
+                    "#EXTINF:-1 tvg-id=\"2\" tvg-name=\"CCTV2\" group-title=\"[高清]央视\",CCTV-2财经[2][高清]",
+                    "rtp://239.3.1.130:8008");
+            ch2.setConnected(false);
+
+            java.util.List<com.bjunicom.iptv.model.IptvChannel> scannedList =
+                    java.util.Arrays.asList(ch1, ch2);
+            com.bjunicom.iptv.scanner.ScanStatistics stats = new com.bjunicom.iptv.scanner.ScanStatistics();
+            stats.totalChannels = 2;
+            stats.connectTrueCount = 1;
+            stats.connectFalseCount = 1;
+
+            // 1. Trigger scan completion -> verify dialog with "立即应用" and "保存到本地" is shown,
+            // and default channel list is NOT replaced before user chooses "立即应用"
+            scannerActivity.handleScanCompleted(scannedList, stats);
+            androidx.appcompat.app.AlertDialog dialog = scannerActivity.getLastCompletionDialog();
+            assertNotNull(dialog);
+            assertTrue(dialog.isShowing());
+            assertEquals("立即应用", dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).getText().toString());
+            assertEquals("保存到本地", dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_NEUTRAL).getText().toString());
+            assertEquals(initialDefaultCount, repo.getAllChannels().size());
+
+            // 2. Click "保存到本地" -> verify local .m3u file is saved with only the valid connected channel,
+            // and default channel list is still untouched
+            java.io.File savedFile = scannerActivity.saveScanResultsToLocalM3u(scannedList);
+            assertNotNull(savedFile);
+            assertTrue(savedFile.exists());
+            assertTrue(savedFile.length() > 0);
+            assertEquals(initialDefaultCount, repo.getAllChannels().size());
+
+            // 3. Click "立即应用" -> verify it first saves to a local .m3u file, imports that local .m3u file
+            // to update the channel list, and immediately jumps MainActivity to play the first channel
+            dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).performClick();
+            org.robolectric.shadows.ShadowLooper.runUiThreadTasks();
+
+            assertNotNull(repo.getLastSavedLocalM3uFile());
+            assertTrue(repo.getLastSavedLocalM3uFile().exists());
+            assertTrue(repo.hasCustomUploadedM3u());
+            assertEquals(1, repo.getAllChannels().size());
+            assertEquals("rtp://239.3.1.244:2000", repo.getAllChannels().get(0).getRawUrl());
+
+            androidx.recyclerview.widget.RecyclerView rvChannels = mainActivity.findViewById(R.id.rv_channels);
+            com.bjunicom.iptv.ui.adapter.ChannelAdapter channelAdapter =
+                    (com.bjunicom.iptv.ui.adapter.ChannelAdapter) rvChannels.getAdapter();
+            assertNotNull(channelAdapter);
+            assertEquals(1, channelAdapter.getItemCount());
+            assertNotNull(mainActivity.getCurrentChannel());
+            assertEquals("rtp://239.3.1.244:2000", mainActivity.getCurrentChannel().getRawUrl());
+
+            // Clean up applied default M3U for subsequent tests
+            repo.clearAppliedDefaultM3u();
+            org.robolectric.shadows.ShadowLooper.runUiThreadTasks();
+            assertEquals(initialDefaultCount, repo.getAllChannels().size());
         }
     }
 }

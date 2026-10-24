@@ -228,7 +228,12 @@ public class MulticastScannerEngine {
         File runDir = createRunDirectory();
         ScanStatistics stats = initStats(runDir);
 
-        List<IptvChannel> channels = repository.getAllChannels();
+        List<IptvChannel> channels = new ArrayList<>();
+        for (IptvChannel orig : repository.getAllChannels()) {
+            if (orig != null) {
+                channels.add(orig.copy());
+            }
+        }
         int total = channels.size();
         StringBuilder scriptLog = new StringBuilder();
         StringBuilder mismatchLog = new StringBuilder("Resolution Mismatch Log\n-----------------------\n");
@@ -355,7 +360,7 @@ public class MulticastScannerEngine {
                         int idx = counterGen.getAndIncrement();
                         IptvChannel channel;
                         if (known != null) {
-                            channel = known;
+                            channel = known.copy();
                         } else {
                             String rawUrl = "rtp://" + ip + ":" + port;
                             String ispPrefix = cleanSubnet.startsWith("225.") ? "电信组播" : "联通组播";
@@ -410,8 +415,19 @@ public class MulticastScannerEngine {
         }
         hostPool.shutdownNow();
 
-        // 若动态扫描到的新频道或可用频道非空，合并至仓库
+        // 对动态扫描命中的可用频道按台号升序排列并重新编号
         List<IptvChannel> finalChannels = new ArrayList<>(discoveredChannels);
+        Collections.sort(finalChannels, (a, b) -> {
+            int na = a.getChannelNumber() > 0 ? a.getChannelNumber() : Integer.MAX_VALUE;
+            int nb = b.getChannelNumber() > 0 ? b.getChannelNumber() : Integer.MAX_VALUE;
+            if (na != nb) {
+                return Integer.compare(na, nb);
+            }
+            return Integer.compare(a.getIndex(), b.getIndex());
+        });
+        for (int i = 0; i < finalChannels.size(); i++) {
+            finalChannels.get(i).setIndex(i + 1);
+        }
         emitLog(callback, scriptLog, String.format(Locale.US,
                 "[%s] [SCAN] Subnet scan completed. Active multicast streams found: %d (Newly discovered: %d)",
                 nowTimeStr(), finalChannels.size(), stats.newlyDiscoveredCount));
@@ -510,7 +526,8 @@ public class MulticastScannerEngine {
         activeShellProcess = null;
         stats.durationSeconds = Math.max(1L, (System.currentTimeMillis() / 1000L) - startEpoch);
 
-        // 查找最新生成的 iptv_YYYYMMDD_HHMMSS 目录并加载 modified_iptv.m3u
+        // 查找最新生成的 iptv_YYYYMMDD_HHMMSS 目录并解析扫描结果列表（交由用户选择「保存到本地」或「立即应用」）
+        List<IptvChannel> resultChannels = new ArrayList<>(probedList);
         File latestDir = findLatestIptvOutputDir(workDir);
         if (latestDir != null) {
             stats.outputRootDir = latestDir;
@@ -519,16 +536,21 @@ public class MulticastScannerEngine {
             stats.mismatchLogFile = new File(latestDir, "mismatch.log");
             stats.scriptLogFile = new File(latestDir, "script.log");
             if (stats.modifiedM3uFile.exists()) {
-                repository.mergeFromModifiedM3u(stats.modifiedM3uFile);
+                try (InputStream is = new java.io.FileInputStream(stats.modifiedM3uFile)) {
+                    List<IptvChannel> parsed = M3uParser.parse(is);
+                    for (IptvChannel ch : parsed) {
+                        ch.setConnected(true);
+                    }
+                    if (!parsed.isEmpty()) {
+                        resultChannels = parsed;
+                    }
+                } catch (IOException ignored) {
+                }
             }
         }
 
-        if (!probedList.isEmpty()) {
-            repository.mergeScanResults(probedList, true);
-        }
-
         if (callback != null) {
-            callback.onCompleted(repository.getAllChannels(), stats);
+            callback.onCompleted(resultChannels, stats);
         }
     }
 
@@ -555,8 +577,9 @@ public class MulticastScannerEngine {
         else if ("其它".equals(res)) stats.otherCount++;
         else stats.errorCount++;
 
-        for (IptvChannel ch : repository.getAllChannels()) {
-            if (url.equals(ch.getRawUrl())) {
+        for (IptvChannel orig : repository.getAllChannels()) {
+            if (url.equals(orig.getRawUrl())) {
+                IptvChannel ch = orig.copy();
                 ch.setConnected(connected);
                 ch.setActualResolutionFlag(res);
                 ch.setVideoTrackInfo(video);
@@ -853,14 +876,12 @@ public class MulticastScannerEngine {
         String finalLog = scriptLogContent + "\n" + stats.toSummaryText() + "\n";
         writeTextFile(stats.scriptLogFile, finalLog);
 
-        // 无论扫描结果如何，同步更新 ChannelRepository 并持久化（确保不可用频道不会被误标为可用）
-        repository.mergeScanResults(channels, true);
-
+        // 注意：扫描完成后不自动覆盖默认 M3U，而是通过 onCompleted 回调给用户提供「保存到本地」与「立即应用」两个选项
         if (callback != null) {
             callback.onLogLine("----------------------------------------");
             callback.onLogLine(stats.toSummaryText());
-            callback.onLogLine("已生成: " + stats.resultsCsvFile.getAbsolutePath());
-            callback.onLogLine("已生成: " + stats.modifiedM3uFile.getAbsolutePath());
+            callback.onLogLine("已生成巡检报告: " + stats.resultsCsvFile.getAbsolutePath());
+            callback.onLogLine("已生成候选 M3U: " + stats.modifiedM3uFile.getAbsolutePath());
             callback.onCompleted(channels, stats);
         }
     }

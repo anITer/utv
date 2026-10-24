@@ -279,10 +279,7 @@ public class CustomM3uDialogHelper {
                         btnProbeStreams.setText("检测流连通性");
                     }
                     renderInspectionReport(report);
-                    Toast.makeText(activity,
-                            String.format(Locale.US, "流检测完成：可用 %d / %d 个频道",
-                                    report.reachableCount, report.validChannelCount),
-                            Toast.LENGTH_SHORT).show();
+                    showProbeCompletedOptionsDialog(resultChannels, report);
                 });
             }
 
@@ -296,6 +293,48 @@ public class CustomM3uDialogHelper {
                 });
             }
         });
+    }
+
+    private void showProbeCompletedOptionsDialog(final List<IptvChannel> resultChannels,
+                                                 final M3uParser.M3uInspectionReport report) {
+        if (activity == null || activity.isFinishing()) {
+            return;
+        }
+        String msg = String.format(Locale.US,
+                "频道流检测完成：可用 %d / %d 个频道。\n\n"
+                        + "• 立即应用：将扫描后的结果替换掉默认使用的 M3U 内容，并立即刷新频道列表\n"
+                        + "• 保存到本地：将扫描结果存储为本地的 .m3u 文件",
+                report.reachableCount, report.validChannelCount);
+
+        AlertDialog dialog = new MaterialAlertDialogBuilder(activity)
+                .setTitle("频道检测完成")
+                .setMessage(msg)
+                .setPositiveButton("立即应用", (d, w) -> {
+                    int appliedCount = repository.applyScannedResultAsDefaultM3u(resultChannels);
+                    if (activeDialog != null && activeDialog.isShowing()) {
+                        activeDialog.dismiss();
+                    }
+                    if (listener != null) {
+                        listener.onCustomM3uApplied(report, true);
+                    }
+                    Toast.makeText(activity,
+                            String.format(Locale.US, "已保存并导入本地 M3U (%d 个频道)，正在播放第 1 个频道", appliedCount),
+                            Toast.LENGTH_LONG).show();
+                })
+                .setNeutralButton("保存到本地", null)
+                .setNegativeButton("暂不处理", null)
+                .create();
+
+        dialog.show();
+        Button btnSaveLocal = dialog.getButton(AlertDialog.BUTTON_NEUTRAL);
+        if (btnSaveLocal != null) {
+            btnSaveLocal.setOnClickListener(v -> {
+                File savedFile = repository.saveScannedM3uToLocalFile(resultChannels, null);
+                Toast.makeText(activity,
+                        "已保存到本地 M3U 文件:\n" + savedFile.getAbsolutePath(),
+                        Toast.LENGTH_LONG).show();
+            });
+        }
     }
 
     private void stopProbeEngine() {

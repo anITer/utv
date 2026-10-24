@@ -277,6 +277,26 @@ public class UTVPlayer extends AbstractMediaPlayer {
         protected Format getOutputFormat(Mp2SoftwareDecoder.ExoMp2SimpleDecoder decoder) {
             return decoder.getCurrentOutputPcmFormat();
         }
+
+        @Override
+        protected DecoderReuseEvaluation canReuseDecoder(String decoderName,
+                                                         Format oldFormat,
+                                                         Format newFormat) {
+            if (oldFormat != null
+                    && newFormat != null
+                    && Mp2SoftwareDecoder.isMp2MimeType(oldFormat.sampleMimeType)
+                    && Mp2SoftwareDecoder.isMp2MimeType(newFormat.sampleMimeType)
+                    && oldFormat.sampleRate == newFormat.sampleRate
+                    && oldFormat.channelCount == newFormat.channelCount) {
+                return new DecoderReuseEvaluation(
+                        decoderName,
+                        oldFormat,
+                        newFormat,
+                        DecoderReuseEvaluation.REUSE_RESULT_YES_WITH_FLUSH,
+                        0);
+            }
+            return super.canReuseDecoder(decoderName, oldFormat, newFormat);
+        }
     }
 
     /**
@@ -816,8 +836,27 @@ public class UTVPlayer extends AbstractMediaPlayer {
 
     @Override
     public void release() {
-        // 全局单实例 ExoPlayer 切台时不销毁解码器，仅停止当前流并挂靠回 PlaceholderSurface
+        // 停止当前音视频流与后台预拉流并挂靠回 PlaceholderSurface
         reset();
+    }
+
+    /**
+     * 停止 ExoPlayer 当前播放及后台预拉流，静音并挂靠回 PlaceholderSurface（用于切换至其他播放器内核或停止播放时）
+     */
+    public void stopAndPark() {
+        preparedNotified = false;
+        try {
+            preloadPool.releaseAll();
+        } catch (Throwable ignored) {
+        }
+        try {
+            exoPlayer.setPlayWhenReady(false);
+            exoPlayer.setVolume(0f);
+            exoPlayer.stop();
+            exoPlayer.clearMediaItems();
+        } catch (Throwable ignored) {
+        }
+        parkToPlaceholderSurface();
     }
 
     /**
@@ -855,9 +894,7 @@ public class UTVPlayer extends AbstractMediaPlayer {
 
     @Override
     public void reset() {
-        preparedNotified = false;
-        // 保持解码器挂靠在 PlaceholderSurface 上，不释放底层 MediaCodec
-        parkToPlaceholderSurface();
+        stopAndPark();
     }
 
     @Override

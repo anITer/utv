@@ -138,12 +138,39 @@ public class MainActivity extends AppCompatActivity {
         }
     };
 
+    private final ChannelRepository.OnChannelsChangedListener channelsChangedListener =
+            new ChannelRepository.OnChannelsChangedListener() {
+                @Override
+                public void onChannelsChanged() {
+                    mainHandler.post(() -> {
+                        if (categoryAdapter != null) {
+                            categoryAdapter.setCategories(repository.getCategoryGroups());
+                        }
+                        refreshChannelList();
+                    });
+                }
+
+                @Override
+                public void onChannelsImportedAndPlayFirst() {
+                    mainHandler.post(() -> {
+                        if (categoryAdapter != null) {
+                            categoryAdapter.setCategories(repository.getCategoryGroups());
+                            categoryAdapter.setSelectedCategory(ChannelRepository.GROUP_ALL);
+                        }
+                        updateIspButtonsVisualState();
+                        refreshChannelList();
+                        playFirstChannel();
+                    });
+                }
+            };
+
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
         repository = ChannelRepository.getInstance(this);
+        repository.addOnChannelsChangedListener(channelsChangedListener);
         settings = new IptvSettings(this);
         customM3uDialogHelper = new CustomM3uDialogHelper(this, this::onCustomM3uApplied);
 
@@ -206,7 +233,7 @@ public class MainActivity extends AppCompatActivity {
         updateIspButtonsVisualState();
         refreshChannelList();
         if (switchedToCustomIsp || currentChannel == null) {
-            playInitialChannel();
+            playFirstChannel();
         }
         String modeDesc = switchedToCustomIsp ? "已切换为自定义源并加载" : "已合并到当前播放列表";
         Toast.makeText(this,
@@ -701,6 +728,21 @@ public class MainActivity extends AppCompatActivity {
         if (target != null) {
             playChannel(target);
         }
+    }
+
+    /**
+     * 立即跳转到当前频道列表的第一个频道并开始播放
+     */
+    public void playFirstChannel() {
+        List<IptvChannel> all = repository.getAllChannels();
+        if (!all.isEmpty()) {
+            playChannel(all.get(0));
+            scrollChannelListToCenter(0);
+        }
+    }
+
+    public IptvChannel getCurrentChannel() {
+        return currentChannel;
     }
 
     public void playChannel(IptvChannel channel) {
@@ -1776,6 +1818,9 @@ public class MainActivity extends AppCompatActivity {
     protected void onResume() {
         super.onResume();
         AppUpdateManager.getInstance(this).attachActivity(this);
+        if (categoryAdapter != null) {
+            categoryAdapter.setCategories(repository.getCategoryGroups());
+        }
         refreshChannelList();
         mainHandler.post(telemetryTickRunnable);
         if (currentChannel != null && !videoView.isPlaying()) {
@@ -1794,6 +1839,9 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        if (repository != null) {
+            repository.removeOnChannelsChangedListener(channelsChangedListener);
+        }
         mainHandler.removeCallbacksAndMessages(null);
         if (videoView != null) {
             videoView.stopPlayback();
