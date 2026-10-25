@@ -14,7 +14,7 @@ import com.google.android.exoplayer2.upstream.DefaultAllocator;
  * UTVPlayer 专用低延迟直播与预拉流缓冲控制器 (UTVLoadControl)
  *
  * 特性：
- * 1. 提供共享 DefaultAllocator 供后台 PreloadMediaSource 的 3 个 ProgressiveMediaPeriod (SampleQueue) 与主解码器共用；
+ * 1. 为当前 ProgressiveMediaSource 提供统一的 DefaultAllocator；后台预收流只缓存 TS 字节；
  * 2. 针对 IPTV 组播/HTTP-TS 直播将起播缓冲阈值降至 120ms，恢复缓冲降至 400ms，只要 SampleQueue 中已有预拉取的关键帧即可瞬间起播；
  * 3. 开启 retainBackBufferFromKeyframe = true (保留最近 1.5s 关键帧起点回溯缓冲)。
  */

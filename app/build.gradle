@@ -80,7 +80,7 @@ dependencies {
     // Bilibili ijkplayer core & patched multi-ABI native libraries (in src/main/jniLibs with MP2 decoder enabled)
     implementation 'tv.danmaku.ijk.media:ijkplayer-java:0.8.8'
 
-    // ExoPlayer 2.19.1 for UTVPlayer (custom PreloadMediaSource, ProgressiveMediaPeriod, SampleQueue, LoadControl, PlaceholderSurface)
+    // ExoPlayer 2.19.1 for UTVPlayer (ProgressiveMediaSource, decoder-free TS preloading, LoadControl)
     implementation 'com.google.android.exoplayer:exoplayer-core:2.19.1'
     implementation 'com.google.android.exoplayer:exoplayer-extractor:2.19.1'
     implementation 'com.google.android.exoplayer:exoplayer-hls:2.19.1'

@@ -228,9 +228,9 @@ public class LocalMulticastProxyServer {
             out.write(responseHeaders.getBytes(StandardCharsets.US_ASCII));
             out.flush();
 
-            byte[] buffer = new byte[2048];
+            byte[] buffer = new byte[65535];
             DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
-            boolean isRtp = "rtp".equalsIgnoreCase(proto);
+            RtpTsPacketParser payloadParser = new RtpTsPacketParser();
 
             while (running.get() && !client.isClosed()) {
                 packet.setLength(buffer.length);
@@ -241,33 +241,8 @@ public class LocalMulticastProxyServer {
                     continue;
                 }
 
-                // 自动剥离 RTP 协议头，输出 MPEG-TS 188 字节对齐负载
-                int payloadOffset = offset;
-                int payloadLen = len;
-                if (isRtp && len > 12 && (buffer[offset] & 0xFF) != 0x47) {
-                    int version = (buffer[offset] & 0xC0) >>> 6;
-                    if (version == 2) {
-                        int csrcCount = buffer[offset] & 0x0F;
-                        boolean hasExtension = (buffer[offset] & 0x10) != 0;
-                        boolean hasPadding = (buffer[offset] & 0x20) != 0;
-                        int headerSize = 12 + csrcCount * 4;
-                        if (hasExtension && len >= headerSize + 4) {
-                            int extLenWords = ((buffer[offset + headerSize + 2] & 0xFF) << 8)
-                                    | (buffer[offset + headerSize + 3] & 0xFF);
-                            headerSize += 4 + extLenWords * 4;
-                        }
-                        int paddingBytes = 0;
-                        if (hasPadding) {
-                            paddingBytes = buffer[offset + len - 1] & 0xFF;
-                        }
-                        if (headerSize + paddingBytes < len) {
-                            payloadOffset = offset + headerSize;
-                            payloadLen = len - headerSize - paddingBytes;
-                        }
-                    }
-                }
-
-                out.write(buffer, payloadOffset, payloadLen);
+                RtpTsPacketParser.Payload payload = payloadParser.parse(buffer, len);
+                if (payload != null) out.write(buffer, payload.offset, payload.length);
             }
         } catch (Exception e) {
             Log.d(TAG, "Stream closed: " + e.getMessage());

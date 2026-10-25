@@ -2,7 +2,6 @@ package com.bjunicom.iptv.player;
 
 import android.content.Context;
 import android.graphics.SurfaceTexture;
-import android.media.MediaFormat;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
@@ -20,6 +19,7 @@ import com.bjunicom.iptv.config.IptvSettings;
 import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.DefaultRenderersFactory;
 import com.google.android.exoplayer2.ExoPlayer;
+import com.google.android.exoplayer2.ExoPlaybackException;
 import com.google.android.exoplayer2.Format;
 import com.google.android.exoplayer2.MediaItem;
 import com.google.android.exoplayer2.PlaybackException;
@@ -28,16 +28,21 @@ import com.google.android.exoplayer2.Renderer;
 import com.google.android.exoplayer2.audio.AudioRendererEventListener;
 import com.google.android.exoplayer2.audio.AudioSink;
 import com.google.android.exoplayer2.audio.DecoderAudioRenderer;
+import com.google.android.exoplayer2.audio.MediaCodecAudioRenderer;
+import com.google.android.exoplayer2.analytics.AnalyticsListener;
 import com.google.android.exoplayer2.decoder.CryptoConfig;
 import com.google.android.exoplayer2.decoder.DecoderException;
 import com.google.android.exoplayer2.decoder.DecoderReuseEvaluation;
 import com.google.android.exoplayer2.mediacodec.MediaCodecAdapter;
 import com.google.android.exoplayer2.mediacodec.MediaCodecInfo;
 import com.google.android.exoplayer2.mediacodec.MediaCodecSelector;
+import com.google.android.exoplayer2.mediacodec.MediaCodecRenderer;
 import com.google.android.exoplayer2.source.MediaSource;
+import com.google.android.exoplayer2.source.ProgressiveMediaSource;
 import com.google.android.exoplayer2.source.dash.DashMediaSource;
 import com.google.android.exoplayer2.source.hls.HlsMediaSource;
 import com.google.android.exoplayer2.upstream.DataSource;
+import com.google.android.exoplayer2.trackselection.DefaultTrackSelector;
 import com.google.android.exoplayer2.util.MimeTypes;
 import com.google.android.exoplayer2.video.MediaCodecVideoRenderer;
 import com.google.android.exoplayer2.video.PlaceholderSurface;
@@ -59,33 +64,28 @@ import tv.danmaku.ijk.media.player.MediaInfo;
 import tv.danmaku.ijk.media.player.misc.ITrackInfo;
 
 /**
- * 基于 ExoPlayer 的实例级池化播放器模块 (UTVPlayer)
- *
- * 核心架构特性：
- * 1. 与 IjkPlayer、MediaPlayer 完全一致的 Player 实例级双槽位池化（非全局单例）：
- *    - 由 {@link IjkVideoView} 维护 2 个独立的 {@link UTVPlayer} 实例（mActiveSlot 主屏播放当前频道 + mBackgroundSlot 离屏静音预热下一个频道）；
- *    - 切台命中后台槽位时直接将离屏预热的 UTVPlayer 绑定至主屏 Surface 并恢复音量，实现毫秒级切台；
- *    - 单个槽位内部重用时，通过自定义 {@link AdaptiveMediaCodecVideoRenderer} 将 MediaFormat 最大宽高固定为 3840x2160，
- *      触发 {@code canReuseCodec() -> REUSE_RESULT_YES_WITH_FLUSH} 直接 {@code codec.flush()} 复用解码器。
- * 2. ijkplayer (libijkffmpeg.so) MP2 音频解码器集成：
- *    - 对 IPTV 普遍采用的 MP2 (audio/mpeg-L2) 伴音，通过 {@link Mp2DecoderAudioRenderer} 调用 ijkplayer 内置的
- *      FFmpeg MP2 解码器输出 16-bit PCM 送入独立 AudioSink，彻底解决 ExoPlayer 音频严重失真问题。
- * 3. SurfaceView 动态绑定与 PlaceholderSurface 离屏挂靠：
- *    - 离屏预热或外部 SurfaceView 销毁时自动挂靠在 PlaceholderSurface 上，避免离屏 BufferQueue 积压阻塞。
+ * One foreground ExoPlayer with hardware-preferred video and capability-based MP2 audio.
+ * ProgressiveMediaSource owns periods on Exo's playback looper. Neighbour preloading
+ * only receives bounded TS bytes and never allocates another player or decoder.
  */
 public class UTVPlayer extends AbstractMediaPlayer {
     private static final String TAG = "UTVPlayer";
 
-    public static final int MAX_ADAPTIVE_WIDTH = 3840;
-    public static final int MAX_ADAPTIVE_HEIGHT = 2160;
-    public static final int MAX_ADAPTIVE_INPUT_SIZE = 4 * 1024 * 1024;
-
     private final Context appContext;
     private final IptvSettings settings;
     private final UTVLoadControl loadControl;
-    private final DataSource.Factory dataSourceFactory;
-    private final PreloadMediaSource.PreloadPool preloadPool;
+    private final UTVStreamDataSource.Factory dataSourceFactory;
     private final ExoPlayer exoPlayer;
+    private final DefaultTrackSelector trackSelector;
+    private final Handler applicationHandler;
+    private volatile String currentMediaId = "";
+    private long mediaSequence;
+    private volatile boolean forceMp2Software;
+    private boolean released;
+    private PlaybackFailure lastFailure = PlaybackFailure.UNKNOWN;
+    private int mp2AudioRendererIndex = -1;
+    private final List<Integer> mediaCodecAudioRenderers = new ArrayList<>();
+    private Map<String, String> currentHeaders = Collections.emptyMap();
 
     private final AtomicInteger codecReuseHitCount = new AtomicInteger(0);
     private final AtomicInteger codecInitializedCount = new AtomicInteger(0);
@@ -165,13 +165,12 @@ public class UTVPlayer extends AbstractMediaPlayer {
         if (allDecoders == null || allDecoders.isEmpty()) {
             return allDecoders;
         }
-        if (mimeType != null && !mimeType.toLowerCase(Locale.US).startsWith("video/")) {
-            return allDecoders;
-        }
-        boolean preferHardware = isHardwareDecodingPreferred(mimeType, settings);
+        boolean preferHardware = mimeType == null || !mimeType.startsWith("video/")
+                || isHardwareDecodingPreferred(mimeType, settings);
         List<MediaCodecInfo> hwList = new ArrayList<>();
         List<MediaCodecInfo> swList = new ArrayList<>();
         for (MediaCodecInfo info : allDecoders) {
+            if (DecoderPolicy.hasFailed(mimeType, info.name)) continue;
             if (isSoftwareCodecInfo(info)) {
                 swList.add(info);
             } else {
@@ -191,14 +190,16 @@ public class UTVPlayer extends AbstractMediaPlayer {
 
     /**
      * 支持硬解/软解动态切换的自定义 MediaCodecSelector：
-     * 对 MP2 (audio/mpeg-L2) 音频强制交由内置的 ijkplayer FFmpeg MP2 解码渲染器处理，
-     * 避免部分机顶盒/电视固件将 audio/mpeg-L2 错误映射至系统 MP3 解码器或残缺 OMX 组件导致破音失真。
+     * MP2 uses only genuine hardware audio/mpeg-L2 candidates; it never aliases MP2 to MP3.
+     * Missing or failed MP2 hardware is handled by the Ijk/FFmpeg audio renderer.
      */
     public static final class UTVMediaCodecSelector implements MediaCodecSelector {
         private final IptvSettings settings;
+        private final UTVPlayer owner;
 
-        public UTVMediaCodecSelector(@Nullable IptvSettings settings) {
+        public UTVMediaCodecSelector(@Nullable IptvSettings settings, @Nullable UTVPlayer owner) {
             this.settings = settings;
+            this.owner = owner;
         }
 
         @Override
@@ -207,7 +208,8 @@ public class UTVPlayer extends AbstractMediaPlayer {
                                                     boolean requiresTunnelingDecoder)
                 throws com.google.android.exoplayer2.mediacodec.MediaCodecUtil.DecoderQueryException {
             if (Mp2SoftwareDecoder.isMp2MimeType(mimeType)) {
-                return Collections.emptyList();
+                return owner != null && owner.forceMp2Software
+                        ? Collections.emptyList() : DecoderPolicy.getMp2HardwareDecoders(null);
             }
             List<MediaCodecInfo> defaults = MediaCodecSelector.DEFAULT.getDecoderInfos(
                     mimeType, requiresSecureDecoder, requiresTunnelingDecoder);
@@ -257,6 +259,10 @@ public class UTVPlayer extends AbstractMediaPlayer {
             if (!sinkSupportsFormat(pcmFormat)) {
                 return C.FORMAT_UNSUPPORTED_SUBTYPE;
             }
+            if (owner != null && !owner.forceMp2Software
+                    && !DecoderPolicy.getMp2HardwareDecoders(format).isEmpty()) {
+                return C.FORMAT_EXCEEDS_CAPABILITIES;
+            }
             return C.FORMAT_HANDLED;
         }
 
@@ -266,7 +272,7 @@ public class UTVPlayer extends AbstractMediaPlayer {
                 throws DecoderException {
             Mp2SoftwareDecoder.ExoMp2SimpleDecoder decoder = new Mp2SoftwareDecoder.ExoMp2SimpleDecoder(format);
             if (owner != null) {
-                owner.activeAudioDecoderName = "ijkffmpeg-mp2";
+                owner.activeAudioDecoderName = decoder.getName();
             }
             return decoder;
         }
@@ -297,14 +303,7 @@ public class UTVPlayer extends AbstractMediaPlayer {
         }
     }
 
-    /**
-     * 自定义 MediaCodecVideoRenderer：
-     * 1. 强制将 CodecMaxValues 与 MediaFormat 的最大宽高设为 3840x2160；
-     * 2. 在同一个 UTVPlayer 槽位切换 MediaSource 时，通过 canReuseCodec() 返回 REUSE_RESULT_YES_WITH_FLUSH，
-     *    使 ExoPlayer 直接 flush() 复用同一个解码器，不销毁重建；
-     * 3. 当用户在设置中切换硬解/软解时，canReuseCodec() 自动识别并返回 REUSE_RESULT_NO (DISCARD_REASON_APP_OVERRIDE)，
-     *    立即切换至目标软解或硬解解码器。
-     */
+    /** Retains Exo's codec reuse boundaries and records failed hardware candidates. */
     public static final class AdaptiveMediaCodecVideoRenderer extends MediaCodecVideoRenderer {
         private final UTVPlayer owner;
 
@@ -340,111 +339,30 @@ public class UTVPlayer extends AbstractMediaPlayer {
         }
 
         @Override
-        protected CodecMaxValues getCodecMaxValues(MediaCodecInfo codecInfo,
-                                                   Format format,
-                                                   Format[] streamFormats) {
-            CodecMaxValues base = super.getCodecMaxValues(codecInfo, format, streamFormats);
-            int width = Math.max(base.width, MAX_ADAPTIVE_WIDTH);
-            int height = Math.max(base.height, MAX_ADAPTIVE_HEIGHT);
-            int inputSize = Math.max(base.inputSize, MAX_ADAPTIVE_INPUT_SIZE);
-            return new CodecMaxValues(width, height, inputSize);
-        }
-
-        @Override
-        protected MediaFormat getMediaFormat(Format format,
-                                             String codecMimeType,
-                                             CodecMaxValues codecMaxValues,
-                                             float codecOperatingRate,
-                                             boolean deviceNeedsNoPostProcessWorkaround,
-                                             int tunnelingAudioSessionId) {
-            MediaFormat mediaFormat = super.getMediaFormat(
-                    format,
-                    codecMimeType,
-                    codecMaxValues,
-                    codecOperatingRate,
-                    deviceNeedsNoPostProcessWorkaround,
-                    tunnelingAudioSessionId);
-            mediaFormat.setInteger(MediaFormat.KEY_MAX_WIDTH, MAX_ADAPTIVE_WIDTH);
-            mediaFormat.setInteger(MediaFormat.KEY_MAX_HEIGHT, MAX_ADAPTIVE_HEIGHT);
-            return mediaFormat;
-        }
-
-        @Override
         public DecoderReuseEvaluation canReuseCodec(MediaCodecInfo codecInfo,
                                                     Format oldFormat,
                                                     Format newFormat) {
             IptvSettings cfg = owner != null ? owner.getSettings() : null;
-            String targetMime = (newFormat != null && !TextUtils.isEmpty(newFormat.sampleMimeType))
-                    ? newFormat.sampleMimeType
-                    : (oldFormat != null ? oldFormat.sampleMimeType : null);
-            boolean preferHw = isHardwareDecodingPreferred(targetMime, cfg);
-            boolean currentIsSw = isSoftwareCodecInfo(codecInfo);
-            if (codecInfo != null && (preferHw == currentIsSw)) {
-                // 用户在设置中切换了硬解/软解开关：禁止复用当前类型不匹配的解码器，强制切换为软解或硬解
-                return new DecoderReuseEvaluation(
-                        codecInfo.name,
-                        oldFormat,
-                        newFormat,
+            if (!isHardwareDecodingPreferred(newFormat.sampleMimeType, cfg)
+                    && !isSoftwareCodecInfo(codecInfo)) {
+                return new DecoderReuseEvaluation(codecInfo.name, oldFormat, newFormat,
                         DecoderReuseEvaluation.REUSE_RESULT_NO,
                         DecoderReuseEvaluation.DISCARD_REASON_APP_OVERRIDE);
             }
-
-            DecoderReuseEvaluation eval = null;
-            try {
-                eval = super.canReuseCodec(codecInfo, oldFormat, newFormat);
-            } catch (NullPointerException ignored) {
-                if (codecInfo != null && oldFormat != null && newFormat != null) {
-                    eval = codecInfo.canReuseCodec(oldFormat, newFormat);
-                }
-            }
-            if (eval != null && eval.result != DecoderReuseEvaluation.REUSE_RESULT_NO) {
-                if (owner != null) {
-                    owner.codecReuseHitCount.incrementAndGet();
-                }
-                return eval;
-            }
-            // 只要新旧频道的视频编码格式一致 (如均为 video/avc 或均为 video/hevc) 且不超过预配置的 3840x2160 上限，
-            // 允许直接通过 codec.flush() + 重配 SPS/PPS 复用同一个解码器，无需销毁重建 MediaCodec
-            if (oldFormat != null
-                    && newFormat != null
-                    && !TextUtils.isEmpty(oldFormat.sampleMimeType)
-                    && oldFormat.sampleMimeType.equals(newFormat.sampleMimeType)
-                    && newFormat.width <= MAX_ADAPTIVE_WIDTH
-                    && newFormat.height <= MAX_ADAPTIVE_HEIGHT) {
-                if (owner != null) {
-                    owner.codecReuseHitCount.incrementAndGet();
-                }
-                return new DecoderReuseEvaluation(
-                        codecInfo != null ? codecInfo.name : "MediaCodec",
-                        oldFormat,
-                        newFormat,
-                        DecoderReuseEvaluation.REUSE_RESULT_YES_WITH_FLUSH,
-                        0);
-            }
-            return eval != null
-                    ? eval
-                    : new DecoderReuseEvaluation(
-                            codecInfo != null ? codecInfo.name : "MediaCodec",
-                            oldFormat,
-                            newFormat,
-                            DecoderReuseEvaluation.REUSE_RESULT_NO,
-                            DecoderReuseEvaluation.DISCARD_REASON_MIME_TYPE_CHANGED);
+            // Preserve ExoPlayer's capability, color, input-size and device workaround checks.
+            // A software decoder selected after a hardware failure is also eligible for reuse.
+            return super.canReuseCodec(codecInfo, oldFormat, newFormat);
         }
 
         @Override
-        protected boolean codecNeedsSetOutputSurfaceWorkaround(String name) {
-            return false;
-        }
-
-        @Override
-        protected void onCodecInitialized(String name,
-                                          MediaCodecAdapter.Configuration configuration,
-                                          long initializedTimestampMs,
-                                          long initializationDurationMs) {
-            super.onCodecInitialized(name, configuration, initializedTimestampMs, initializationDurationMs);
-            if (owner != null) {
-                owner.codecInitializedCount.incrementAndGet();
-                owner.activeVideoDecoderName = name;
+        protected void onCodecError(Exception error) {
+            super.onCodecError(error);
+            if (error instanceof MediaCodecRenderer.DecoderInitializationException) {
+                MediaCodecRenderer.DecoderInitializationException initError =
+                        (MediaCodecRenderer.DecoderInitializationException) error;
+                if (initError.codecInfo != null) {
+                    DecoderPolicy.recordFailure(initError.mimeType, initError.codecInfo.name);
+                }
             }
         }
     }
@@ -461,9 +379,8 @@ public class UTVPlayer extends AbstractMediaPlayer {
             setExtensionRendererMode(EXTENSION_RENDERER_MODE_PREFER);
             setEnableDecoderFallback(true);
             setAllowedVideoJoiningTimeMs(1500L);
-            if (owner != null) {
-                setMediaCodecSelector(new UTVMediaCodecSelector(owner.getSettings()));
-            }
+            setMediaCodecSelector(new UTVMediaCodecSelector(
+                    owner != null ? owner.getSettings() : null, owner));
         }
 
         @Override
@@ -502,6 +419,7 @@ public class UTVPlayer extends AbstractMediaPlayer {
             if (mp2Sink == null) {
                 mp2Sink = audioSink;
             }
+            if (owner != null) owner.mp2AudioRendererIndex = out.size();
             out.add(new Mp2DecoderAudioRenderer(eventHandler, eventListener, mp2Sink, owner));
             super.buildAudioRenderers(
                     context,
@@ -512,6 +430,12 @@ public class UTVPlayer extends AbstractMediaPlayer {
                     eventHandler,
                     eventListener,
                     out);
+            if (owner != null) {
+                owner.mediaCodecAudioRenderers.clear();
+                for (int i = 0; i < out.size(); i++) {
+                    if (out.get(i) instanceof MediaCodecAudioRenderer) owner.mediaCodecAudioRenderers.add(i);
+                }
+            }
         }
     }
 
@@ -520,16 +444,17 @@ public class UTVPlayer extends AbstractMediaPlayer {
         this.settings = new IptvSettings(appContext);
         this.loadControl = new UTVLoadControl();
         this.dataSourceFactory = new UTVStreamDataSource.Factory();
-        this.preloadPool = new PreloadMediaSource.PreloadPool(dataSourceFactory, loadControl.getSharedAllocator());
+        this.trackSelector = new DefaultTrackSelector(appContext);
 
         UTVRenderersFactory renderersFactory = new UTVRenderersFactory(appContext, this);
         this.exoPlayer = new ExoPlayer.Builder(appContext, renderersFactory)
                 .setLoadControl(loadControl)
+                .setTrackSelector(trackSelector)
                 .build();
-        this.preloadPool.bindPlaybackLooper(exoPlayer.getPlaybackLooper());
-        this.exoPlayer.addListener(playerListener);
+        this.applicationHandler = new Handler(exoPlayer.getApplicationLooper());
+        this.exoPlayer.addAnalyticsListener(playerListener);
 
-        // 初始将 UTVPlayer 挂靠在 PlaceholderSurface 上，确保离屏槽位预热时也能解码首帧
+        // 等待前台 Surface 创建；邻台预收流无需 Surface 或解码器。
         parkToPlaceholderSurface();
     }
 
@@ -545,8 +470,16 @@ public class UTVPlayer extends AbstractMediaPlayer {
         return loadControl;
     }
 
-    public PreloadMediaSource.PreloadPool getPreloadPool() {
-        return preloadPool;
+    public void preloadChannel(Uri uri) {
+        dataSourceFactory.preload(uri, currentUri);
+    }
+
+    public void stopBackgroundPreload() {
+        dataSourceFactory.stopBackgroundPreload();
+    }
+
+    public PlaybackFailure getLastFailure() {
+        return lastFailure;
     }
 
     public int getCodecReuseHitCount() {
@@ -644,17 +577,13 @@ public class UTVPlayer extends AbstractMediaPlayer {
         }
     }
 
-    /**
-     * 当复用当前 PlayerSlot 加载新频道时调用：
-     * 仅重置状态标记并挂靠至 PlaceholderSurface，保留底层 ExoPlayer 的 MediaCodec 实例，
-     * 以便接下来 prepareAsync() 切换 MediaSource 时触发 canReuseCodec() 直接 flush() 复用解码器。
-     */
+    /** Reset per-channel metadata while retaining the current foreground Surface. */
     public void prepareForSlotReuse() {
         preparedNotified = false;
         promotedFromPreload = false;
         videoWidth = 0;
         videoHeight = 0;
-        parkToPlaceholderSurface();
+        activeAudioDecoderName = "";
     }
 
     // ==================== IMediaPlayer 接口实现 ====================
@@ -687,6 +616,7 @@ public class UTVPlayer extends AbstractMediaPlayer {
     @Override
     public void setDataSource(Context context, Uri uri, Map<String, String> headers) throws IOException {
         this.currentUri = uri;
+        this.currentHeaders = headers != null ? new java.util.HashMap<>(headers) : Collections.emptyMap();
         this.preparedNotified = false;
     }
 
@@ -719,6 +649,12 @@ public class UTVPlayer extends AbstractMediaPlayer {
             return;
         }
         preparedNotified = false;
+        currentMediaId = Long.toString(++mediaSequence);
+        dataSourceFactory.cancelActiveReads();
+        activeAudioDecoderName = "";
+        lastFailure = PlaybackFailure.UNKNOWN;
+        // A decoder fallback only disables the system audio renderer for the current MP2 attempt.
+        setMp2SoftwareFallback(false);
         String currentSig = buildCurrentCodecConfigSignature();
         if (!TextUtils.isEmpty(lastAppliedCodecConfigSignature)
                 && !lastAppliedCodecConfigSignature.equals(currentSig)) {
@@ -739,18 +675,27 @@ public class UTVPlayer extends AbstractMediaPlayer {
     }
 
     private MediaSource buildMediaSourceForUri(Uri uri, String rawUrl) {
+        String mediaId = currentMediaId;
+        DataSource.Factory playbackFactory = dataSourceFactory.forPlayback(
+                info -> applicationHandler.post(() -> {
+                    if (!released && mediaId.equals(currentMediaId)) {
+                        notifyOnInfo(info, 0);
+                    }
+                }), currentHeaders);
+        MediaItem item = new MediaItem.Builder().setUri(uri).setMediaId(mediaId).build();
         String uriStr = uri.toString().toLowerCase(Locale.US);
         String rawLower = rawUrl != null ? rawUrl.toLowerCase(Locale.US) : "";
         if (uriStr.contains(".m3u8") || rawLower.contains(".m3u8")) {
-            return new HlsMediaSource.Factory(dataSourceFactory)
+            return new HlsMediaSource.Factory(playbackFactory)
                     .setAllowChunklessPreparation(true)
-                    .createMediaSource(MediaItem.fromUri(uri));
+                    .createMediaSource(item);
         }
         if (uriStr.contains(".mpd") || rawLower.contains(".mpd")) {
-            return new DashMediaSource.Factory(dataSourceFactory)
-                    .createMediaSource(MediaItem.fromUri(uri));
+            return new DashMediaSource.Factory(playbackFactory).createMediaSource(item);
         }
-        return preloadPool.obtainMediaSource(uri, rawUrl);
+        return new ProgressiveMediaSource.Factory(playbackFactory, new IptvTsExtractorsFactory())
+                .setContinueLoadingCheckIntervalBytes(256 * 1024)
+                .createMediaSource(item);
     }
 
     @Override
@@ -765,6 +710,7 @@ public class UTVPlayer extends AbstractMediaPlayer {
 
     @Override
     public void pause() throws IllegalStateException {
+        dataSourceFactory.stopBackgroundPreload();
         exoPlayer.setPlayWhenReady(false);
     }
 
@@ -814,13 +760,12 @@ public class UTVPlayer extends AbstractMediaPlayer {
      * 停止当前 UTVPlayer 槽位的音视频流，静音并挂靠回 PlaceholderSurface（用于 3 秒空闲停止离屏实例或重置槽位时）
      */
     public void stopAndPark() {
+        currentMediaId = "";
         preparedNotified = false;
         promotedFromPreload = false;
         currentVolume = 0f;
-        try {
-            preloadPool.releaseAll();
-        } catch (Throwable ignored) {
-        }
+        dataSourceFactory.stopBackgroundPreload();
+        dataSourceFactory.cancelActiveReads();
         try {
             exoPlayer.setPlayWhenReady(false);
             exoPlayer.setVolume(0f);
@@ -835,11 +780,13 @@ public class UTVPlayer extends AbstractMediaPlayer {
      * 彻底销毁当前 UTVPlayer 实例及其底层 ExoPlayer 与 PlaceholderSurface（在切换至其他播放器内核或释放槽位时调用）
      */
     public synchronized void releasePlayer() {
+        released = true;
         stopAndPark();
         try {
             exoPlayer.release();
         } catch (Throwable ignored) {
         }
+        dataSourceFactory.close();
         if (exoPlaceholderSurface != null) {
             try {
                 exoPlaceholderSurface.release();
@@ -886,12 +833,11 @@ public class UTVPlayer extends AbstractMediaPlayer {
         info.mVideoDecoder = "MediaCodec";
         info.mVideoDecoderImpl = activeVideoDecoderName;
         Format af = exoPlayer.getAudioFormat();
-        boolean isMp2 = !TextUtils.isEmpty(activeAudioDecoderName)
-                || (af != null && Mp2SoftwareDecoder.isMp2MimeType(af.sampleMimeType));
-        info.mAudioDecoder = isMp2 ? "IjkFfmpegMp2Decoder" : "MediaCodec";
-        info.mAudioDecoderImpl = isMp2
-                ? "ijkffmpeg-mp2"
-                : ((af != null && !TextUtils.isEmpty(af.sampleMimeType)) ? af.sampleMimeType : "ExoAudio");
+        boolean isMp2 = Mp2SoftwareDecoder.isMp2MimeType(af != null ? af.sampleMimeType : null);
+        boolean softwareMp2 = isMp2 && ("IjkFfmpegMp2Decoder".equals(activeAudioDecoderName)
+                || "UTVMp2SoftwareDecoder".equals(activeAudioDecoderName));
+        info.mAudioDecoder = softwareMp2 ? activeAudioDecoderName : "MediaCodec";
+        info.mAudioDecoderImpl = activeAudioDecoderName;
         return info;
     }
 
@@ -903,12 +849,12 @@ public class UTVPlayer extends AbstractMediaPlayer {
                 ? "video/hevc"
                 : "video/avc");
         boolean preferHw = isHardwareDecodingPreferred(mime, settings);
-        boolean activeSw = !preferHw || isSoftwareDecoderName(activeVideoDecoderName);
+        boolean activeSw = !TextUtils.isEmpty(activeVideoDecoderName)
+                ? isSoftwareDecoderName(activeVideoDecoderName) : !preferHw;
         String poolTag = "单实例";
         Format af = exoPlayer.getAudioFormat();
-        boolean isMp2 = !TextUtils.isEmpty(activeAudioDecoderName)
-                || (af != null && Mp2SoftwareDecoder.isMp2MimeType(af.sampleMimeType));
-        String audioTag = isMp2 ? "+IjkMP2解码" : "";
+        boolean isMp2 = af != null && Mp2SoftwareDecoder.isMp2MimeType(af.sampleMimeType);
+        String audioTag = isMp2 ? "+MP2:" + activeAudioDecoderName : "";
         if (activeSw) {
             return "ExoPlayer (" + poolTag + "软解" + audioTag + ")";
         }
@@ -982,18 +928,30 @@ public class UTVPlayer extends AbstractMediaPlayer {
         return new ITrackInfo[0];
     }
 
-    private final Player.Listener playerListener = new Player.Listener() {
+    private boolean matchesEvent(AnalyticsListener.EventTime eventTime) {
+        if (released || currentMediaId.isEmpty() || eventTime.timeline.isEmpty()
+                || eventTime.windowIndex < 0
+                || eventTime.windowIndex >= eventTime.timeline.getWindowCount()) return false;
+        com.google.android.exoplayer2.Timeline.Window window =
+                new com.google.android.exoplayer2.Timeline.Window();
+        eventTime.timeline.getWindow(eventTime.windowIndex, window);
+        return currentMediaId.equals(window.mediaItem.mediaId);
+    }
+
+    private void setMp2SoftwareFallback(boolean force) {
+        forceMp2Software = force;
+        DefaultTrackSelector.Parameters.Builder parameters = trackSelector.buildUponParameters();
+        for (int index : mediaCodecAudioRenderers) parameters.setRendererDisabled(index, force);
+        trackSelector.setParameters(parameters);
+    }
+
+    private final AnalyticsListener playerListener = new AnalyticsListener() {
         @Override
-        public void onPlaybackStateChanged(int playbackState) {
+        public void onPlaybackStateChanged(EventTime eventTime, int playbackState) {
+            if (!matchesEvent(eventTime)) return;
             if (playbackState == Player.STATE_BUFFERING) {
                 notifyOnInfo(IMediaPlayer.MEDIA_INFO_BUFFERING_START, 0);
             } else if (playbackState == Player.STATE_READY) {
-                Format vf = exoPlayer.getVideoFormat();
-                if (vf != null && vf.width > 0 && vf.height > 0 && (videoWidth <= 0 || videoHeight <= 0)) {
-                    videoWidth = vf.width;
-                    videoHeight = vf.height;
-                    notifyOnVideoSizeChanged(videoWidth, videoHeight, videoSarNum, videoSarDen);
-                }
                 if (!preparedNotified) {
                     preparedNotified = true;
                     notifyOnPrepared();
@@ -1005,7 +963,8 @@ public class UTVPlayer extends AbstractMediaPlayer {
         }
 
         @Override
-        public void onRenderedFirstFrame() {
+        public void onRenderedFirstFrame(EventTime eventTime, Object output, long renderTimeMs) {
+            if (!matchesEvent(eventTime) || attachedToPlaceholderSurface) return;
             if (!preparedNotified) {
                 preparedNotified = true;
                 notifyOnPrepared();
@@ -1014,17 +973,87 @@ public class UTVPlayer extends AbstractMediaPlayer {
         }
 
         @Override
-        public void onVideoSizeChanged(@NonNull VideoSize videoSize) {
-            videoWidth = videoSize.width;
-            videoHeight = videoSize.height;
+        public void onVideoSizeChanged(EventTime eventTime, VideoSize size) {
+            if (!matchesEvent(eventTime)) return;
+            videoWidth = size.width;
+            videoHeight = size.height;
             if (videoWidth > 0 && videoHeight > 0) {
                 notifyOnVideoSizeChanged(videoWidth, videoHeight, videoSarNum, videoSarDen);
             }
         }
 
         @Override
-        public void onPlayerError(@NonNull PlaybackException error) {
-            Log.w(TAG, "UTVPlayer playback error: " + error.getMessage());
+        public void onTracksChanged(EventTime eventTime, com.google.android.exoplayer2.Tracks tracks) {
+            if (matchesEvent(eventTime)) notifyOnInfo(PlaybackMetrics.INFO_STREAM_INFO, 0);
+        }
+
+        @Override
+        public void onVideoDecoderInitialized(EventTime eventTime, String name,
+                                               long initializedAtMs, long durationMs) {
+            if (!matchesEvent(eventTime)) return;
+            activeVideoDecoderName = name;
+            codecInitializedCount.incrementAndGet();
+            notifyOnInfo(PlaybackMetrics.INFO_VIDEO_DECODER_READY, 0);
+        }
+
+        @Override
+        public void onVideoInputFormatChanged(EventTime eventTime, Format format,
+                                                @Nullable DecoderReuseEvaluation evaluation) {
+            if (matchesEvent(eventTime) && evaluation != null
+                    && evaluation.result != DecoderReuseEvaluation.REUSE_RESULT_NO) {
+                codecReuseHitCount.incrementAndGet();
+                notifyOnInfo(PlaybackMetrics.INFO_VIDEO_DECODER_READY, 0);
+            }
+        }
+
+        @Override
+        public void onAudioDecoderInitialized(EventTime eventTime, String name,
+                                               long initializedAtMs, long durationMs) {
+            if (matchesEvent(eventTime)) activeAudioDecoderName = name;
+        }
+
+        @Override
+        public void onAudioPositionAdvancing(EventTime eventTime, long playoutStartSystemTimeMs) {
+            if (matchesEvent(eventTime)) notifyOnInfo(PlaybackMetrics.INFO_AUDIO_RENDERING_START, 0);
+        }
+
+        @Override
+        public void onAudioCodecError(EventTime eventTime, Exception error) {
+            if (matchesEvent(eventTime)
+                    && error instanceof MediaCodecRenderer.DecoderInitializationException) {
+                MediaCodecRenderer.DecoderInitializationException initError =
+                        (MediaCodecRenderer.DecoderInitializationException) error;
+                if (initError.codecInfo != null) {
+                    DecoderPolicy.recordFailure(initError.mimeType, initError.codecInfo.name);
+                }
+            }
+        }
+
+        @Override
+        public void onPlayerError(EventTime eventTime, PlaybackException error) {
+            if (!matchesEvent(eventTime)) return;
+            Format format = error instanceof ExoPlaybackException
+                    ? ((ExoPlaybackException) error).rendererFormat : null;
+            int rendererIndex = error instanceof ExoPlaybackException
+                    ? ((ExoPlaybackException) error).rendererIndex : -1;
+            boolean audio = (format != null && MimeTypes.isAudio(format.sampleMimeType))
+                    || mediaCodecAudioRenderers.contains(rendererIndex) || rendererIndex == mp2AudioRendererIndex;
+            lastFailure = PlaybackFailure.fromExo(error, audio);
+            if (lastFailure == PlaybackFailure.AUDIO_DECODER
+                    && format != null && Mp2SoftwareDecoder.isMp2MimeType(format.sampleMimeType)
+                    && !forceMp2Software) {
+                DecoderPolicy.recordMp2HardwareFailure();
+                setMp2SoftwareFallback(true);
+                Log.w(TAG, "MP2 hardware decoder failed; recovering with Ijk/FFmpeg audio", error);
+                // Keep the same MediaSource, player and front surface. Only the audio selection changes.
+                exoPlayer.prepare();
+                exoPlayer.setPlayWhenReady(true);
+                return;
+            }
+            if (lastFailure == PlaybackFailure.VIDEO_DECODER && format != null) {
+                DecoderPolicy.recordFailure(format.sampleMimeType, activeVideoDecoderName);
+            }
+            Log.w(TAG, "UTVPlayer playback error (" + lastFailure + ")", error);
             notifyOnError(IMediaPlayer.MEDIA_ERROR_UNKNOWN, error.errorCode);
         }
     };

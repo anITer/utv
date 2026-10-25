@@ -25,7 +25,7 @@ public class IptvSettings {
     // 播放器内核模式
     public static final int PLAYER_IJK = 0;                 // IjkMediaPlayer (支持 MPEG-TS/RTP/HLS/HEVC 4K)
     public static final int PLAYER_ANDROID_MEDIA = 1;       // AndroidMediaPlayer
-    public static final int PLAYER_UTV = 2;                 // UTVPlayer (基于 ExoPlayer + PreloadMediaSource + LoadControl)
+    public static final int PLAYER_UTV = 2;                 // UTVPlayer (基于 ExoPlayer + ProgressiveMediaSource + LoadControl)
 
     private static final String KEY_ISP_PROVIDER = "isp_provider";
     private static final String KEY_CUSTOM_M3U_NAME = "custom_m3u_name";

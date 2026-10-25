@@ -7,6 +7,7 @@ import android.media.MediaPlayer;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.SystemClock;
 import android.text.TextUtils;
 import android.util.AttributeSet;
 import android.util.Log;
@@ -24,6 +25,8 @@ import com.bjunicom.iptv.network.StreamUrlResolver;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.HashSet;
+import java.util.Set;
 
 import tv.danmaku.ijk.media.player.AndroidMediaPlayer;
 import tv.danmaku.ijk.media.player.IMediaPlayer;
@@ -86,6 +89,7 @@ public class IjkVideoView extends FrameLayout {
         public long prepareStartTime;
         public long prepareEndTime;
         public boolean promotedFromOffscreen;
+        public long generation;
 
         private SurfaceTexture offscreenTexture;
         private Surface offscreenSurface;
@@ -235,6 +239,15 @@ public class IjkVideoView extends FrameLayout {
 
     private long mPrepareStartTime = 0;
     private long mPrepareEndTime = 0;
+    private long mGeneration;
+    private long mRequestSequence;
+    private PlaybackMetrics mPlaybackMetrics;
+    private PlaybackFailure mLastFailure = PlaybackFailure.UNKNOWN;
+    private String mAudioCodecHint = "";
+    private boolean mForceIjkForCurrentStream;
+    private boolean mForceIjkVideoSoftware;
+    private int mLastRequestedPlayerType = -1;
+    private final Set<String> mAndroidAudioFallbackChannels = new HashSet<>();
 
     public IjkVideoView(Context context) {
         super(context);
@@ -334,6 +347,8 @@ public class IjkVideoView extends FrameLayout {
      * 断开其后台流连接并释放底层解码器与离屏 Surface 资源（IjkPlayer、MediaPlayer、UTVPlayer 统一销毁）。
      */
     public void stopOffscreenPlayers() {
+        UTVPlayer utv = getUtvPlayer();
+        if (utv != null) utv.stopBackgroundPreload();
         removeCallbacks(mStopOffscreenRunnable);
         mPendingBackgroundUri = null;
         mPendingBackgroundRawUrl = null;
@@ -445,6 +460,84 @@ public class IjkVideoView extends FrameLayout {
         mRawChannelUrl = rawChannelUrl;
     }
 
+    public void setAudioCodecHint(String audioTrackInfo) {
+        mAudioCodecHint = audioTrackInfo != null ? audioTrackInfo.toLowerCase(Locale.US) : "";
+    }
+
+    public PlaybackFailure getLastFailure() {
+        return mLastFailure;
+    }
+
+    public long getFirstFrameCostMs() {
+        return mPlaybackMetrics != null ? mPlaybackMetrics.getFirstVideoMs() : -1;
+    }
+
+    public String getStartupMetricsSummary() {
+        return mPlaybackMetrics != null ? mPlaybackMetrics.summary() : "";
+    }
+
+    public Uri getPlaybackUri() {
+        return mActiveSlot != null ? mActiveSlot.uri : mUri;
+    }
+
+    private int getEffectivePlayerType() {
+        if (mForceIjkForCurrentStream) return IptvSettings.PLAYER_IJK;
+        int requested = mSettings.getPlayerType();
+        if (requested == IptvSettings.PLAYER_ANDROID_MEDIA
+                && (mAndroidAudioFallbackChannels.contains(mRawChannelUrl)
+                || (mAudioCodecHint.contains("mp2")
+                && DecoderPolicy.getMp2HardwareDecoders(null).isEmpty()))) {
+            return IptvSettings.PLAYER_IJK;
+        }
+        return requested;
+    }
+
+    private boolean isCurrentSlot(PlayerSlot slot, IMediaPlayer player, long generation) {
+        return slot.player == player && slot.generation == generation;
+    }
+
+    private static void clearSlotListeners(IMediaPlayer player) {
+        player.setOnPreparedListener(null);
+        player.setOnVideoSizeChangedListener(null);
+        player.setOnCompletionListener(null);
+        player.setOnErrorListener(null);
+        player.setOnInfoListener(null);
+    }
+
+    private boolean fallbackToIjk(PlayerSlot slot, boolean softwareVideo, boolean unsupportedAudio) {
+        if (slot != mActiveSlot || mForceIjkForCurrentStream) return false;
+        mForceIjkForCurrentStream = true;
+        mForceIjkVideoSoftware = softwareVideo;
+        if (unsupportedAudio && !TextUtils.isEmpty(slot.rawChannelUrl)) {
+            mAndroidAudioFallbackChannels.add(slot.rawChannelUrl);
+        }
+        Log.w(TAG, "Recovering channel with Ijk: softwareVideo=" + softwareVideo
+                + ", unsupportedAudio=" + unsupportedAudio);
+        slot.state = STATE_ERROR;
+        mCurrentState = STATE_PREPARING;
+        loadSlotWithStream(slot, slot.uri, slot.rawChannelUrl, true);
+        return true;
+    }
+
+    private static boolean isMp2Audio(IMediaPlayer player) {
+        try {
+            ITrackInfo[] tracks = player.getTrackInfo();
+            if (tracks != null) {
+                for (ITrackInfo track : tracks) {
+                    if (track != null && track.getTrackType() == ITrackInfo.MEDIA_TRACK_TYPE_AUDIO
+                            && track.getFormat() != null
+                            && Mp2SoftwareDecoder.isMp2MimeType(
+                            track.getFormat().getString(IMediaFormat.KEY_MIME))) {
+                        return true;
+                    }
+                }
+            }
+        } catch (RuntimeException ignored) {
+            // Some system players expose no track format until preparation completes.
+        }
+        return false;
+    }
+
     public void setVideoPath(String path) {
         if (!TextUtils.isEmpty(path)) {
             setVideoURI(Uri.parse(path));
@@ -456,6 +549,17 @@ public class IjkVideoView extends FrameLayout {
     }
 
     public void setVideoURI(Uri uri, Map<String, String> headers) {
+        boolean sameRequest = mActiveSlot != null
+                && mActiveSlot.matchesStream(resolvePlaybackUri(uri), mRawChannelUrl)
+                && mLastRequestedPlayerType == mSettings.getPlayerType()
+                && mActiveSlot.state != STATE_ERROR;
+        if (!sameRequest) {
+            mForceIjkForCurrentStream = false;
+            mForceIjkVideoSoftware = false;
+            mPlaybackMetrics = new PlaybackMetrics(++mRequestSequence);
+        }
+        mLastRequestedPlayerType = mSettings.getPlayerType();
+        mLastFailure = PlaybackFailure.UNKNOWN;
         mUri = uri;
         mHeaders = headers;
         openVideo();
@@ -469,6 +573,11 @@ public class IjkVideoView extends FrameLayout {
     public void setBackgroundChannelPath(String nextPath, String nextRawUrl) {
         mPendingBackgroundUri = null;
         mPendingBackgroundRawUrl = null;
+        UTVPlayer utv = getUtvPlayer();
+        if (utv != null) {
+            if (TextUtils.isEmpty(nextPath)) utv.stopBackgroundPreload();
+            else utv.preloadChannel(Uri.parse(nextPath));
+        }
     }
 
     public void setAdjacentChannelPaths(String prevPath,
@@ -491,7 +600,7 @@ public class IjkVideoView extends FrameLayout {
         if (mUri == null) {
             return;
         }
-        int playerType = mSettings.getPlayerType();
+        int playerType = getEffectivePlayerType();
         mHwAudioCompanion.stop();
         ensureAllSlotsMatchPlayerType(playerType);
         if (playerType != IptvSettings.PLAYER_UTV && mSurfaceHolder == null) {
@@ -518,7 +627,7 @@ public class IjkVideoView extends FrameLayout {
             return;
         }
 
-        mPrepareStartTime = System.currentTimeMillis();
+        mPrepareStartTime = SystemClock.elapsedRealtime();
         mCurrentState = STATE_PREPARING;
         loadSlotWithStream(mActiveSlot, playbackUri, mRawChannelUrl, true);
     }
@@ -567,7 +676,7 @@ public class IjkVideoView extends FrameLayout {
                 + " (state=" + promotedSlot.state + ") to active main screen for " + mUri);
 
         if (mActiveSlot.state == STATE_PREPARED || mActiveSlot.state == STATE_PLAYING) {
-            mPrepareEndTime = System.currentTimeMillis();
+            mPrepareEndTime = SystemClock.elapsedRealtime();
             mCurrentState = STATE_PREPARED;
             if (mVideoWidth > 0 && mVideoHeight > 0 && mRenderView != null) {
                 mRenderView.setVideoSize(mVideoWidth, mVideoHeight);
@@ -582,7 +691,7 @@ public class IjkVideoView extends FrameLayout {
             }
         } else if (mActiveSlot.state == STATE_ERROR) {
             // 若离屏预播放期间曾发生错误（如网络闪断或非真机环境），转正到主屏后立即在该槽位重新尝试连接
-            mPrepareStartTime = System.currentTimeMillis();
+            mPrepareStartTime = SystemClock.elapsedRealtime();
             mCurrentState = STATE_PREPARING;
             loadSlotWithStream(mActiveSlot, resolvePlaybackUri(mUri), mRawChannelUrl, true);
             mActiveSlot.promotedFromOffscreen = true;
@@ -637,6 +746,7 @@ public class IjkVideoView extends FrameLayout {
         if (slot == null || playbackUri == null) {
             return;
         }
+        slot.generation = ++mGeneration;
         try {
             resetOrCreateSlotPlayer(slot, rawUrl, isMainScreen);
             if (slot.player == null) {
@@ -648,6 +758,7 @@ public class IjkVideoView extends FrameLayout {
                 slot.state = STATE_ERROR;
                 mCurrentState = STATE_ERROR;
                 mTargetState = STATE_ERROR;
+                mLastFailure = PlaybackFailure.UNKNOWN;
                 if (mOnErrorListener != null) {
                     mOnErrorListener.onError(slot.player, MediaPlayer.MEDIA_ERROR_UNKNOWN, 0);
                 }
@@ -661,7 +772,7 @@ public class IjkVideoView extends FrameLayout {
         slot.uri = playbackUri;
         slot.rawChannelUrl = rawUrl;
         slot.state = STATE_PREPARING;
-        slot.prepareStartTime = System.currentTimeMillis();
+        slot.prepareStartTime = SystemClock.elapsedRealtime();
         slot.prepareEndTime = 0L;
         slot.promotedFromOffscreen = false;
         try {
@@ -691,6 +802,7 @@ public class IjkVideoView extends FrameLayout {
                 slot.state = STATE_ERROR;
                 mCurrentState = STATE_ERROR;
                 mTargetState = STATE_ERROR;
+                mLastFailure = PlaybackFailure.fromException(ex);
                 if (mOnErrorListener != null) {
                     mOnErrorListener.onError(slot.player, MediaPlayer.MEDIA_ERROR_UNKNOWN, 0);
                 }
@@ -726,7 +838,7 @@ public class IjkVideoView extends FrameLayout {
         if (!isMainScreen && mSimulateBackgroundPlayerCreationFailure) {
             throw new IllegalStateException("Simulated background player creation failure");
         }
-        int desiredPlayerType = mSettings.getPlayerType();
+        int desiredPlayerType = getEffectivePlayerType();
         String currentSig = buildCurrentCodecConfigSignature();
         boolean canReuseExisting = slot.player != null
                 && slot.playerType == desiredPlayerType
@@ -736,6 +848,7 @@ public class IjkVideoView extends FrameLayout {
         }
         if (canReuseExisting) {
             try {
+                clearSlotListeners(slot.player);
                 IMediaPlayer internal = unwrapPlayer(slot.player);
                 if (internal instanceof UTVPlayer) {
                     ((UTVPlayer) internal).prepareForSlotReuse();
@@ -766,7 +879,9 @@ public class IjkVideoView extends FrameLayout {
         releaseSlotPlayerOnly(slot);
         slot.resetMetadata();
         slot.player = createConfiguredPlayer(desiredPlayerType, rawUrl);
-        slot.playerType = desiredPlayerType;
+        IMediaPlayer actual = unwrapPlayer(slot.player);
+        slot.playerType = actual instanceof AndroidMediaPlayer ? IptvSettings.PLAYER_ANDROID_MEDIA
+                : desiredPlayerType;
         slot.codecConfigSignature = currentSig;
     }
 
@@ -774,7 +889,7 @@ public class IjkVideoView extends FrameLayout {
         return createConfiguredPlayer(playerType, mRawChannelUrl);
     }
 
-    private IMediaPlayer createConfiguredPlayer(int playerType, String rawUrl) {
+    protected IMediaPlayer createConfiguredPlayer(int playerType, String rawUrl) {
         IMediaPlayer mediaPlayer;
         switch (playerType) {
             case IptvSettings.PLAYER_UTV:
@@ -786,6 +901,9 @@ public class IjkVideoView extends FrameLayout {
                     configureIjkOptions(ijkPlayer, rawUrl);
                     mediaPlayer = ijkPlayer;
                 } catch (Throwable t) {
+                    if (mForceIjkForCurrentStream || getEffectivePlayerType() != mSettings.getPlayerType()) {
+                        throw new IllegalStateException("Ijk decoder fallback is unavailable", t);
+                    }
                     Log.e(TAG, "Failed to init IjkMediaPlayer, falling back to AndroidMediaPlayer", t);
                     mediaPlayer = new AndroidMediaPlayer();
                 }
@@ -802,8 +920,10 @@ public class IjkVideoView extends FrameLayout {
     }
 
     private void configureIjkOptions(IjkMediaPlayer ijkMediaPlayer, String rawUrl) {
-        boolean useMediaCodec = mSettings == null || mSettings.isMediaCodecEnabled();
-        boolean enableHevcHw = mSettings == null || mSettings.isMediaCodecHevcEnabled();
+        boolean useMediaCodec = !mForceIjkVideoSoftware
+                && (mSettings == null || mSettings.isMediaCodecEnabled());
+        boolean enableHevcHw = useMediaCodec
+                && (mSettings == null || mSettings.isMediaCodecHevcEnabled());
         boolean useOpenSlEs = mSettings != null && mSettings.isOpenSlEsEnabled();
         boolean likely4K = !TextUtils.isEmpty(rawUrl) && rawUrl.endsWith(":2000");
 
@@ -850,8 +970,16 @@ public class IjkVideoView extends FrameLayout {
         if (mp == null) {
             return;
         }
+        final long generation = slot.generation;
         mp.setOnPreparedListener(player -> {
-            slot.prepareEndTime = System.currentTimeMillis();
+            if (!isCurrentSlot(slot, mp, generation)) return;
+            slot.prepareEndTime = SystemClock.elapsedRealtime();
+            if (mPlaybackMetrics != null) mPlaybackMetrics.prepared();
+            if (unwrapPlayer(mp) instanceof AndroidMediaPlayer
+                    && isMp2Audio(mp) && DecoderPolicy.getMp2HardwareDecoders(null).isEmpty()) {
+                fallbackToIjk(slot, false, true);
+                return;
+            }
             slot.state = STATE_PREPARED;
             slot.videoWidth = player.getVideoWidth();
             slot.videoHeight = player.getVideoHeight();
@@ -903,6 +1031,7 @@ public class IjkVideoView extends FrameLayout {
         });
 
         mp.setOnVideoSizeChangedListener((player, width, height, sarNum, sarDen) -> {
+            if (!isCurrentSlot(slot, mp, generation)) return;
             slot.videoWidth = player.getVideoWidth();
             slot.videoHeight = player.getVideoHeight();
             slot.videoSarNum = player.getVideoSarNum();
@@ -933,6 +1062,7 @@ public class IjkVideoView extends FrameLayout {
         });
 
         mp.setOnCompletionListener(player -> {
+            if (!isCurrentSlot(slot, mp, generation)) return;
             slot.state = STATE_PLAYBACK_COMPLETED;
             if (slot == mActiveSlot) {
                 mCurrentState = STATE_PLAYBACK_COMPLETED;
@@ -944,6 +1074,20 @@ public class IjkVideoView extends FrameLayout {
         });
 
         mp.setOnInfoListener((player, arg1, arg2) -> {
+            if (!isCurrentSlot(slot, mp, generation)) return true;
+            if (arg1 == 1005 && unwrapPlayer(mp) instanceof AndroidMediaPlayer) {
+                // Android's MEDIA_INFO_UNSUPPORTED_AUDIO may accompany otherwise valid video.
+                fallbackToIjk(slot, false, true);
+                return true;
+            }
+            if (mPlaybackMetrics != null) {
+                mPlaybackMetrics.onInfo(arg1);
+                if (arg1 == IMediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START
+                        || arg1 == IMediaPlayer.MEDIA_INFO_AUDIO_RENDERING_START
+                        || arg1 == PlaybackMetrics.INFO_AUDIO_RENDERING_START) {
+                    Log.i(TAG, "Startup " + mPlaybackMetrics.summary());
+                }
+            }
             if (arg1 == IMediaPlayer.MEDIA_INFO_VIDEO_ROTATION_CHANGED) {
                 slot.videoRotationDegree = arg2;
             }
@@ -963,6 +1107,18 @@ public class IjkVideoView extends FrameLayout {
         });
 
         mp.setOnErrorListener((player, frameworkErr, implErr) -> {
+            if (!isCurrentSlot(slot, mp, generation)) return true;
+            IMediaPlayer actual = unwrapPlayer(mp);
+            mLastFailure = actual instanceof UTVPlayer
+                    ? ((UTVPlayer) actual).getLastFailure()
+                    : PlaybackFailure.fromLegacy(frameworkErr, implErr);
+            if (actual instanceof AndroidMediaPlayer && mLastFailure == PlaybackFailure.FORMAT
+                    && (mAudioCodecHint.contains("mp2") || isMp2Audio(mp))) {
+                return fallbackToIjk(slot, false, true);
+            }
+            if (actual instanceof UTVPlayer && mLastFailure == PlaybackFailure.VIDEO_DECODER) {
+                return fallbackToIjk(slot, true, false);
+            }
             slot.state = STATE_ERROR;
             if (slot != mActiveSlot) {
                 Log.d(TAG, "Off-screen slot #" + slot.slotIndex + " error ignored: " + frameworkErr + ", " + implErr);
@@ -1040,6 +1196,7 @@ public class IjkVideoView extends FrameLayout {
             return;
         }
         IMediaPlayer mp = slot.player;
+        slot.generation = ++mGeneration;
         int prevState = slot.state;
         slot.player = null;
         slot.playerType = -1;
@@ -1132,6 +1289,8 @@ public class IjkVideoView extends FrameLayout {
 
     public void pause() {
         mHwAudioCompanion.stop();
+        UTVPlayer utv = getUtvPlayer();
+        if (utv != null) utv.stopBackgroundPreload();
         if (isInPlaybackState()) {
             try {
                 if (mMediaPlayer.isPlaying()) {
@@ -1225,7 +1384,8 @@ public class IjkVideoView extends FrameLayout {
     }
 
     public String getDecoderName() {
-        int playerType = mSettings.getPlayerType();
+        int playerType = mActiveSlot != null && mActiveSlot.player != null
+                ? mActiveSlot.playerType : getEffectivePlayerType();
         if (playerType == IptvSettings.PLAYER_UTV) {
             UTVPlayer utvPlayer = getUtvPlayer();
             if (utvPlayer != null) {
@@ -1235,13 +1395,13 @@ public class IjkVideoView extends FrameLayout {
         }
         String poolTag = "单实例";
         if (playerType == IptvSettings.PLAYER_ANDROID_MEDIA) {
-            return "AndroidMediaPlayer (" + poolTag + "系统硬解)";
+            return "AndroidMediaPlayer (" + poolTag + "系统解码)";
         }
 
         boolean likely4K = !TextUtils.isEmpty(mRawChannelUrl) && mRawChannelUrl.endsWith(":2000");
-        boolean hwEnabled = likely4K
+        boolean hwEnabled = !mForceIjkVideoSoftware && (likely4K
                 ? (mSettings.isMediaCodecEnabled() && mSettings.isMediaCodecHevcEnabled())
-                : mSettings.isMediaCodecEnabled();
+                : mSettings.isMediaCodecEnabled());
         String videoDecoder = hwEnabled
                 ? ("MediaCodec (" + poolTag + "硬解)")
                 : ("FFmpeg (" + poolTag + "软解)");
@@ -1339,13 +1499,15 @@ public class IjkVideoView extends FrameLayout {
         if (!isInPlaybackState()) {
             return "";
         }
-        String codec = "mp2";
-        int sampleRate = 48000;
+        String codec = "";
+        int sampleRate = 0;
+        int channels = 0;
         try {
             IMediaPlayer mp = unwrapIjkMediaPlayer();
             if (mp instanceof UTVPlayer) {
                 com.google.android.exoplayer2.Format af = ((UTVPlayer) mp).getCurrentAudioFormat();
                 if (af != null) {
+                    channels = af.channelCount;
                     if (af.sampleRate > 0) {
                         sampleRate = af.sampleRate;
                     }
@@ -1356,8 +1518,12 @@ public class IjkVideoView extends FrameLayout {
                             codec = "ac3";
                         } else if (af.sampleMimeType.contains("mp4a")) {
                             codec = "aac";
-                        } else if (af.sampleMimeType.contains("mpeg")) {
+                        } else if (Mp2SoftwareDecoder.isMp2MimeType(af.sampleMimeType)) {
                             codec = "mp2";
+                        } else if ("audio/mpeg".equals(af.sampleMimeType)) {
+                            codec = "mp3";
+                        } else {
+                            codec = af.sampleMimeType.replace("audio/", "");
                         }
                     }
                 }
@@ -1370,6 +1536,7 @@ public class IjkVideoView extends FrameLayout {
                             if (!TextUtils.isEmpty(stream.mCodecName)) {
                                 codec = stream.mCodecName.toLowerCase(Locale.US);
                             }
+                            channels = Long.bitCount(stream.mChannelLayout);
                             if (stream.mSampleRate > 0) {
                                 sampleRate = stream.mSampleRate;
                             }
@@ -1384,11 +1551,15 @@ public class IjkVideoView extends FrameLayout {
                         if (t != null && t.getTrackType() == ITrackInfo.MEDIA_TRACK_TYPE_AUDIO) {
                             IMediaFormat fmt = t.getFormat();
                             if (fmt != null) {
-                                String c = fmt.getString(IjkMediaFormat.KEY_IJK_CODEC_NAME_UI);
+                                String c = fmt.getString(IMediaFormat.KEY_MIME);
+                                if (Mp2SoftwareDecoder.isMp2MimeType(c)) c = "mp2";
+                                else if ("audio/mpeg".equals(c)) c = "mp3";
+                                else if (c != null) c = c.replace("audio/", "");
                                 if (!TextUtils.isEmpty(c)) {
                                     codec = c.toLowerCase(Locale.US);
                                 }
-                                int sr = fmt.getInteger(IjkMediaFormat.KEY_IJK_SAMPLE_RATE_UI);
+                                channels = fmt.getInteger("channel-count");
+                                int sr = fmt.getInteger("sample-rate");
                                 if (sr > 0) {
                                     sampleRate = sr;
                                 }
@@ -1400,7 +1571,9 @@ public class IjkVideoView extends FrameLayout {
             }
         } catch (Throwable ignored) {
         }
-        return String.format(Locale.US, "#1 %s,2ch,%dkhz", codec, sampleRate / 1000);
+        if (TextUtils.isEmpty(codec)) return "";
+        return "#1 " + codec + (channels > 0 ? "," + channels + "ch" : "")
+                + (sampleRate > 0 ? "," + sampleRate / 1000 + "khz" : "");
     }
 
     public String getDetectedResolutionFlag() {
@@ -1453,7 +1626,18 @@ public class IjkVideoView extends FrameLayout {
                 String videoDec = (info != null) ? info.mVideoDecoderImpl : null;
                 Log.i(TAG, "onPrepared IjkMediaPlayer audioDecoder=" + audioDec
                         + ", videoDecoder=" + videoDec);
-                if (TextUtils.isEmpty(audioDec) || "unknown".equalsIgnoreCase(audioDec)) {
+                String audioCodec = "";
+                IjkMediaMeta meta = IjkMediaMeta.parse(ijk.getMediaMeta());
+                if (meta != null && meta.mStreams != null) {
+                    for (IjkMediaMeta.IjkStreamMeta stream : meta.mStreams) {
+                        if (stream != null && "audio".equals(stream.mType)) {
+                            audioCodec = stream.mCodecName;
+                            break;
+                        }
+                    }
+                }
+                if (("ac3".equalsIgnoreCase(audioCodec) || "eac3".equalsIgnoreCase(audioCodec))
+                        && (TextUtils.isEmpty(audioDec) || "unknown".equalsIgnoreCase(audioDec))) {
                     // 仅当 IjkMediaPlayer 自身无对应音频解码器（如 AC-3/E-AC-3）时才启动伴音，并将主播放器静音防重音
                     try {
                         ijk.setVolume(0f, 0f);

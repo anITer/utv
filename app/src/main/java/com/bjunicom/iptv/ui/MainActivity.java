@@ -34,6 +34,8 @@ import com.bjunicom.iptv.model.IptvChannel;
 import com.bjunicom.iptv.network.StreamUrlResolver;
 import com.bjunicom.iptv.parser.M3uParser;
 import com.bjunicom.iptv.player.IjkVideoView;
+import com.bjunicom.iptv.player.PlaybackFailure;
+import com.bjunicom.iptv.network.TransportRouteCache;
 import com.bjunicom.iptv.player.MeasureHelper;
 import com.bjunicom.iptv.repository.ChannelRepository;
 import com.bjunicom.iptv.ui.adapter.CategoryAdapter;
@@ -101,7 +103,6 @@ public class MainActivity extends AppCompatActivity {
     private IptvChannel currentChannel;
     private int channelSwitchDirection = 1;
     private boolean fallbackToLocalProxyAttempted = false;
-    private boolean udpxyUnreachableInSession = false;
     private long lastBackPressTimeMs = 0L;
     private final StringBuilder remoteNumberBuffer = new StringBuilder();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -634,10 +635,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void setupPlayerListeners() {
         videoView.setOnPreparedListener(mp -> {
-            loadingOverlay.setVisibility(View.GONE);
             if (currentChannel != null) {
-                currentChannel.setConnected(true);
-                currentChannel.setLatencyMs(videoView.getPrepareCostMs());
                 String vTrack = videoView.getFormattedVideoTrackInfo();
                 String aTrack = videoView.getFormattedAudioTrackInfo();
                 String detectedRes = videoView.getDetectedResolutionFlag();
@@ -660,10 +658,13 @@ public class MainActivity extends AppCompatActivity {
             if (what == IMediaPlayer.MEDIA_INFO_BUFFERING_START) {
                 loadingOverlay.setVisibility(View.VISIBLE);
                 tvLoadingHint.setText("正在缓冲视频流...");
-            } else if (what == IMediaPlayer.MEDIA_INFO_BUFFERING_END
-                    || what == IMediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START) {
+            } else if (what == IMediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START
+                    || (what == IMediaPlayer.MEDIA_INFO_BUFFERING_END
+                    && videoView.getFirstFrameCostMs() >= 0)) {
                 loadingOverlay.setVisibility(View.GONE);
                 if (currentChannel != null) {
+                    currentChannel.setConnected(true);
+                    currentChannel.setLatencyMs(videoView.getFirstFrameCostMs());
                     updateOsdWithChannel(currentChannel);
                 }
             }
@@ -671,15 +672,16 @@ public class MainActivity extends AppCompatActivity {
         });
 
         videoView.setOnErrorListener((mp, frameworkErr, implErr) -> {
-            if (currentChannel != null && currentChannel.isMulticastStream() && !fallbackToLocalProxyAttempted) {
+            if (videoView.getLastFailure() == PlaybackFailure.NETWORK
+                    && currentChannel != null && currentChannel.isMulticastStream()
+                    && TransportRouteCache.isExternalProxy(videoView.getPlaybackUri())
+                    && !fallbackToLocalProxyAttempted) {
                 fallbackToLocalProxyAttempted = true;
-                if (settings.getStreamMode() == IptvSettings.STREAM_MODE_UDPXY) {
-                    udpxyUnreachableInSession = true;
-                }
                 int localProxyPort = (getApplication() instanceof IptvApplication)
                         ? ((IptvApplication) getApplication()).getLocalProxyPort()
                         : -1;
                 if (localProxyPort > 0) {
+                    TransportRouteCache.recordNetworkFailure(videoView.getPlaybackUri());
                     String localUrl = StreamUrlResolver.toUdpxyUrl(currentChannel.getRawUrl(), "127.0.0.1:" + localProxyPort);
                     tvLoadingHint.setText("正在通过网卡 IGMP 组播直连 " + currentChannel.getDisplayName() + "...");
                     tvOsdStreamUrl.setText("RTP 组播直连: " + currentChannel.getRawUrl() + "  ➔  " + localUrl);
@@ -694,7 +696,9 @@ public class MainActivity extends AppCompatActivity {
                 currentChannel.setConnected(false);
                 channelAdapter.notifyDataSetChanged();
             }
-            if (currentChannel != null && !currentChannel.isMulticastStream()) {
+            if (videoView.getLastFailure() != PlaybackFailure.NETWORK) {
+                tvOsdTrackInfo.setText("播放失败：当前频道的音视频格式无法解码，请尝试其它频道或播放器");
+            } else if (currentChannel != null && !currentChannel.isMulticastStream()) {
                 tvOsdTrackInfo.setText("单播流连接失败 (请检查北京移动 IPTV 专网/网络环境或切换其它频道)");
             } else {
                 tvOsdTrackInfo.setText("连接失败 (请按遥控器[菜单]检查 udpxy/内置组播代理设置，或按[绿键]打开「组播动态扫描」)");
@@ -777,8 +781,11 @@ public class MainActivity extends AppCompatActivity {
         showHudTemporarily();
 
         videoView.setRawChannelUrl(channel.getRawUrl());
+        videoView.setAudioCodecHint(channel.getAudioTrackInfo());
         videoView.setVideoPath(resolvedUrl);
         videoView.start();
+        if (isChannelSwitch) updateBackgroundPlayer(channel, localProxyPort);
+        else videoView.setBackgroundChannelPath(null, null);
     }
 
     private String resolveChannelUrl(IptvChannel ch, int localProxyPort) {
@@ -786,7 +793,8 @@ public class MainActivity extends AppCompatActivity {
             return "";
         }
         if (settings.getStreamMode() == IptvSettings.STREAM_MODE_UDPXY
-                && udpxyUnreachableInSession
+                && TransportRouteCache.shouldBypass(android.net.Uri.parse(
+                StreamUrlResolver.toUdpxyUrl(ch.getRawUrl(), settings.getUdpxyAddress())))
                 && localProxyPort > 0
                 && ch.isMulticastStream()) {
             return StreamUrlResolver.toUdpxyUrl(ch.getRawUrl(), "127.0.0.1:" + localProxyPort);
@@ -795,7 +803,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     /**
-     * 双实例池化调度：按当前切台方向计算【下一个频道】，交由 IjkVideoView 的唯一后台实例 (mBackgroundSlot) 在离屏状态预播放
+     * 短时预收切台方向上的一个邻台，仅缓存 TS 数据，不创建后台播放器或解码器。
      */
     private void updateBackgroundPlayer(IptvChannel activeChannel, int localProxyPort) {
         if (activeChannel == null || videoView == null) {
@@ -1504,7 +1512,7 @@ public class MainActivity extends AppCompatActivity {
                     }
 
                     settings.setUdpxyAddress(etUdpxy.getText().toString());
-                    udpxyUnreachableInSession = false;
+                    TransportRouteCache.clear();
 
                     int checkedCore = rgPlayerCore.getCheckedRadioButtonId();
                     if (checkedCore == R.id.rb_core_android) {

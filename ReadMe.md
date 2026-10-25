@@ -13,19 +13,22 @@
 
 ### 2. 三种网络传输模式与智能无缝回退
 - **路由器 `udpxy` 组播转单播（推荐）**：自动将 `rtp://239.3.1.x:port` 转换为 `http://<udpxy_ip:port>/rtp/239.3.1.x:port`（默认 `192.168.2.1:8012`）。
-- **内置本地 `udpxy` 代理网关（`LocalMulticastProxyServer`）**：当路由器未安装 `udpxy`、或光猫 IPTV 口直连电视盒子时，应用在本地自动监听 `127.0.0.1` 代理端口，自动探测并绑定 IPTV 专网网卡（如无默认网关的 `eth0`），加入 IGMP 组播组并剥离 12 字节 RTP 协议头（含 CSRC 与扩展头），向播放器实时推送纯净的 MPEG-TS 流。
+- **内置本地 `udpxy` 代理网关（`LocalMulticastProxyServer`）**：当路由器未安装 `udpxy`、或光猫 IPTV 口直连电视盒子时，应用在本地自动监听 `127.0.0.1` 代理端口，自动探测并绑定 IPTV 专网网卡（如无默认网关的 `eth0`），加入 IGMP 组播组并校验并剥离 RTP 协议头（含 CSRC、扩展头与 padding），向播放器实时推送纯净的 MPEG-TS 流。
 - **原生 RTP/UDP 组播直连模式**：直接通过本地组播引擎加入网卡 IGMP 组播组解封装播放。
-- **智能故障回退**：当外部 `udpxy` 代理不可达时，自动无缝回退至内置本地组播网关并在当前会话中记忆状态，避免后续切台重复等待超时。
+- **智能故障回退**：当外部 `udpxy` 代理不可达时，自动无缝回退至内置本地组播网关按代理端点缓存故障 5 分钟，避免后续切台重复等待超时；网络或代理设置变化时清除缓存。格式和解码错误不会触发网络回退。
 
 ### 3. 深度定制的播放与音视频解码架构
-- **流下载与解码器池化复用（`StreamDownloaderPool` + `CodecDecoderPool`）**：
-  - 将流媒体网络接收、MPEG-TS 协议解析（`PAT` -> `PMT` -> `ES Header`）与音视频解码器解耦并池化管理，切台时异步回收与复用解码器实例，主线程零阻塞。
-- **关键帧对齐与零慢放秒开**：
-  - 针对直播流切入 GOP 中间导致首个视频 IDR 帧晚于音频帧、进而引发切台前几秒 `0.5x` 慢放的问题，下载器在首个视频 IDR 关键帧到达前自动过滤非关键帧视频包及早到的旧音频包，严格对齐 `PAT + PMT + 首个视频 IDR 关键帧 + 同 PTS 音频帧`，实现音画同步秒开。
+- **单前台播放器与安全解码器复用**：
+  - `IjkVideoView` 保持一个前台播放器；`UTVPlayer` 使用 ExoPlayer 管理的 `ProgressiveMediaSource` 和加载线程，按设备能力优先选硬解，保留系统解码器复用边界与设备 workaround。
+  - 普通切台保留前台 Surface，按请求代次隔离旧回调；旧组播 socket 立即关闭，终止阻塞接收。
+- **邻台 TS 预收与关键帧对齐**：
+  - UTV 内核在连续切台时短暂预收方向上的一个邻台，仅缓存 TS 字节，不创建后台播放器或解码器。可回放缓存需包含完整 PAT/PMT、参数集和 IDR，并过滤视频起点之前的音频 PES。
+  - 同端口不同组播地址暂不并行预收；无安全回放点时使用实时接收路径。详见 [播放架构与验证](docs/player-architecture.md)。
 - **全格式音频解码支持**：
+  - **硬解优先与 MP2 回退**：UTV 只接受真实的 `audio/mpeg-L2` 硬件能力，不将 MP2 伪装为 MP3；硬件缺失或失败时选用 Ijk/FFmpeg MP2 音频软解，视频继续优先硬解。系统播放器报告不支持伴音时，同地址切换至 Ijk。
   - **原生 MP2 音频支持**：内置多架构（`arm64-v8a`、`armeabi-v7a`、`x86`、`x86_64`）定制版 `libijkffmpeg.so`，原生开启广电 IPTV 标配的 `MP2 (MPEG-1 Audio Layer II)` 解码器。
-  - **杜比 AC-3 / E-AC-3 硬件伴音协同（`TsHardwareAudioCompanion`）**：针对 CCTV-4K、北京卫视 4K 等采用杜比 `AC-3` / `E-AC-3` 音轨的频道，通过零重复连接的 TS 旁路分发机制驱动 Android TV 硬件 `MediaCodec` + `AudioTrack`（含 HDMI 直通回退）同步输出伴音。
-- **多播放内核与渲染切换**：支持 `IjkMediaPlayer`、`AndroidMediaPlayer` 切换，支持硬解（MediaCodec H.264 / HEVC）开关、`SurfaceView` / `TextureView` 渲染视图切换，以及 6 种画面比例（适应屏幕、铺满裁剪、原始尺寸、拉伸全屏、16:9、4:3）调节。
+  - **杜比 AC-3 / E-AC-3 硬件伴音协同（`TsHardwareAudioCompanion`）**：针对 CCTV-4K、北京卫视 4K 等采用杜比 `AC-3` / `E-AC-3` 音轨的频道，仅在确认音轨为 AC-3/E-AC-3 且 Ijk 缺少解码器时，启用独立拉流的伴音路径，驱动 Android TV 硬件 `MediaCodec` + `AudioTrack`（含 HDMI 直通回退）同步输出伴音。
+- **多播放内核与渲染切换**：支持 `UTVPlayer`、`IjkMediaPlayer`、`AndroidMediaPlayer` 切换，支持硬解（MediaCodec H.264 / HEVC）开关、`SurfaceView` / `TextureView` 渲染视图切换，以及 6 种画面比例（适应屏幕、铺满裁剪、原始尺寸、拉伸全屏、16:9、4:3）调节。
 
 ### 4. 组播地址动态扫描与 `check_iptv_m3u.sh` 巡检引擎
 内置可视化组播扫描与频道巡检工具（`ScannerActivity` / `MulticastScannerEngine`），提供三种运行模式：
@@ -65,8 +68,10 @@ app/src/main/
 │   │   └── M3uParser.java          # M3U 播放列表解析与导出工具
 │   ├── player/
 │   │   ├── IjkVideoView.java       # 定制播放器核心视图与音视频轨道探测
-│   │   ├── StreamDownloaderPool.java # 池化流媒体下载器（PAT/PMT 解析与 IDR 关键帧对齐）
-│   │   ├── CodecDecoderPool.java   # IjkMediaPlayer 与硬件伴音解码器对象池
+│   │   ├── UTVPlayer.java          # ExoPlayer 硬解优先与 MP2 音频回退
+│   │   ├── UTVStreamDataSource.java # HTTP/组播传输与旧请求取消
+│   │   ├── MulticastPreloader.java # 不分配解码器的邻台预收
+│   │   ├── TsStartupBuffer.java    # 有界 PAT/PMT、IDR 与音频 PTS 回放缓存
 │   │   ├── TsHardwareAudioCompanion.java # Android TV 杜比 AC-3/E-AC-3 硬件音频伴音引擎
 │   │   └── TsCodecDescriptor.java  # MPEG-TS 实时编解码器规格描述符
 │   ├── repository/
