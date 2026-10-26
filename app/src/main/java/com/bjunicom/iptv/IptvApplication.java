@@ -11,6 +11,7 @@ import android.util.Log;
 
 import com.bjunicom.iptv.network.LocalMulticastProxyServer;
 import com.bjunicom.iptv.network.TransportRouteCache;
+import com.bjunicom.iptv.report.DataReportManager;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -62,6 +63,7 @@ public class IptvApplication extends Application {
                 Log.w(TAG, "Cannot observe network changes", error);
             }
         }
+        DataReportManager.getInstance(this).reportDeviceProfileInitOnStartup();
     }
 
     private void installCrashRecorder() {

@@ -45,6 +45,13 @@ public class IptvSettings {
     private static final String KEY_SCAN_END_HOST = "scan_end_host";
     private static final String KEY_SCAN_TIMEOUT_MS = "scan_timeout_ms";
     private static final String KEY_FAVORITES = "favorite_urls";
+    private static final String KEY_DEVICE_ID = "device_id";
+    private static final String KEY_APP_CHANNEL = "app_channel";
+    private static final String KEY_PENDING_REPORT_ID = "pending_report_id";
+    private static final String KEY_LAST_SUCCESS_REPORT_ID = "last_success_report_id";
+    private static final String KEY_USER_ID = "user_id";
+
+    public static final String DEFAULT_APP_CHANNEL = "landing_page_a";
 
     private final SharedPreferences prefs;
 
@@ -281,5 +288,90 @@ public class IptvSettings {
             set.add(rawUrl);
         }
         prefs.edit().putStringSet(KEY_FAVORITES, set).apply();
+    }
+
+    public String getPlayerTypeReportName() {
+        return getPlayerTypeReportName(getPlayerType());
+    }
+
+    public static String getPlayerTypeReportName(int playerType) {
+        switch (playerType) {
+            case PLAYER_UTV:
+                return "ExoPlayer";
+            case PLAYER_ANDROID_MEDIA:
+                return "MediaPlayer";
+            case PLAYER_IJK:
+            default:
+                return "IjkPlayer";
+        }
+    }
+
+    public String getCarrierReportName() {
+        return getCarrierReportName(getIspProvider());
+    }
+
+    public static String getCarrierReportName(int ispProvider) {
+        switch (ispProvider) {
+            case ISP_BEIJING_TELECOM:
+                return "China Telecom";
+            case ISP_BEIJING_MOBILE:
+                return "China Mobile";
+            case ISP_BEIJING_UNICOM:
+            default:
+                return "China Unicom";
+        }
+    }
+
+    public String getSavedDeviceId() {
+        return prefs.getString(KEY_DEVICE_ID, "");
+    }
+
+    public void setSavedDeviceId(String deviceId) {
+        if (!TextUtils.isEmpty(deviceId)) {
+            prefs.edit().putString(KEY_DEVICE_ID, deviceId.trim()).apply();
+        }
+    }
+
+    public String getAppChannel() {
+        String channel = prefs.getString(KEY_APP_CHANNEL, DEFAULT_APP_CHANNEL);
+        return TextUtils.isEmpty(channel) ? DEFAULT_APP_CHANNEL : channel.trim();
+    }
+
+    public void setAppChannel(String channel) {
+        prefs.edit().putString(KEY_APP_CHANNEL,
+                TextUtils.isEmpty(channel) ? DEFAULT_APP_CHANNEL : channel.trim()).apply();
+    }
+
+    public String getUserId() {
+        String uid = prefs.getString(KEY_USER_ID, null);
+        return TextUtils.isEmpty(uid) ? null : uid.trim();
+    }
+
+    public void setUserId(String userId) {
+        if (TextUtils.isEmpty(userId)) {
+            prefs.edit().remove(KEY_USER_ID).apply();
+        } else {
+            prefs.edit().putString(KEY_USER_ID, userId.trim()).apply();
+        }
+    }
+
+    public String getPendingReportId() {
+        return prefs.getString(KEY_PENDING_REPORT_ID, "");
+    }
+
+    public void setPendingReportId(String reportId) {
+        if (TextUtils.isEmpty(reportId)) {
+            prefs.edit().remove(KEY_PENDING_REPORT_ID).apply();
+        } else {
+            prefs.edit().putString(KEY_PENDING_REPORT_ID, reportId.trim()).apply();
+        }
+    }
+
+    public String getLastSuccessReportId() {
+        return prefs.getString(KEY_LAST_SUCCESS_REPORT_ID, "");
+    }
+
+    public void setLastSuccessReportId(String reportId) {
+        prefs.edit().putString(KEY_LAST_SUCCESS_REPORT_ID, reportId != null ? reportId.trim() : "").apply();
     }
 }

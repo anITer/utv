@@ -840,4 +840,252 @@ public class StartupSmokeTest {
             }
         }
     }
+
+    @Test
+    public void testDeviceProfileReportPayloadAndIdempotentRetryCallbacks() throws Exception {
+        // 1. Verify URL normalization and report_id format
+        assertEquals("http://104.223.42.150/api/v1/report",
+                com.bjunicom.iptv.report.DataReportManager.REPORT_API_URL);
+        assertEquals("http://104.223.42.150/api/v1/report",
+                com.bjunicom.iptv.report.DataReportManager.normalizeReportUrl(
+                        "http://http://104.223.42.150/api/v1/report"));
+        String generatedReportId = com.bjunicom.iptv.report.DataReportManager.generateReportId();
+        assertTrue(generatedReportId.matches("^req_[0-9a-f]{10}$"));
+        assertEquals("11.0", com.bjunicom.iptv.report.DataReportManager.formatOsVersion("11"));
+        assertEquals("Mozilla/5.0 (Linux; U; Android 11; MiBox4 Build/RQ3A.211001.001)",
+                com.bjunicom.iptv.report.DataReportManager.buildUserAgent("11", "MiBox4", "RQ3A.211001.001"));
+
+        // 2. Verify exact JSON payload structure matching specification sample
+        com.bjunicom.iptv.report.DataReportManager.DeviceProfile sampleDevice =
+                new com.bjunicom.iptv.report.DataReportManager.DeviceProfile(
+                        "d4e5f6a7-b8c9-40d1-a2b3-c4d5e6f7a8b9",
+                        "Android",
+                        "Xiaomi",
+                        "MiBox4",
+                        "11.0",
+                        1920,
+                        1080,
+                        2.0,
+                        4096,
+                        16384,
+                        false,
+                        "ExoPlayer",
+                        true
+                );
+        com.bjunicom.iptv.report.DataReportManager.EnvProfile sampleEnv =
+                new com.bjunicom.iptv.report.DataReportManager.EnvProfile(
+                        "1.0.0",
+                        "102",
+                        "landing_page_a",
+                        "Ethernet",
+                        "China Telecom",
+                        "zh-CN",
+                        "Asia/Shanghai",
+                        "Mozilla/5.0 (Linux; U; Android 11; MiBox4 Build/RQ3A.211001.001)"
+                );
+        com.bjunicom.iptv.report.DataReportManager.ReportPayload samplePayload =
+                new com.bjunicom.iptv.report.DataReportManager.ReportPayload(
+                        "req_8f9d2a1b4c",
+                        "device_profile_init",
+                        1761463320000L,
+                        null,
+                        sampleDevice,
+                        sampleEnv
+                );
+
+        String jsonString = samplePayload.toJsonString();
+        assertTrue(jsonString.contains("\"user_id\":null"));
+        assertTrue(jsonString.contains("\"dpr\":2.0"));
+        org.json.JSONObject parsedJson = new org.json.JSONObject(jsonString);
+        assertEquals("req_8f9d2a1b4c", parsedJson.getString("report_id"));
+        assertEquals("device_profile_init", parsedJson.getString("report_type"));
+        assertEquals(1761463320000L, parsedJson.getLong("timestamp"));
+        assertTrue(parsedJson.isNull("user_id"));
+
+        org.json.JSONObject devObj = parsedJson.getJSONObject("device");
+        assertEquals("d4e5f6a7-b8c9-40d1-a2b3-c4d5e6f7a8b9", devObj.getString("device_id"));
+        assertEquals("Android", devObj.getString("platform"));
+        assertEquals("Xiaomi", devObj.getString("brand"));
+        assertEquals("MiBox4", devObj.getString("model"));
+        assertEquals("11.0", devObj.getString("os_version"));
+        assertEquals(1920, devObj.getInt("screen_width"));
+        assertEquals(1080, devObj.getInt("screen_height"));
+        assertEquals(2.0, devObj.getDouble("dpr"), 0.001);
+        assertEquals(4096, devObj.getLong("ram_mb"));
+        assertEquals(16384, devObj.getLong("disk_free_mb"));
+        assertFalse(devObj.getBoolean("is_emulator"));
+        assertEquals("ExoPlayer", devObj.getString("player_type"));
+        assertTrue(devObj.getBoolean("is_hw_decoder"));
+
+        org.json.JSONObject envObj = parsedJson.getJSONObject("env");
+        assertEquals("1.0.0", envObj.getString("app_version"));
+        assertEquals("102", envObj.getString("build_number"));
+        assertEquals("landing_page_a", envObj.getString("channel"));
+        assertEquals("Ethernet", envObj.getString("network_type"));
+        assertEquals("China Telecom", envObj.getString("carrier"));
+        assertEquals("zh-CN", envObj.getString("language"));
+        assertEquals("Asia/Shanghai", envObj.getString("timezone"));
+        assertEquals("Mozilla/5.0 (Linux; U; Android 11; MiBox4 Build/RQ3A.211001.001)",
+                envObj.getString("user_agent"));
+
+        // 3. Verify parsing of server callback 1 (HTTP 201 Created, first report)
+        String firstCreatedResponseJson = "{\n" +
+                "  \"code\": 0,\n" +
+                "  \"message\": \"created\",\n" +
+                "  \"data\": {\n" +
+                "    \"report_id\": \"req_8f9d2a1b4c\",\n" +
+                "    \"device_id\": \"d4e5f6a7-b8c9-40d1-a2b3-c4d5e6f7a8b9\",\n" +
+                "    \"is_duplicate\": false,\n" +
+                "    \"created_at\": \"2026-10-26T08:35:00.123+08:00\"\n" +
+                "  }\n" +
+                "}";
+        com.bjunicom.iptv.report.DataReportManager.ReportResponse createdResp =
+                com.bjunicom.iptv.report.DataReportManager.ReportResponse.parse(firstCreatedResponseJson, 201);
+        assertNotNull(createdResp);
+        assertTrue(createdResp.isSuccess());
+        assertTrue(createdResp.isFirstReportCreated());
+        assertFalse(createdResp.isIdempotentDuplicate());
+        assertEquals(0, createdResp.code);
+        assertEquals("created", createdResp.message);
+        assertEquals("req_8f9d2a1b4c", createdResp.reportId);
+        assertEquals("d4e5f6a7-b8c9-40d1-a2b3-c4d5e6f7a8b9", createdResp.deviceId);
+        assertFalse(createdResp.isDuplicate);
+        assertEquals("2026-10-26T08:35:00.123+08:00", createdResp.createdAt);
+
+        // 4. Verify parsing of server callback 2 (HTTP 200 OK, idempotent duplicate retry)
+        String duplicateResponseJson = "{\n" +
+                "  \"code\": 0,\n" +
+                "  \"message\": \"success\",\n" +
+                "  \"data\": {\n" +
+                "    \"report_id\": \"req_8f9d2a1b4c\",\n" +
+                "    \"device_id\": \"d4e5f6a7-b8c9-40d1-a2b3-c4d5e6f7a8b9\",\n" +
+                "    \"is_duplicate\": true,\n" +
+                "    \"created_at\": \"2026-10-26T08:35:00.123+08:00\"\n" +
+                "  }\n" +
+                "}";
+        com.bjunicom.iptv.report.DataReportManager.ReportResponse dupResp =
+                com.bjunicom.iptv.report.DataReportManager.ReportResponse.parse(duplicateResponseJson, 200);
+        assertNotNull(dupResp);
+        assertTrue(dupResp.isSuccess());
+        assertFalse(dupResp.isFirstReportCreated());
+        assertTrue(dupResp.isIdempotentDuplicate());
+        assertEquals(0, dupResp.code);
+        assertEquals("success", dupResp.message);
+        assertEquals("req_8f9d2a1b4c", dupResp.reportId);
+        assertEquals("d4e5f6a7-b8c9-40d1-a2b3-c4d5e6f7a8b9", dupResp.deviceId);
+        assertTrue(dupResp.isDuplicate);
+        assertEquals("2026-10-26T08:35:00.123+08:00", dupResp.createdAt);
+
+        // 5. Verify end-to-end HTTP POST with idempotent retry over local ServerSocket
+        final java.util.List<String> receivedReportIds = new java.util.concurrent.CopyOnWriteArrayList<>();
+        final java.util.List<String> receivedContentTypes = new java.util.concurrent.CopyOnWriteArrayList<>();
+        try (java.net.ServerSocket serverSocket = new java.net.ServerSocket(0)) {
+            int port = serverSocket.getLocalPort();
+            Thread serverThread = new Thread(() -> {
+                try {
+                    // Attempt 1: simulate network drop / 502 error
+                    try (java.net.Socket s1 = serverSocket.accept();
+                         java.io.InputStream in1 = s1.getInputStream();
+                         java.io.OutputStream out1 = s1.getOutputStream()) {
+                        String req1 = readHttpRequest(in1, receivedContentTypes);
+                        org.json.JSONObject body1 = new org.json.JSONObject(req1);
+                        receivedReportIds.add(body1.getString("report_id"));
+                        String errResp = "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                        out1.write(errResp.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                        out1.flush();
+                    }
+                    // Attempt 2: return HTTP 200 OK idempotent duplicate response
+                    try (java.net.Socket s2 = serverSocket.accept();
+                         java.io.InputStream in2 = s2.getInputStream();
+                         java.io.OutputStream out2 = s2.getOutputStream()) {
+                        String req2 = readHttpRequest(in2, receivedContentTypes);
+                        org.json.JSONObject body2 = new org.json.JSONObject(req2);
+                        receivedReportIds.add(body2.getString("report_id"));
+                        byte[] respBytes = duplicateResponseJson.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                        String okHeader = "HTTP/1.1 200 OK\r\n" +
+                                "Content-Type: application/json\r\n" +
+                                "Content-Length: " + respBytes.length + "\r\n" +
+                                "Connection: close\r\n\r\n";
+                        out2.write(okHeader.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                        out2.write(respBytes);
+                        out2.flush();
+                    }
+                } catch (Throwable ignored) {
+                }
+            });
+            serverThread.setDaemon(true);
+            serverThread.start();
+
+            try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class)) {
+                MainActivity activity = controller.create().get();
+                com.bjunicom.iptv.config.IptvSettings settings = new com.bjunicom.iptv.config.IptvSettings(activity);
+                settings.setPlayerType(com.bjunicom.iptv.config.IptvSettings.PLAYER_UTV);
+                settings.setIspProvider(com.bjunicom.iptv.config.IptvSettings.ISP_BEIJING_TELECOM);
+
+                com.bjunicom.iptv.report.DataReportManager manager =
+                        com.bjunicom.iptv.report.DataReportManager.getInstance(activity);
+                assertTrue(manager.isStartupReportTriggeredInSession());
+                String originalUrl = manager.getReportEndpointUrl();
+                try {
+                    manager.setReportEndpointUrl("http://127.0.0.1:" + port + "/api/v1/report");
+                    settings.setPendingReportId("req_8f9d2a1b4c");
+                    com.bjunicom.iptv.report.DataReportManager.ReportPayload livePayload =
+                            manager.buildDeviceProfileInitPayload();
+                    assertEquals("req_8f9d2a1b4c", livePayload.reportId);
+                    assertEquals("ExoPlayer", livePayload.device.playerType);
+                    assertEquals("China Telecom", livePayload.env.carrier);
+
+                    com.bjunicom.iptv.report.DataReportManager.ReportResponse result =
+                            manager.sendReportWithRetry(livePayload, 2, 10L);
+                    assertNotNull(result);
+                    assertTrue(result.isSuccess());
+                    assertTrue(result.isIdempotentDuplicate());
+                    assertEquals(2, receivedReportIds.size());
+                    // Both initial request and retry must carry the exact same report_id
+                    assertEquals("req_8f9d2a1b4c", receivedReportIds.get(0));
+                    assertEquals("req_8f9d2a1b4c", receivedReportIds.get(1));
+                    assertTrue(receivedContentTypes.get(0).toLowerCase(java.util.Locale.US).contains("application/json"));
+                    // Pending report_id is cleared after success and recorded as last success
+                    assertEquals("", settings.getPendingReportId());
+                    assertEquals("req_8f9d2a1b4c", settings.getLastSuccessReportId());
+                } finally {
+                    manager.setReportEndpointUrl(originalUrl);
+                    settings.setPlayerType(com.bjunicom.iptv.config.IptvSettings.PLAYER_IJK);
+                    settings.setIspProvider(com.bjunicom.iptv.config.IptvSettings.ISP_BEIJING_UNICOM);
+                }
+            }
+        }
+    }
+
+    private static String readHttpRequest(java.io.InputStream in,
+                                          java.util.List<String> contentTypesOut) throws Exception {
+        java.io.ByteArrayOutputStream headerBuf = new java.io.ByteArrayOutputStream();
+        int b;
+        int state = 0;
+        while ((b = in.read()) != -1) {
+            headerBuf.write(b);
+            if ((state == 0 || state == 2) && b == '\r') state++;
+            else if ((state == 1 || state == 3) && b == '\n') state++;
+            else state = 0;
+            if (state == 4) break;
+        }
+        String headers = new String(headerBuf.toByteArray(), java.nio.charset.StandardCharsets.UTF_8);
+        int contentLength = 0;
+        for (String line : headers.split("\r\n")) {
+            String lower = line.toLowerCase(java.util.Locale.US);
+            if (lower.startsWith("content-length:")) {
+                contentLength = Integer.parseInt(line.substring("content-length:".length()).trim());
+            } else if (lower.startsWith("content-type:")) {
+                contentTypesOut.add(line.substring("content-type:".length()).trim());
+            }
+        }
+        byte[] body = new byte[contentLength];
+        int total = 0;
+        while (total < contentLength) {
+            int n = in.read(body, total, contentLength - total);
+            if (n < 0) break;
+            total += n;
+        }
+        return new String(body, 0, total, java.nio.charset.StandardCharsets.UTF_8);
+    }
 }

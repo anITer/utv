@@ -38,6 +38,7 @@ import com.bjunicom.iptv.player.PlaybackFailure;
 import com.bjunicom.iptv.network.TransportRouteCache;
 import com.bjunicom.iptv.player.MeasureHelper;
 import com.bjunicom.iptv.repository.ChannelRepository;
+import com.bjunicom.iptv.report.DataReportManager;
 import com.bjunicom.iptv.ui.adapter.CategoryAdapter;
 import com.bjunicom.iptv.ui.adapter.ChannelAdapter;
 import com.bjunicom.iptv.update.AppUpdateManager;
@@ -195,6 +196,7 @@ public class MainActivity extends AppCompatActivity {
 
         handleIncomingM3uIntent(getIntent());
         AppUpdateManager.getInstance(this).checkForUpdatesOnStartup(this);
+        DataReportManager.getInstance(this).reportDeviceProfileInitOnStartup();
     }
 
     @Override
@@ -1893,6 +1895,9 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        if (isFinishing()) {
+            DataReportManager.getInstance(this).onAppExit();
+        }
         if (repository != null) {
             repository.removeOnChannelsChangedListener(channelsChangedListener);
         }
