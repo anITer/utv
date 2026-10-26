@@ -246,6 +246,7 @@ public class IjkVideoView extends FrameLayout {
     private String mAudioCodecHint = "";
     private boolean mForceIjkForCurrentStream;
     private boolean mForceIjkVideoSoftware;
+    private boolean mExpandedIjkProbeWindow;
     private int mLastRequestedPlayerType = -1;
     private final Set<String> mAndroidAudioFallbackChannels = new HashSet<>();
 
@@ -556,6 +557,7 @@ public class IjkVideoView extends FrameLayout {
         if (!sameRequest) {
             mForceIjkForCurrentStream = false;
             mForceIjkVideoSoftware = false;
+            mExpandedIjkProbeWindow = false;
             mPlaybackMetrics = new PlaybackMetrics(++mRequestSequence);
         }
         mLastRequestedPlayerType = mSettings.getPlayerType();
@@ -926,6 +928,7 @@ public class IjkVideoView extends FrameLayout {
                 && (mSettings == null || mSettings.isMediaCodecHevcEnabled());
         boolean useOpenSlEs = mSettings != null && mSettings.isOpenSlEsEnabled();
         boolean likely4K = !TextUtils.isEmpty(rawUrl) && rawUrl.endsWith(":2000");
+        IjkStartupPolicy startupPolicy = IjkStartupPolicy.forStream(rawUrl, mUri, mExpandedIjkProbeWindow);
 
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec", useMediaCodec ? 1 : 0);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-avc", useMediaCodec ? 1 : 0);
@@ -944,7 +947,9 @@ public class IjkVideoView extends FrameLayout {
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "overlay-format", IjkMediaPlayer.SDL_FCC_RV32);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "sync-av-start", 1);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "framedrop", 1);
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "start-on-prepared", 1);
+        // Keep multicast paused until Java has validated the native probe result.
+        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "start-on-prepared",
+                startupPolicy.multicast ? 0 : 1);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "fast", 1);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "infbuf", 1);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "packet-buffering", 0);
@@ -953,9 +958,9 @@ public class IjkVideoView extends FrameLayout {
                 likely4K ? (8 * 1024 * 1024L) : (2 * 1024 * 1024L));
 
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "probesize",
-                likely4K ? (1536 * 1024L) : (512 * 1024L));
+                startupPolicy.probeSizeBytes);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "analyzeduration",
-                likely4K ? 800000L : 400000L);
+                startupPolicy.analyzeDurationUs);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "fpsprobesize", 0);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "flush_packets", 1L);
         ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "fflags", "fastseek+discardcorrupt");
@@ -966,6 +971,41 @@ public class IjkVideoView extends FrameLayout {
                 (useMediaCodec || enableHevcHw) ? 0 : 48);
     }
 
+    protected Bundle readIjkMediaMeta(IMediaPlayer player) {
+        return ((IjkMediaPlayer) unwrapPlayer(player)).getMediaMeta();
+    }
+
+    private boolean validateIjkPreparation(PlayerSlot slot, IMediaPlayer player) {
+        String issue;
+        try {
+            issue = IjkStartupPolicy.videoParametersIssue(readIjkMediaMeta(player));
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Unable to read Ijk startup metadata", error);
+            issue = "unavailable stream metadata";
+        }
+        if (issue == null) return true;
+        Log.w(TAG, "Incomplete Ijk video parameters: " + issue
+                + ", expandedProbe=" + mExpandedIjkProbeWindow);
+        if (!mExpandedIjkProbeWindow) {
+            mExpandedIjkProbeWindow = true;
+            slot.state = STATE_ERROR; // Recreate the native decoder chosen using incomplete parameters.
+            mCurrentState = STATE_PREPARING;
+            loadSlotWithStream(slot, slot.uri, slot.rawChannelUrl, true);
+        } else {
+            releaseSlotPlayerOnly(slot);
+            slot.state = STATE_ERROR;
+            mMediaPlayer = null;
+            mLastFailure = PlaybackFailure.FORMAT;
+            mCurrentState = STATE_ERROR;
+            mTargetState = STATE_ERROR;
+            if (mOnErrorListener != null) {
+                mOnErrorListener.onError(player, IMediaPlayer.MEDIA_ERROR_UNKNOWN,
+                        IMediaPlayer.MEDIA_ERROR_MALFORMED);
+            }
+        }
+        return false;
+    }
+
     private void attachSlotListeners(final PlayerSlot slot, IMediaPlayer mp) {
         if (mp == null) {
             return;
@@ -973,6 +1013,10 @@ public class IjkVideoView extends FrameLayout {
         final long generation = slot.generation;
         mp.setOnPreparedListener(player -> {
             if (!isCurrentSlot(slot, mp, generation)) return;
+            boolean multicastIjk = slot == mActiveSlot
+                    && slot.playerType == IptvSettings.PLAYER_IJK
+                    && IjkStartupPolicy.forStream(slot.rawChannelUrl, slot.uri, false).multicast;
+            if (multicastIjk && !validateIjkPreparation(slot, mp)) return;
             slot.prepareEndTime = SystemClock.elapsedRealtime();
             if (mPlaybackMetrics != null) mPlaybackMetrics.prepared();
             if (unwrapPlayer(mp) instanceof AndroidMediaPlayer
@@ -1017,6 +1061,7 @@ public class IjkVideoView extends FrameLayout {
                     mRenderView.setVideoSampleAspectRatio(mVideoSarNum, mVideoSarDen);
                     if (!mRenderView.shouldWaitForResize()
                             || (mSurfaceWidth == mVideoWidth && mSurfaceHeight == mVideoHeight)
+                            || multicastIjk
                             || mSettings.getPlayerType() != IptvSettings.PLAYER_IJK) {
                         if (mTargetState == STATE_PLAYING) {
                             start();
