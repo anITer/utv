@@ -55,8 +55,8 @@ public class AppUpdateManager {
 
     public static final String RELEASES_WEB_URL = "https://github.com/anITer/utv/releases";
     public static final String RELEASES_API_URL = "https://api.github.com/repos/anITer/utv/releases";
-    public static final String CURRENT_VERSION_NAME = "1.2.1";
-    public static final int CURRENT_VERSION_CODE = 121;
+    public static final String CURRENT_VERSION_NAME = "1.3.0";
+    public static final int CURRENT_VERSION_CODE = 130;
     public static final int REQUEST_CODE_INSTALL_PERMISSION = 9201;
 
     private static final int CONNECT_TIMEOUT_MS = 10000;
