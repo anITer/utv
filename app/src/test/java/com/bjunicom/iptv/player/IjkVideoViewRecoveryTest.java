@@ -144,7 +144,7 @@ public class IjkVideoViewRecoveryTest {
             assertEquals(3000000L, first.policy.analyzeDurationUs);
             assertEquals(6000000L, view.ijk.policy.analyzeDurationUs);
             assertEquals(8 * 1024 * 1024L, view.ijk.policy.probeSizeBytes);
-            assertFalse(booleanField(view, "mForceIjkVideoSoftware"));
+            assertFalse(recovery(view).forceSoftwareVideo());
             assertTrue(view.getStartupMetricsSummary().startsWith("request=1 "));
             stalePrepared.onPrepared(first.proxy);
             assertEquals(2, view.ijkCreates);
@@ -195,19 +195,19 @@ public class IjkVideoViewRecoveryTest {
         try {
             view.ijk.meta = null;
             view.ijk.prepared();
-            assertTrue(booleanField(view, "mExpandedIjkProbeWindow"));
+            assertTrue(recovery(view).expandedProbe());
             IMediaPlayer.OnPreparedListener old = view.ijk.onPrepared;
             IMediaPlayer samePlayer = view.ijk.proxy;
             view.setRawChannelUrl("rtp://239.3.1.130:8009");
             view.setVideoPath(SECOND);
-            assertFalse(booleanField(view, "mExpandedIjkProbeWindow"));
+            assertFalse(recovery(view).expandedProbe());
             old.onPrepared(samePlayer);
             assertEquals(0, prepared.get());
             view.ijk.meta = IjkStartupPolicyTest.metadata("h264", 0, 0, -99);
             view.ijk.prepared();
             assertEquals(3, view.ijkCreates);
             assertEquals(SECOND, view.ijk.uri.toString());
-            assertTrue(booleanField(view, "mExpandedIjkProbeWindow"));
+            assertTrue(recovery(view).expandedProbe());
             view.ijk.prepared();
             assertEquals(1, prepared.get());
         } finally { view.stopPlayback(); }
@@ -297,13 +297,19 @@ public class IjkVideoViewRecoveryTest {
             ijkCreates++;
             try {
                 ijk = new RecordingIjk(this, IjkStartupPolicy.forStream(raw, getPlaybackUri(),
-                        booleanField(this, "mExpandedIjkProbeWindow")));
+                        recovery(this).expandedProbe()));
             } catch (Exception error) {
                 throw new AssertionError(error);
             }
             return ijk.proxy;
         }
         @Override protected Bundle readIjkMediaMeta(IMediaPlayer player) { return ijk.meta; }
+    }
+
+    private static PlaybackRecovery recovery(IjkVideoView view) throws Exception {
+        Field field = IjkVideoView.class.getDeclaredField("mRecovery");
+        field.setAccessible(true);
+        return (PlaybackRecovery) field.get(view);
     }
 
     private static final class RecordingIjk implements InvocationHandler {

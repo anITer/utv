@@ -1,18 +1,15 @@
 package com.bjunicom.iptv.player;
 
 import android.content.Context;
-import android.graphics.SurfaceTexture;
 import android.media.AudioManager;
 import android.media.MediaPlayer;
 import android.net.Uri;
-import android.os.Build;
 import android.os.Bundle;
 import android.os.SystemClock;
 import android.text.TextUtils;
 import android.util.AttributeSet;
 import android.util.Log;
 import android.view.Gravity;
-import android.view.Surface;
 import android.view.View;
 import android.widget.FrameLayout;
 
@@ -25,8 +22,6 @@ import com.bjunicom.iptv.network.StreamUrlResolver;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.HashSet;
-import java.util.Set;
 
 import tv.danmaku.ijk.media.player.AndroidMediaPlayer;
 import tv.danmaku.ijk.media.player.IMediaPlayer;
@@ -91,54 +86,14 @@ public class IjkVideoView extends FrameLayout {
         public boolean promotedFromOffscreen;
         public long generation;
 
-        private SurfaceTexture offscreenTexture;
-        private Surface offscreenSurface;
+        private final PlaybackSurfaceBinding surfaces = new PlaybackSurfaceBinding();
 
         PlayerSlot(int slotIndex) {
             this.slotIndex = slotIndex;
         }
 
-        synchronized Surface ensureOffscreenSurface() {
-            if (offscreenSurface != null && offscreenSurface.isValid()) {
-                return offscreenSurface;
-            }
-            releaseOffscreenSurface();
-            try {
-                offscreenTexture = new SurfaceTexture(0);
-                offscreenTexture.setDefaultBufferSize(16, 16);
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN) {
-                    try {
-                        offscreenTexture.detachFromGLContext();
-                    } catch (Throwable ignored) {
-                    }
-                }
-                offscreenSurface = new Surface(offscreenTexture);
-            } catch (Throwable t) {
-                Log.w(TAG, "Failed to create offscreen surface for slot " + slotIndex + ": " + t.getMessage());
-            }
-            return offscreenSurface;
-        }
-
         void bindToOffscreenSurface() {
-            if (player == null) {
-                return;
-            }
-            try {
-                IMediaPlayer rawPlayer = unwrapPlayer(player);
-                if (rawPlayer instanceof UTVPlayer) {
-                    ((UTVPlayer) rawPlayer).parkToPlaceholderSurface();
-                    return;
-                }
-                Surface offscreen = ensureOffscreenSurface();
-                if (offscreen != null && offscreen.isValid()) {
-                    // 直接将底层 IjkMediaPlayer 或 AndroidMediaPlayer (MediaPlayer) 切换至离屏 Surface，
-                    // 避免先 setDisplay(null) 导致 AndroidMediaPlayer 在 PREPARING/PLAYING 状态触发空 Surface 异常
-                    rawPlayer.setSurface(offscreen);
-                } else {
-                    rawPlayer.setDisplay(null);
-                }
-            } catch (Throwable ignored) {
-            }
+            surfaces.park(player);
         }
 
         void setMuted(boolean muted) {
@@ -182,20 +137,7 @@ public class IjkVideoView extends FrameLayout {
         }
 
         synchronized void releaseOffscreenSurface() {
-            if (offscreenSurface != null) {
-                try {
-                    offscreenSurface.release();
-                } catch (Throwable ignored) {
-                }
-                offscreenSurface = null;
-            }
-            if (offscreenTexture != null) {
-                try {
-                    offscreenTexture.release();
-                } catch (Throwable ignored) {
-                }
-                offscreenTexture = null;
-            }
+            surfaces.releaseOffscreenSurface();
         }
     }
 
@@ -244,11 +186,7 @@ public class IjkVideoView extends FrameLayout {
     private PlaybackMetrics mPlaybackMetrics;
     private PlaybackFailure mLastFailure = PlaybackFailure.UNKNOWN;
     private String mAudioCodecHint = "";
-    private boolean mForceIjkForCurrentStream;
-    private boolean mForceIjkVideoSoftware;
-    private boolean mExpandedIjkProbeWindow;
-    private int mLastRequestedPlayerType = -1;
-    private final Set<String> mAndroidAudioFallbackChannels = new HashSet<>();
+    private final PlaybackRecovery mRecovery = new PlaybackRecovery();
 
     public IjkVideoView(Context context) {
         super(context);
@@ -482,15 +420,7 @@ public class IjkVideoView extends FrameLayout {
     }
 
     private int getEffectivePlayerType() {
-        if (mForceIjkForCurrentStream) return IptvSettings.PLAYER_IJK;
-        int requested = mSettings.getPlayerType();
-        if (requested == IptvSettings.PLAYER_ANDROID_MEDIA
-                && (mAndroidAudioFallbackChannels.contains(mRawChannelUrl)
-                || (mAudioCodecHint.contains("mp2")
-                && DecoderPolicy.getMp2HardwareDecoders(null).isEmpty()))) {
-            return IptvSettings.PLAYER_IJK;
-        }
-        return requested;
+        return mRecovery.effectivePlayerType(mSettings.getPlayerType(), mRawChannelUrl, mAudioCodecHint);
     }
 
     private boolean isCurrentSlot(PlayerSlot slot, IMediaPlayer player, long generation) {
@@ -506,12 +436,7 @@ public class IjkVideoView extends FrameLayout {
     }
 
     private boolean fallbackToIjk(PlayerSlot slot, boolean softwareVideo, boolean unsupportedAudio) {
-        if (slot != mActiveSlot || mForceIjkForCurrentStream) return false;
-        mForceIjkForCurrentStream = true;
-        mForceIjkVideoSoftware = softwareVideo;
-        if (unsupportedAudio && !TextUtils.isEmpty(slot.rawChannelUrl)) {
-            mAndroidAudioFallbackChannels.add(slot.rawChannelUrl);
-        }
+        if (slot != mActiveSlot || !mRecovery.fallbackToIjk(slot.rawChannelUrl, softwareVideo, unsupportedAudio)) return false;
         Log.w(TAG, "Recovering channel with Ijk: softwareVideo=" + softwareVideo
                 + ", unsupportedAudio=" + unsupportedAudio);
         slot.state = STATE_ERROR;
@@ -552,15 +477,13 @@ public class IjkVideoView extends FrameLayout {
     public void setVideoURI(Uri uri, Map<String, String> headers) {
         boolean sameRequest = mActiveSlot != null
                 && mActiveSlot.matchesStream(resolvePlaybackUri(uri), mRawChannelUrl)
-                && mLastRequestedPlayerType == mSettings.getPlayerType()
+                && mRecovery.lastRequestedPlayerType() == mSettings.getPlayerType()
                 && mActiveSlot.state != STATE_ERROR;
         if (!sameRequest) {
-            mForceIjkForCurrentStream = false;
-            mForceIjkVideoSoftware = false;
-            mExpandedIjkProbeWindow = false;
+            mRecovery.newRequest();
             mPlaybackMetrics = new PlaybackMetrics(++mRequestSequence);
         }
-        mLastRequestedPlayerType = mSettings.getPlayerType();
+        mRecovery.requestedPlayerType(mSettings.getPlayerType());
         mLastFailure = PlaybackFailure.UNKNOWN;
         mUri = uri;
         mHeaders = headers;
@@ -892,83 +815,12 @@ public class IjkVideoView extends FrameLayout {
     }
 
     protected IMediaPlayer createConfiguredPlayer(int playerType, String rawUrl) {
-        IMediaPlayer mediaPlayer;
-        switch (playerType) {
-            case IptvSettings.PLAYER_UTV:
-                return new UTVPlayer(mAppContext);
-            case IptvSettings.PLAYER_IJK:
-                try {
-                    IjkMediaPlayer ijkPlayer = new IjkMediaPlayer();
-                    IjkMediaPlayer.native_setLogLevel(IjkMediaPlayer.IJK_LOG_INFO);
-                    configureIjkOptions(ijkPlayer, rawUrl);
-                    mediaPlayer = ijkPlayer;
-                } catch (Throwable t) {
-                    if (mForceIjkForCurrentStream || getEffectivePlayerType() != mSettings.getPlayerType()) {
-                        throw new IllegalStateException("Ijk decoder fallback is unavailable", t);
-                    }
-                    Log.e(TAG, "Failed to init IjkMediaPlayer, falling back to AndroidMediaPlayer", t);
-                    mediaPlayer = new AndroidMediaPlayer();
-                }
-                break;
-            case IptvSettings.PLAYER_ANDROID_MEDIA:
-            default:
-                mediaPlayer = new AndroidMediaPlayer();
-                break;
-        }
-        if (mSettings.getRenderViewType() == RENDER_TEXTURE_VIEW) {
-            mediaPlayer = new TextureMediaPlayer(mediaPlayer);
-        }
-        return mediaPlayer;
+        return PlaybackCoreFactory.create(mAppContext, mSettings, mRecovery, playerType, rawUrl, mUri,
+                mRecovery.forcedIjk() || getEffectivePlayerType() != mSettings.getPlayerType());
     }
 
-    private void configureIjkOptions(IjkMediaPlayer ijkMediaPlayer, String rawUrl) {
-        boolean useMediaCodec = !mForceIjkVideoSoftware
-                && (mSettings == null || mSettings.isMediaCodecEnabled());
-        boolean enableHevcHw = useMediaCodec
-                && (mSettings == null || mSettings.isMediaCodecHevcEnabled());
-        boolean useOpenSlEs = mSettings != null && mSettings.isOpenSlEsEnabled();
-        boolean likely4K = !TextUtils.isEmpty(rawUrl) && rawUrl.endsWith(":2000");
-        IjkStartupPolicy startupPolicy = IjkStartupPolicy.forStream(rawUrl, mUri, mExpandedIjkProbeWindow);
-
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec", useMediaCodec ? 1 : 0);
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-avc", useMediaCodec ? 1 : 0);
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-hevc", enableHevcHw ? 1 : 0);
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-mpeg2", useMediaCodec ? 1 : 0);
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-mpeg4", useMediaCodec ? 1 : 0);
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-all-videos",
-                (useMediaCodec && enableHevcHw) ? 1 : 0);
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-auto-rotate",
-                (useMediaCodec || enableHevcHw) ? 1 : 0);
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-handle-resolution-change",
-                (useMediaCodec || enableHevcHw) ? 1 : 0);
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-sync", 0);
-
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "opensles", useOpenSlEs ? 1 : 0);
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "overlay-format", IjkMediaPlayer.SDL_FCC_RV32);
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "sync-av-start", 1);
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "framedrop", 1);
-        // Keep multicast paused until Java has validated the native probe result.
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "start-on-prepared",
-                startupPolicy.multicast ? 0 : 1);
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "fast", 1);
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "infbuf", 1);
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "packet-buffering", 0);
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "min-frames", likely4K ? 15 : 5);
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "max-buffer-size",
-                likely4K ? (8 * 1024 * 1024L) : (2 * 1024 * 1024L));
-
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "probesize",
-                startupPolicy.probeSizeBytes);
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "analyzeduration",
-                startupPolicy.analyzeDurationUs);
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "fpsprobesize", 0);
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "flush_packets", 1L);
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "fflags", "fastseek+discardcorrupt");
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "http-detect-range-support", 0);
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "reconnect", 1);
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "timeout", 8000000L);
-        ijkMediaPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_CODEC, "skip_loop_filter",
-                (useMediaCodec || enableHevcHw) ? 0 : 48);
+    private void configureIjkOptions(IjkMediaPlayer player, String rawUrl) {
+        PlaybackCoreFactory.configureIjkOptions(player, rawUrl, mUri, mSettings, mRecovery);
     }
 
     protected Bundle readIjkMediaMeta(IMediaPlayer player) {
@@ -985,9 +837,8 @@ public class IjkVideoView extends FrameLayout {
         }
         if (issue == null) return true;
         Log.w(TAG, "Incomplete Ijk video parameters: " + issue
-                + ", expandedProbe=" + mExpandedIjkProbeWindow);
-        if (!mExpandedIjkProbeWindow) {
-            mExpandedIjkProbeWindow = true;
+                + ", expandedProbe=" + mRecovery.expandedProbe());
+        if (mRecovery.expandProbe()) {
             slot.state = STATE_ERROR; // Recreate the native decoder chosen using incomplete parameters.
             mCurrentState = STATE_PREPARING;
             loadSlotWithStream(slot, slot.uri, slot.rawChannelUrl, true);
@@ -1209,31 +1060,8 @@ public class IjkVideoView extends FrameLayout {
         return lower.contains(".m3u8");
     }
 
-    private void bindSurfaceHolder(IMediaPlayer mp, IRenderView.ISurfaceHolder holder) {
-        if (mp == null) {
-            return;
-        }
-        if (mp instanceof UTVPlayer) {
-            UTVPlayer utvPlayer = (UTVPlayer) mp;
-            if (holder == null) {
-                utvPlayer.parkToPlaceholderSurface();
-                return;
-            }
-            View renderUiView = mRenderView != null ? mRenderView.getView() : null;
-            if (renderUiView instanceof android.view.SurfaceView) {
-                utvPlayer.setVideoSurfaceView((android.view.SurfaceView) renderUiView);
-            } else if (renderUiView instanceof android.view.TextureView) {
-                utvPlayer.setVideoTextureView((android.view.TextureView) renderUiView);
-            } else {
-                holder.bindToMediaPlayer(utvPlayer);
-            }
-            return;
-        }
-        if (holder == null) {
-            mp.setDisplay(null);
-            return;
-        }
-        holder.bindToMediaPlayer(mp);
+    private void bindSurfaceHolder(IMediaPlayer player, IRenderView.ISurfaceHolder holder) {
+        PlaybackSurfaceBinding.bind(player, holder, mRenderView);
     }
 
     private void releaseSlotPlayerOnly(PlayerSlot slot) {
@@ -1294,7 +1122,7 @@ public class IjkVideoView extends FrameLayout {
     }
 
     /**
-     * 释放全部 3 个 Player 实例槽位及其离屏 Surface
+     * 释放当前 Player 实例槽位及其离屏 Surface
      */
     public void releaseAllSlots(boolean cleartargetstate) {
         removeCallbacks(mStopOffscreenRunnable);
@@ -1444,7 +1272,7 @@ public class IjkVideoView extends FrameLayout {
         }
 
         boolean likely4K = !TextUtils.isEmpty(mRawChannelUrl) && mRawChannelUrl.endsWith(":2000");
-        boolean hwEnabled = !mForceIjkVideoSoftware && (likely4K
+        boolean hwEnabled = !mRecovery.forceSoftwareVideo() && (likely4K
                 ? (mSettings.isMediaCodecEnabled() && mSettings.isMediaCodecHevcEnabled())
                 : mSettings.isMediaCodecEnabled());
         String videoDecoder = hwEnabled
@@ -1638,11 +1466,8 @@ public class IjkVideoView extends FrameLayout {
         return unwrapPlayer(mMediaPlayer);
     }
 
-    private static IMediaPlayer unwrapPlayer(IMediaPlayer mp) {
-        if (mp instanceof TextureMediaPlayer) {
-            return ((TextureMediaPlayer) mp).getInternalMediaPlayer();
-        }
-        return mp;
+    private static IMediaPlayer unwrapPlayer(IMediaPlayer player) {
+        return PlaybackSurfaceBinding.unwrap(player);
     }
 
     public void setOnPreparedListener(IMediaPlayer.OnPreparedListener l) {

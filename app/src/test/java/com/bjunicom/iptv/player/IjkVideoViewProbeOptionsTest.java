@@ -54,6 +54,7 @@ public class IjkVideoViewProbeOptionsTest {
             assertEquals(Long.valueOf(4 * 1024 * 1024L), firstShadow.option(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "probesize"));
             assertEquals(Long.valueOf(0), firstShadow.option(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "start-on-prepared"));
             assertEquals(Long.valueOf(1), firstShadow.option(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-avc"));
+            assertEquals(Long.valueOf(0), firstShadow.option(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "packet-buffering"));
             firstShadow.meta = IjkStartupPolicyTest.metadata("h264", 0, 0, -99);
             preparedListener(first).onPrepared(first);
 
@@ -75,6 +76,14 @@ public class IjkVideoViewProbeOptionsTest {
             assertEquals(Long.valueOf(400000L), secondShadow.option(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "analyzeduration"));
             assertEquals(Long.valueOf(512 * 1024L), secondShadow.option(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "probesize"));
             assertEquals(Long.valueOf(1), secondShadow.option(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "start-on-prepared"));
+            assertEquals(Long.valueOf(1), secondShadow.option(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "packet-buffering"));
+            assertEquals(Long.valueOf(0), secondShadow.option(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "infbuf"));
+            assertEquals(Long.valueOf(25), secondShadow.option(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "min-frames"));
+            view.setRawChannelUrl("rtp://239.3.1.130:8009");
+            view.setVideoPath("http://router:8012/rtp/239.3.1.130:8009");
+            assertSame(second, view.getActiveSlot().player);
+            assertEquals(Long.valueOf(0), secondShadow.option(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "packet-buffering"));
+            assertEquals(Long.valueOf(1), secondShadow.option(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "infbuf"));
         } finally { view.stopPlayback(); }
     }
 

@@ -39,8 +39,6 @@ import com.google.android.exoplayer2.mediacodec.MediaCodecSelector;
 import com.google.android.exoplayer2.mediacodec.MediaCodecRenderer;
 import com.google.android.exoplayer2.source.MediaSource;
 import com.google.android.exoplayer2.source.ProgressiveMediaSource;
-import com.google.android.exoplayer2.source.dash.DashMediaSource;
-import com.google.android.exoplayer2.source.hls.HlsMediaSource;
 import com.google.android.exoplayer2.upstream.DataSource;
 import com.google.android.exoplayer2.trackselection.DefaultTrackSelector;
 import com.google.android.exoplayer2.util.MimeTypes;
@@ -682,20 +680,7 @@ public class UTVPlayer extends AbstractMediaPlayer {
                         notifyOnInfo(info, 0);
                     }
                 }), currentHeaders);
-        MediaItem item = new MediaItem.Builder().setUri(uri).setMediaId(mediaId).build();
-        String uriStr = uri.toString().toLowerCase(Locale.US);
-        String rawLower = rawUrl != null ? rawUrl.toLowerCase(Locale.US) : "";
-        if (uriStr.contains(".m3u8") || rawLower.contains(".m3u8")) {
-            return new HlsMediaSource.Factory(playbackFactory)
-                    .setAllowChunklessPreparation(true)
-                    .createMediaSource(item);
-        }
-        if (uriStr.contains(".mpd") || rawLower.contains(".mpd")) {
-            return new DashMediaSource.Factory(playbackFactory).createMediaSource(item);
-        }
-        return new ProgressiveMediaSource.Factory(playbackFactory, new IptvTsExtractorsFactory())
-                .setContinueLoadingCheckIntervalBytes(256 * 1024)
-                .createMediaSource(item);
+        return PlaybackSourceFactory.create(uri, rawUrl, mediaId, playbackFactory);
     }
 
     @Override

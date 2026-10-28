@@ -1,5 +1,32 @@
 # 组播播放架构与验证
 
+## 职责分层与协议缓冲
+
+`IjkVideoView` 保留 UI、槽位切换和请求代次检查，将独立职责交给以下组件：
+
+| 组件 | 职责 |
+| --- | --- |
+| PlaybackCoreFactory | 创建 UTV/Ijk/Android 内核及 Texture 适配；统一配置初建、复用和恢复时的 Ijk 参数 |
+| PlaybackRecovery | 管理当前请求的 Ijk 降级、视频软解和扩大探测预算，保存本会话 Android 音频失败频道 |
+| PlaybackSurfaceBinding | 持有离屏 Surface/SurfaceTexture，封装各内核前台绑定与离屏停放规则 |
+| PlaybackSourceFactory | 创建 HLS/DASH/Progressive 源，将协议缓冲配置与 mediaId 一起附在 MediaItem 上 |
+| PlaybackBufferPolicy / UTVLoadControl | 协议分类与 Exo 播放线程上的缓冲决策，共享一个 allocator |
+
+UTV/Exo 的配置如下（单位 ms）：
+
+| 来源 | 最小/最大缓冲 | 起播/卡顿恢复阈值 |
+| --- | --- | --- |
+| 原生组播、本地组播代理 | 800 / 4000 | 120 / 400 |
+| 外部 udpxy、HTTP-TS、具有原始 TS/组播地址提示的 HTTP 源 | 1500 / 6000 | 500 / 1000 |
+| HLS/DASH | 15000 / 50000 | 2500 / 5000 |
+| 未知 Progressive 源 | 15000 / 50000 | 2500 / 5000 |
+
+HLS/DASH 按实际或原始 URL 的路径后缀识别，忽略 query 中无关的扩展名文本；无后缀且无来源提示的 HTTP 流使用默认策略。原有 Progressive TS extractor、组播传输、TS 安全起点缓存和 MP2 renderer 保持原有实现。
+
+`onTracksSelected` 在播放线程选择加载策略；`shouldStartPlayback` 根据传入 period 的 MediaItem 独立查询策略，不覆盖加载策略。因此旧 period 的起播判断不会将加载阈值换回旧频道配置。保留 Exo 的播放速度换算、目标直播偏移和缓冲字节判断。Exo 2.19 创建时固定回溯参数，所有协议统一保留 1.5 秒关键帧回溯缓冲。缓冲时长阈值不等于首帧耗时或直播延迟，最大缓冲值也不是内存硬上限。
+
+Ijk 使用同一协议分类：TS 保留原有快速起播参数，HLS/DASH 与未知源开启 packet-buffering、关闭 infbuf，使用 25 个 min-frames 和 16 MiB max-buffer-size。复用 Ijk 实例跨协议切台时重新配置参数。Android MediaPlayer 没有对应缓冲控制接口，继续由系统管理。
+
 ## 播放与回退
 
 `IjkVideoView` 管理一个前台播放器、Surface 和请求代次。用户选择的内核偏好与当前实际内核分别保存，旧频道回调不会更新新频道状态。音轨信息未知时保持为空，不推测为 MP2。
