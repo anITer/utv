@@ -67,9 +67,9 @@ public class M3uParserTest {
                 "http://otttv.bj.chinamobile.com/PLTV/88888888/224/3221226527/index.m3u8?from=3000&hms_devid=302\n" +
                 "#EXTINF:-1 tvg-id=\"3090\" tvg-name=\"NewTV中国功夫\" group-title=\"[高清]NewTV\",NewTV中国功夫[高清]\n" +
                 "http://111.13.42.8/PLTV/88888888/224/3221225922/1.m3u8\n" +
-                "#EXTINF:-1 tvg-id=\"1\" tvg-name=\"CCTV1\" group-title=\"[高清]央视\",CCTV-1综合[1][高清]\n" +
+                "#EXTINF:-1,CCTV1综合【高清】\n" +
                 "rtp://225.1.8.1:8008\n" +
-                "#EXTINF:-1 tvg-id=\"\" tvg-name=\"\" group-title=\"[高清]北京IPTV;4K\",北京IPTV4K[超清]\n" +
+                "#EXTINF:-1,北京卫视4K超高清 SDR\n" +
                 "rtp://225.1.8.120:8002\n";
 
         List<IptvChannel> list = M3uParser.parseString(sample);
@@ -87,14 +87,19 @@ public class M3uParserTest {
         assertTrue(mobileNewTv.isHlsStream());
 
         IptvChannel telecomCctv1 = list.get(2);
-        assertEquals("CCTV-1综合", telecomCctv1.getDisplayName());
+        assertEquals("CCTV1综合", telecomCctv1.getDisplayName());
+        assertEquals("高清", telecomCctv1.getResolutionTag());
+        assertTrue(telecomCctv1.getGroups().contains("[高清]央视"));
         assertEquals("225.1.8.1", telecomCctv1.getMulticastIp());
         assertEquals(8008, telecomCctv1.getMulticastPort());
         assertTrue(telecomCctv1.isMulticastStream());
 
         IptvChannel telecom4k = list.get(3);
-        assertEquals("北京IPTV4K", telecom4k.getDisplayName());
+        assertEquals("北京卫视4K超高清 SDR", telecom4k.getDisplayName());
         assertEquals("4K", telecom4k.getResolutionTag());
+        assertTrue(telecom4k.getGroups().contains("[高清]北京"));
+        assertTrue(telecom4k.getGroups().contains("[高清]卫视"));
+        assertTrue(telecom4k.getGroups().contains("4K"));
         assertEquals("225.1.8.120", telecom4k.getMulticastIp());
         assertEquals(8002, telecom4k.getMulticastPort());
     }

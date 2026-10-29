@@ -279,10 +279,15 @@ public class IptvChannel implements Serializable {
         }
         String res = getResolutionTag();
         String cleaned = base.replace("[高清]", "")
+                .replace("【高清】", "")
                 .replace("[4K]", "")
+                .replace("【4K】", "")
                 .replace("[超清]", "")
+                .replace("【超清】", "")
                 .replace("[标清]", "")
+                .replace("【标清】", "")
                 .replace("[其它]", "")
+                .replace("【其它】", "")
                 .trim();
         if (!"错误".equals(res) && !isEmpty(res)) {
             return cleaned + "[" + res + "]";
