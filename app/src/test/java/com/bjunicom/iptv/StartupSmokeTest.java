@@ -844,11 +844,14 @@ public class StartupSmokeTest {
     @Test
     public void testDeviceProfileReportPayloadAndIdempotentRetryCallbacks() throws Exception {
         // 1. Verify URL normalization and report_id format
-        assertEquals("http://104.223.42.150/api/v1/report",
+        assertEquals("http://104.223.42.150:8080/api/v1/report",
                 com.bjunicom.iptv.report.DataReportManager.REPORT_API_URL);
-        assertEquals("http://104.223.42.150/api/v1/report",
+        assertEquals("http://104.223.42.150:8080/api/v1/report",
                 com.bjunicom.iptv.report.DataReportManager.normalizeReportUrl(
                         "http://http://104.223.42.150/api/v1/report"));
+        assertEquals("http://104.223.42.150:8080/api/v1/report",
+                com.bjunicom.iptv.report.DataReportManager.normalizeReportUrl(
+                        "http://http://104.223.42.150:8080/api/v1/report"));
         String generatedReportId = com.bjunicom.iptv.report.DataReportManager.generateReportId();
         assertTrue(generatedReportId.matches("^req_[0-9a-f]{10}$"));
         assertEquals("11.0", com.bjunicom.iptv.report.DataReportManager.formatOsVersion("11"));
@@ -1048,6 +1051,46 @@ public class StartupSmokeTest {
                     // Pending report_id is cleared after success and recorded as last success
                     assertEquals("", settings.getPendingReportId());
                     assertEquals("req_8f9d2a1b4c", settings.getLastSuccessReportId());
+
+                    // 6. Verify channel watch duration tracking, 10-min interval constant, and /api/v1/channel payload
+                    assertEquals("http://104.223.42.150:8080/api/v1/channel",
+                            com.bjunicom.iptv.report.DataReportManager.CHANNEL_REPORT_API_URL);
+                    assertEquals(10 * 60 * 1000L,
+                            com.bjunicom.iptv.report.DataReportManager.CHANNEL_REPORT_INTERVAL_MS);
+
+                    manager.clearSessionAndPendingWatchedChannels();
+                    com.bjunicom.iptv.model.IptvChannel ch1 = new com.bjunicom.iptv.model.IptvChannel();
+                    ch1.setDisplayName("CCTV-1综合");
+                    ch1.setChannelNumber(1);
+                    ch1.setRawUrl("rtp://239.3.1.129:8008");
+                    ch1.setResolutionTag("高清");
+
+                    com.bjunicom.iptv.model.IptvChannel ch2 = new com.bjunicom.iptv.model.IptvChannel();
+                    ch2.setDisplayName("北京卫视");
+                    ch2.setChannelNumber(21);
+                    ch2.setRawUrl("rtp://239.3.1.149:8008");
+                    ch2.setResolutionTag("4K");
+
+                    manager.onChannelPlaybackStarted(ch1, 10000L);
+                    manager.onChannelPlaybackStarted(ch2, 70000L); // ch1 played 60s
+                    manager.flushSessionChannelsToPendingQueue(100000L, true); // ch2 played 30s and remains active
+
+                    java.util.List<com.bjunicom.iptv.report.DataReportManager.ChannelWatchRecord> pending =
+                            manager.getPendingWatchedChannels();
+                    assertEquals(2, pending.size());
+                    assertEquals("CCTV-1综合", pending.get(0).channelName);
+                    assertEquals(60L, pending.get(0).durationSec);
+                    assertEquals("北京卫视", pending.get(1).channelName);
+                    assertEquals(30L, pending.get(1).durationSec);
+
+                    com.bjunicom.iptv.report.DataReportManager.ChannelReportPayload chPayload =
+                            manager.buildChannelReportPayload("req_ch_001", 1761463920000L);
+                    assertNotNull(chPayload);
+                    org.json.JSONObject chJson = new org.json.JSONObject(chPayload.toJsonString());
+                    assertEquals("req_ch_001", chJson.getString("report_id"));
+                    assertEquals("channel_watch", chJson.getString("report_type"));
+                    assertEquals(2, chJson.getJSONArray("channels").length());
+                    manager.clearSessionAndPendingWatchedChannels();
                 } finally {
                     manager.setReportEndpointUrl(originalUrl);
                     settings.setPlayerType(com.bjunicom.iptv.config.IptvSettings.PLAYER_IJK);

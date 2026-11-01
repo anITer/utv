@@ -768,6 +768,7 @@ public class MainActivity extends AppCompatActivity {
         fallbackToLocalProxyAttempted = false;
         settings.setLastChannelUrl(channel.getRawUrl());
         channelAdapter.setCurrentPlayingUrl(channel.getRawUrl());
+        DataReportManager.getInstance(this).onChannelPlaybackStarted(channel);
 
         int localProxyPort = -1;
         if (getApplication() instanceof IptvApplication) {
@@ -1874,6 +1875,8 @@ public class MainActivity extends AppCompatActivity {
     protected void onResume() {
         super.onResume();
         AppUpdateManager.getInstance(this).attachActivity(this);
+        DataReportManager.getInstance(this).reportDeviceProfileInitOnStartup();
+        DataReportManager.getInstance(this).onChannelPlaybackResumed(currentChannel);
         if (categoryAdapter != null) {
             categoryAdapter.setCategories(repository.getCategoryGroups());
         }
@@ -1886,6 +1889,7 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onPause() {
+        DataReportManager.getInstance(this).onChannelPlaybackPaused();
         mainHandler.removeCallbacks(telemetryTickRunnable);
         if (videoView != null) {
             videoView.stopOffscreenPlayers();
@@ -1895,9 +1899,7 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
-        if (isFinishing()) {
-            DataReportManager.getInstance(this).onAppExit();
-        }
+        DataReportManager.getInstance(this).onAppExit();
         if (repository != null) {
             repository.removeOnChannelsChangedListener(channelsChangedListener);
         }

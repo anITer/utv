@@ -50,6 +50,10 @@ public class IptvSettings {
     private static final String KEY_PENDING_REPORT_ID = "pending_report_id";
     private static final String KEY_LAST_SUCCESS_REPORT_ID = "last_success_report_id";
     private static final String KEY_USER_ID = "user_id";
+    private static final String KEY_PENDING_CHANNEL_REPORT_ID = "pending_channel_report_id";
+    private static final String KEY_LAST_SUCCESS_CHANNEL_REPORT_ID = "last_success_channel_report_id";
+    private static final String KEY_PENDING_REPORT_CHANNELS = "pending_report_channels";
+    private static final String KEY_ACTIVE_SESSION_CHANNELS = "active_session_channels";
 
     public static final String DEFAULT_APP_CHANNEL = "landing_page_a";
 
@@ -373,5 +377,49 @@ public class IptvSettings {
 
     public void setLastSuccessReportId(String reportId) {
         prefs.edit().putString(KEY_LAST_SUCCESS_REPORT_ID, reportId != null ? reportId.trim() : "").apply();
+    }
+
+    public String getPendingChannelReportId() {
+        return prefs.getString(KEY_PENDING_CHANNEL_REPORT_ID, "");
+    }
+
+    public void setPendingChannelReportId(String reportId) {
+        if (TextUtils.isEmpty(reportId)) {
+            prefs.edit().remove(KEY_PENDING_CHANNEL_REPORT_ID).apply();
+        } else {
+            prefs.edit().putString(KEY_PENDING_CHANNEL_REPORT_ID, reportId.trim()).apply();
+        }
+    }
+
+    public String getLastSuccessChannelReportId() {
+        return prefs.getString(KEY_LAST_SUCCESS_CHANNEL_REPORT_ID, "");
+    }
+
+    public void setLastSuccessChannelReportId(String reportId) {
+        prefs.edit().putString(KEY_LAST_SUCCESS_CHANNEL_REPORT_ID, reportId != null ? reportId.trim() : "").apply();
+    }
+
+    public String getPendingReportChannelsJson() {
+        return prefs.getString(KEY_PENDING_REPORT_CHANNELS, "");
+    }
+
+    public void setPendingReportChannelsJson(String channelsJson) {
+        if (TextUtils.isEmpty(channelsJson)) {
+            prefs.edit().remove(KEY_PENDING_REPORT_CHANNELS).apply();
+        } else {
+            prefs.edit().putString(KEY_PENDING_REPORT_CHANNELS, channelsJson.trim()).apply();
+        }
+    }
+
+    public String getActiveSessionChannelsJson() {
+        return prefs.getString(KEY_ACTIVE_SESSION_CHANNELS, "");
+    }
+
+    public void setActiveSessionChannelsJson(String channelsJson) {
+        if (TextUtils.isEmpty(channelsJson)) {
+            prefs.edit().remove(KEY_ACTIVE_SESSION_CHANNELS).apply();
+        } else {
+            prefs.edit().putString(KEY_ACTIVE_SESSION_CHANNELS, channelsJson.trim()).apply();
+        }
     }
 }
