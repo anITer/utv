@@ -154,11 +154,11 @@ public class IptvSettings {
     }
 
     public int getPlayerType() {
-        int type = prefs.getInt(KEY_PLAYER_TYPE, PLAYER_IJK);
-        if (type == PLAYER_ANDROID_MEDIA || type == PLAYER_UTV) {
+        int type = prefs.getInt(KEY_PLAYER_TYPE, PLAYER_UTV);
+        if (type == PLAYER_IJK || type == PLAYER_ANDROID_MEDIA || type == PLAYER_UTV) {
             return type;
         }
-        return PLAYER_IJK;
+        return PLAYER_UTV;
     }
 
     public void setPlayerType(int playerType) {
@@ -300,13 +300,13 @@ public class IptvSettings {
 
     public static String getPlayerTypeReportName(int playerType) {
         switch (playerType) {
-            case PLAYER_UTV:
-                return "ExoPlayer";
+            case PLAYER_IJK:
+                return "IjkPlayer";
             case PLAYER_ANDROID_MEDIA:
                 return "MediaPlayer";
-            case PLAYER_IJK:
+            case PLAYER_UTV:
             default:
-                return "IjkPlayer";
+                return "ExoPlayer";
         }
     }
 

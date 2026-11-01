@@ -1489,10 +1489,10 @@ public class MainActivity extends AppCompatActivity {
         int playerCore = settings.getPlayerType();
         if (playerCore == IptvSettings.PLAYER_ANDROID_MEDIA) {
             rgPlayerCore.check(R.id.rb_core_android);
-        } else if (playerCore == IptvSettings.PLAYER_UTV) {
-            rgPlayerCore.check(R.id.rb_core_utv);
-        } else {
+        } else if (playerCore == IptvSettings.PLAYER_IJK) {
             rgPlayerCore.check(R.id.rb_core_ijk);
+        } else {
+            rgPlayerCore.check(R.id.rb_core_utv);
         }
 
         cbMediaCodec.setChecked(settings.isMediaCodecEnabled());
@@ -1520,10 +1520,10 @@ public class MainActivity extends AppCompatActivity {
                     int checkedCore = rgPlayerCore.getCheckedRadioButtonId();
                     if (checkedCore == R.id.rb_core_android) {
                         settings.setPlayerType(IptvSettings.PLAYER_ANDROID_MEDIA);
-                    } else if (checkedCore == R.id.rb_core_utv) {
-                        settings.setPlayerType(IptvSettings.PLAYER_UTV);
-                    } else {
+                    } else if (checkedCore == R.id.rb_core_ijk) {
                         settings.setPlayerType(IptvSettings.PLAYER_IJK);
+                    } else {
+                        settings.setPlayerType(IptvSettings.PLAYER_UTV);
                     }
 
                     settings.setMediaCodecEnabled(cbMediaCodec.isChecked());

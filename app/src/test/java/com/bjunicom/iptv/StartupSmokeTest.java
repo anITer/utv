@@ -67,9 +67,15 @@ public class StartupSmokeTest {
             }
             org.robolectric.shadows.ShadowLooper.runUiThreadTasks();
 
+            com.bjunicom.iptv.config.IptvSettings settings =
+                    new com.bjunicom.iptv.config.IptvSettings(activity);
+            assertEquals(com.bjunicom.iptv.config.IptvSettings.PLAYER_UTV, settings.getPlayerType());
+
             IjkVideoView.PlayerSlot initialActive = videoView.getActiveSlot();
             assertNotNull(initialActive);
             assertNotNull(initialActive.player);
+            assertEquals(com.bjunicom.iptv.config.IptvSettings.PLAYER_UTV, initialActive.playerType);
+            assertTrue(initialActive.player instanceof com.bjunicom.iptv.player.UTVPlayer);
             assertNotNull(initialActive.rawChannelUrl);
             assertEquals(null, videoView.getBackgroundSlot());
             assertTrue(videoView.areOffscreenPlayersStopped());
@@ -100,8 +106,6 @@ public class StartupSmokeTest {
             assertTrue(videoView.areOffscreenPlayersStopped());
 
             // Switch player core to AndroidMediaPlayer (PLAYER_ANDROID_MEDIA) and verify only 1 instance is used
-            com.bjunicom.iptv.config.IptvSettings settings =
-                    new com.bjunicom.iptv.config.IptvSettings(activity);
             settings.setPlayerType(com.bjunicom.iptv.config.IptvSettings.PLAYER_ANDROID_MEDIA);
             activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_UP));
             activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_UP));
@@ -265,8 +269,8 @@ public class StartupSmokeTest {
             assertEquals("ExoPlayer", rbExo.getText().toString());
             assertEquals("MediaPlayer", rbMedia.getText().toString());
 
-            // Restore default PLAYER_IJK
-            settings.setPlayerType(com.bjunicom.iptv.config.IptvSettings.PLAYER_IJK);
+            // Restore default PLAYER_UTV
+            settings.setPlayerType(com.bjunicom.iptv.config.IptvSettings.PLAYER_UTV);
         }
     }
 
@@ -1097,7 +1101,7 @@ public class StartupSmokeTest {
                     manager.clearSessionAndPendingWatchedChannels();
                 } finally {
                     manager.setReportEndpointUrl(originalUrl);
-                    settings.setPlayerType(com.bjunicom.iptv.config.IptvSettings.PLAYER_IJK);
+                    settings.setPlayerType(com.bjunicom.iptv.config.IptvSettings.PLAYER_UTV);
                     settings.setIspProvider(com.bjunicom.iptv.config.IptvSettings.ISP_BEIJING_UNICOM);
                 }
             }
