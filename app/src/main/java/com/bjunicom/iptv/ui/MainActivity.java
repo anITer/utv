@@ -1,6 +1,7 @@
 package com.bjunicom.iptv.ui;
 
 import android.content.Intent;
+import android.graphics.Bitmap;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -15,9 +16,11 @@ import android.view.View;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.RadioGroup;
 import android.widget.RelativeLayout;
+import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -35,6 +38,7 @@ import com.bjunicom.iptv.network.StreamUrlResolver;
 import com.bjunicom.iptv.parser.M3uParser;
 import com.bjunicom.iptv.player.IjkVideoView;
 import com.bjunicom.iptv.player.PlaybackFailure;
+import com.bjunicom.iptv.player.TimeshiftThumbnailExtractor;
 import com.bjunicom.iptv.network.TransportRouteCache;
 import com.bjunicom.iptv.player.MeasureHelper;
 import com.bjunicom.iptv.repository.ChannelRepository;
@@ -44,8 +48,11 @@ import com.bjunicom.iptv.ui.adapter.ChannelAdapter;
 import com.bjunicom.iptv.update.AppUpdateManager;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.List;
 import java.util.Locale;
+import java.util.TimeZone;
 
 import tv.danmaku.ijk.media.player.IMediaPlayer;
 
@@ -66,6 +73,11 @@ public class MainActivity extends AppCompatActivity {
     private static final long HUD_AUTO_HIDE_MS = 6000L;
     private static final long NUMBER_INPUT_COMMIT_MS = 1800L;
     private static final long DOUBLE_BACK_EXIT_MS = 2000L;
+    public static final long LONG_PRESS_OK_TIMESHIFT_MS = 2000L;
+    public static final int TIMESHIFT_WINDOW_SEC = 6 * 3600; // 6 小时时移进度条窗口 (21600 秒)
+    public static final int TIMESHIFT_STEP_SEC = 30;         // 单次按左右方向键时移步长 (30 秒)
+    private static final long TIMESHIFT_SEEK_COMMIT_DEBOUNCE_MS = 900L;
+    private static final long TIMESHIFT_BAR_AUTO_HIDE_MS = 8000L;
 
     private IjkVideoView videoView;
     private LinearLayout loadingOverlay;
@@ -73,6 +85,23 @@ public class MainActivity extends AppCompatActivity {
     private TextView tvNumberInputOsd;
     private RelativeLayout hudOverlay;
     private LinearLayout drawerPanel;
+
+    private RelativeLayout timeshiftOverlay;
+    private LinearLayout timeshiftThumbnailContainer;
+    private ImageView ivTimeshiftThumbnail;
+    private TextView tvTimeshiftThumbTime;
+    private TextView tvTimeshiftStatusBadge;
+    private TextView tvTimeshiftChannelTitle;
+    private TextView tvTimeshiftCurrentTime;
+    private TextView tvTimeshiftLiveTime;
+    private SeekBar sbTimeshift;
+    private TimeshiftThumbnailExtractor timeshiftThumbnailExtractor;
+    private Bitmap lastTimeshiftThumbnailBitmap;
+    private boolean okKeyDownActive = false;
+    private boolean longPressTimeshiftTriggered = false;
+    private boolean isInTimeshiftPlayback = false;
+    private long timeshiftLiveEdgeEpochMs = 0L;
+    private long timeshiftTargetEpochMs = 0L;
 
     private TextView tvTopChannelTitle;
     private TextView tvTopStreamSpeed;
@@ -114,6 +143,24 @@ public class MainActivity extends AppCompatActivity {
         }
         hudOverlay.setVisibility(View.GONE);
         updateHudButtonsVisualState();
+    };
+
+    private final Runnable triggerTimeshiftSeekBarRunnable = () -> {
+        if (okKeyDownActive && drawerPanel.getVisibility() != View.VISIBLE) {
+            longPressCenterHandled = true;
+            longPressTimeshiftTriggered = true;
+            showTimeshiftSeekBar();
+        }
+    };
+
+    private final Runnable commitTimeshiftSeekRunnable = () -> {
+        if (timeshiftOverlay != null && timeshiftOverlay.getVisibility() == View.VISIBLE) {
+            applyTimeshiftPlaybackAt(timeshiftTargetEpochMs);
+        }
+    };
+
+    private final Runnable hideTimeshiftBarRunnable = () -> {
+        hideTimeshiftSeekBar(false);
     };
 
     private final Runnable commitNumberInputRunnable = () -> {
@@ -176,6 +223,7 @@ public class MainActivity extends AppCompatActivity {
         repository.addOnChannelsChangedListener(channelsChangedListener);
         settings = new IptvSettings(this);
         customM3uDialogHelper = new CustomM3uDialogHelper(this, this::onCustomM3uApplied);
+        timeshiftThumbnailExtractor = new TimeshiftThumbnailExtractor(this);
 
         bindViews();
         setupTouchGestures();
@@ -269,6 +317,17 @@ public class MainActivity extends AppCompatActivity {
         etSearchChannel = findViewById(R.id.et_search_channel);
         rvCategories = findViewById(R.id.rv_categories);
         rvChannels = findViewById(R.id.rv_channels);
+
+        timeshiftOverlay = findViewById(R.id.timeshift_overlay);
+        timeshiftThumbnailContainer = findViewById(R.id.timeshift_thumbnail_container);
+        ivTimeshiftThumbnail = findViewById(R.id.iv_timeshift_thumbnail);
+        tvTimeshiftThumbTime = findViewById(R.id.tv_timeshift_thumb_time);
+        tvTimeshiftStatusBadge = findViewById(R.id.tv_timeshift_status_badge);
+        tvTimeshiftChannelTitle = findViewById(R.id.tv_timeshift_channel_title);
+        tvTimeshiftCurrentTime = findViewById(R.id.tv_timeshift_current_time);
+        tvTimeshiftLiveTime = findViewById(R.id.tv_timeshift_live_time);
+        sbTimeshift = findViewById(R.id.sb_timeshift);
+        setupTimeshiftSeekBar();
 
         etSearchChannel.addTextChangedListener(new TextWatcher() {
             @Override
@@ -765,6 +824,9 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
         currentChannel = channel;
+        isInTimeshiftPlayback = false;
+        timeshiftTargetEpochMs = 0L;
+        hideTimeshiftSeekBar(true);
         fallbackToLocalProxyAttempted = false;
         settings.setLastChannelUrl(channel.getRawUrl());
         channelAdapter.setCurrentPlayingUrl(channel.getRawUrl());
@@ -1731,7 +1793,7 @@ public class MainActivity extends AppCompatActivity {
                 return true;
             }
 
-            // 4. 当左侧频道列表抽屉打开时的遥控器方向键循环切换逻辑
+        // 当左侧频道列表抽屉打开时的遥控器方向键循环切换逻辑
             if (drawerPanel.getVisibility() == View.VISIBLE) {
                 if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
                     View focused = getCurrentFocus();
@@ -1745,8 +1807,40 @@ public class MainActivity extends AppCompatActivity {
                     switchCategoryInDrawer(delta);
                     return true;
                 }
+            } else if (isTimeshiftSeekBarVisible()) {
+                // 当时移 SeekBar 显示时：
+                // - 左右方向键：调节时移进度并实时显示缩略图画面
+                // - OK 键：立即跳转到当前选定的时移时间点播放
+                // - 上下方向键：关闭时移条并直接切换上下频道
+                // - 返回键：收起时移进度条
+                if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+                    stepTimeshiftByDirection(-1, event.getRepeatCount());
+                    return true;
+                } else if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                    stepTimeshiftByDirection(1, event.getRepeatCount());
+                    return true;
+                } else if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER
+                        || keyCode == KeyEvent.KEYCODE_ENTER
+                        || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER) {
+                    if (event.getRepeatCount() == 0 && !longPressTimeshiftTriggered) {
+                        mainHandler.removeCallbacks(commitTimeshiftSeekRunnable);
+                        applyTimeshiftPlaybackAt(timeshiftTargetEpochMs);
+                    }
+                    return true;
+                } else if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+                    hideTimeshiftSeekBar(true);
+                    switchAdjacentChannel(1);
+                    return true;
+                } else if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                    hideTimeshiftSeekBar(true);
+                    switchAdjacentChannel(-1);
+                    return true;
+                } else if (keyCode == KeyEvent.KEYCODE_BACK) {
+                    hideTimeshiftSeekBar(false);
+                    return true;
+                }
             } else {
-                // 当左侧频道列表抽屉关闭时的全屏遥控器方向键与长按 OK 逻辑
+                // 当左侧频道列表抽屉关闭时的全屏遥控器方向键与长按 OK 2 秒呼出时移 SeekBar 逻辑
                 if (keyCode == KeyEvent.KEYCODE_PROG_RED || keyCode == KeyEvent.KEYCODE_BOOKMARK) {
                     toggleCurrentChannelFavorite();
                     return true;
@@ -1756,7 +1850,7 @@ public class MainActivity extends AppCompatActivity {
                 // - 左/右方向键：若信息页面(HUD)未显示则调出频道列表；若信息页面已显示则切换 HUD 按钮焦点
                 // - 上/下方向键：直接切换上/下一频道
                 // - 短按 OK：若信息页面(HUD)已显示则触发当前聚焦的按钮点击；若信息页面未显示则调出信息页面(HUD)
-                // - 长按 OK 键：弹出「智能遥控器快捷操作面板」
+                // - 长按 OK 键满 2 秒：显示时移 SeekBar，按左右方向键实现时移并显示缩略图画面
                 if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
                     if (hudOverlay.getVisibility() != View.VISIBLE) {
                         openChannelDrawerAndFocus();
@@ -1782,20 +1876,31 @@ public class MainActivity extends AppCompatActivity {
                 } else if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER
                         || keyCode == KeyEvent.KEYCODE_ENTER
                         || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER) {
-                    if (event.getRepeatCount() > 0) {
-                        longPressCenterHandled = true;
-                        showSmartRemoteQuickMenu();
-                    } else {
+                    if (event.getRepeatCount() == 0) {
+                        okKeyDownActive = true;
                         longPressCenterHandled = false;
+                        longPressTimeshiftTriggered = false;
+                        mainHandler.removeCallbacks(triggerTimeshiftSeekBarRunnable);
+                        mainHandler.postDelayed(triggerTimeshiftSeekBarRunnable, LONG_PRESS_OK_TIMESHIFT_MS);
+                    } else if (!longPressTimeshiftTriggered
+                            && (event.getEventTime() - event.getDownTime() >= LONG_PRESS_OK_TIMESHIFT_MS)) {
+                        mainHandler.removeCallbacks(triggerTimeshiftSeekBarRunnable);
+                        longPressCenterHandled = true;
+                        longPressTimeshiftTriggered = true;
+                        showTimeshiftSeekBar();
                     }
                     return true;
                 }
             }
 
-            // 5. 返回键分层处理：先关抽屉 -> 再关HUD操控栏 -> 双击退出应用
+            // 5. 返回键分层处理：先关抽屉 -> 再关时移条 -> 再关HUD操控栏 -> 双击退出应用
             if (keyCode == KeyEvent.KEYCODE_BACK) {
                 if (drawerPanel.getVisibility() == View.VISIBLE) {
                     closeChannelDrawer();
+                    return true;
+                }
+                if (isTimeshiftSeekBarVisible()) {
+                    hideTimeshiftSeekBar(false);
                     return true;
                 }
                 if (hudOverlay.getVisibility() == View.VISIBLE) {
@@ -1812,15 +1917,26 @@ public class MainActivity extends AppCompatActivity {
             }
         } else if (event.getAction() == KeyEvent.ACTION_UP) {
             int keyCode = event.getKeyCode();
+            if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER
+                    || keyCode == KeyEvent.KEYCODE_ENTER
+                    || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER) {
+                okKeyDownActive = false;
+                mainHandler.removeCallbacks(triggerTimeshiftSeekBarRunnable);
+                if (longPressTimeshiftTriggered) {
+                    longPressTimeshiftTriggered = false;
+                    return true;
+                }
+            }
             // 全屏播放时，短按松开 OK 键：若信息页面(HUD)已显示则执行当前聚焦按钮功能，否则调出信息页面(HUD)
             if (drawerPanel.getVisibility() != View.VISIBLE
+                    && !isTimeshiftSeekBarVisible()
                     && remoteNumberBuffer.length() == 0
                     && (keyCode == KeyEvent.KEYCODE_DPAD_CENTER
                     || keyCode == KeyEvent.KEYCODE_ENTER
                     || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER)) {
                 boolean wasLongPress = longPressCenterHandled;
                 longPressCenterHandled = false;
-                if (!wasLongPress && !event.isCanceled() && (event.getEventTime() - event.getDownTime() < 500)) {
+                if (!wasLongPress && !event.isCanceled() && (event.getEventTime() - event.getDownTime() < LONG_PRESS_OK_TIMESHIFT_MS)) {
                     if (hudOverlay.getVisibility() == View.VISIBLE) {
                         View focusedBtn = getFocusedHudButton();
                         if (focusedBtn != null) {
@@ -1871,6 +1987,279 @@ public class MainActivity extends AppCompatActivity {
         mainHandler.postDelayed(commitNumberInputRunnable, NUMBER_INPUT_COMMIT_MS);
     }
 
+    private void setupTimeshiftSeekBar() {
+        if (sbTimeshift == null) {
+            return;
+        }
+        sbTimeshift.setMax(TIMESHIFT_WINDOW_SEC);
+        sbTimeshift.setProgress(TIMESHIFT_WINDOW_SEC);
+        sbTimeshift.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                if (!fromUser) {
+                    return;
+                }
+                int clamped = Math.max(0, Math.min(TIMESHIFT_WINDOW_SEC, progress));
+                long offsetFromLiveSec = TIMESHIFT_WINDOW_SEC - clamped;
+                timeshiftTargetEpochMs = timeshiftLiveEdgeEpochMs - offsetFromLiveSec * 1000L;
+                updateTimeshiftUiAndThumbnail(true);
+                scheduleTimeshiftBarAutoHide();
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar seekBar) {
+                mainHandler.removeCallbacks(commitTimeshiftSeekRunnable);
+                scheduleTimeshiftBarAutoHide();
+            }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {
+                applyTimeshiftPlaybackAt(timeshiftTargetEpochMs);
+            }
+        });
+    }
+
+    public boolean isTimeshiftSeekBarVisible() {
+        return timeshiftOverlay != null && timeshiftOverlay.getVisibility() == View.VISIBLE;
+    }
+
+    public boolean isInTimeshiftPlayback() {
+        return isInTimeshiftPlayback;
+    }
+
+    public long getTimeshiftTargetEpochMs() {
+        return timeshiftTargetEpochMs;
+    }
+
+    public long getTimeshiftLiveEdgeEpochMs() {
+        return timeshiftLiveEdgeEpochMs;
+    }
+
+    public Bitmap getLastTimeshiftThumbnailBitmap() {
+        return lastTimeshiftThumbnailBitmap;
+    }
+
+    /**
+     * 长按 OK 键 2 秒后呼出北京联通 IPTV 时移 SeekBar
+     */
+    public void showTimeshiftSeekBar() {
+        if (timeshiftOverlay == null) {
+            return;
+        }
+        if (drawerPanel != null && drawerPanel.getVisibility() == View.VISIBLE) {
+            drawerPanel.setVisibility(View.GONE);
+        }
+        if (hudOverlay != null && hudOverlay.getVisibility() == View.VISIBLE) {
+            hudOverlay.setVisibility(View.GONE);
+            updateHudButtonsVisualState();
+        }
+        mainHandler.removeCallbacks(hideHudRunnable);
+
+        if (timeshiftThumbnailExtractor != null) {
+            timeshiftThumbnailExtractor.captureLiveSnapshot(videoView, currentChannel);
+        }
+
+        long now = System.currentTimeMillis();
+        timeshiftLiveEdgeEpochMs = now;
+        if (!isInTimeshiftPlayback || timeshiftTargetEpochMs <= 0L || timeshiftTargetEpochMs > now) {
+            timeshiftTargetEpochMs = now;
+        }
+
+        long offsetSec = Math.max(0L, Math.min(TIMESHIFT_WINDOW_SEC,
+                (timeshiftLiveEdgeEpochMs - timeshiftTargetEpochMs) / 1000L));
+        int progress = (int) (TIMESHIFT_WINDOW_SEC - offsetSec);
+        if (sbTimeshift != null) {
+            sbTimeshift.setMax(TIMESHIFT_WINDOW_SEC);
+            sbTimeshift.setProgress(progress);
+        }
+
+        timeshiftOverlay.setVisibility(View.VISIBLE);
+        updateTimeshiftUiAndThumbnail(true);
+        scheduleTimeshiftBarAutoHide();
+    }
+
+    public void hideTimeshiftSeekBar(boolean cancelPendingCommit) {
+        mainHandler.removeCallbacks(hideTimeshiftBarRunnable);
+        if (cancelPendingCommit) {
+            mainHandler.removeCallbacks(commitTimeshiftSeekRunnable);
+        }
+        if (timeshiftThumbnailContainer != null) {
+            timeshiftThumbnailContainer.setVisibility(View.GONE);
+        }
+        if (timeshiftOverlay != null) {
+            timeshiftOverlay.setVisibility(View.GONE);
+        }
+    }
+
+    private void scheduleTimeshiftBarAutoHide() {
+        mainHandler.removeCallbacks(hideTimeshiftBarRunnable);
+        mainHandler.postDelayed(hideTimeshiftBarRunnable, TIMESHIFT_BAR_AUTO_HIDE_MS);
+    }
+
+    /**
+     * 在时移 SeekBar 呼出状态下，通过左右方向键快退/快进时移进度并实时展示缩略图画面
+     */
+    public void stepTimeshiftByDirection(int direction, int repeatCount) {
+        if (timeshiftLiveEdgeEpochMs <= 0L) {
+            timeshiftLiveEdgeEpochMs = System.currentTimeMillis();
+        }
+        if (timeshiftTargetEpochMs <= 0L) {
+            timeshiftTargetEpochMs = timeshiftLiveEdgeEpochMs;
+        }
+        int multiplier = 1;
+        if (repeatCount > 15) {
+            multiplier = 10; // 300s (5 分钟)
+        } else if (repeatCount > 5) {
+            multiplier = 4;  // 120s (2 分钟)
+        } else if (repeatCount > 1) {
+            multiplier = 2;  // 60s (1 分钟)
+        }
+        long deltaMs = (long) direction * TIMESHIFT_STEP_SEC * multiplier * 1000L;
+        long minEpochMs = timeshiftLiveEdgeEpochMs - (long) TIMESHIFT_WINDOW_SEC * 1000L;
+        timeshiftTargetEpochMs = Math.max(minEpochMs,
+                Math.min(timeshiftLiveEdgeEpochMs, timeshiftTargetEpochMs + deltaMs));
+
+        long offsetSec = Math.max(0L, (timeshiftLiveEdgeEpochMs - timeshiftTargetEpochMs) / 1000L);
+        int progress = (int) Math.max(0L, Math.min(TIMESHIFT_WINDOW_SEC, TIMESHIFT_WINDOW_SEC - offsetSec));
+        if (sbTimeshift != null) {
+            sbTimeshift.setProgress(progress);
+        }
+
+        updateTimeshiftUiAndThumbnail(true);
+        scheduleTimeshiftBarAutoHide();
+
+        mainHandler.removeCallbacks(commitTimeshiftSeekRunnable);
+        mainHandler.postDelayed(commitTimeshiftSeekRunnable, TIMESHIFT_SEEK_COMMIT_DEBOUNCE_MS);
+    }
+
+    private void updateTimeshiftUiAndThumbnail(boolean showThumbnail) {
+        SimpleDateFormat timeFmt = new SimpleDateFormat("HH:mm:ss", Locale.US);
+        timeFmt.setTimeZone(TimeZone.getTimeZone("Asia/Shanghai"));
+        String targetStr = timeFmt.format(new Date(timeshiftTargetEpochMs));
+        String liveStr = timeFmt.format(new Date(timeshiftLiveEdgeEpochMs));
+        long diffSec = Math.max(0L, (timeshiftLiveEdgeEpochMs - timeshiftTargetEpochMs) / 1000L);
+
+        if (tvTimeshiftChannelTitle != null) {
+            if (currentChannel != null) {
+                String tag = currentChannel.supportsTimeshift() ? "" : " (仅限专网支持时移)";
+                tvTimeshiftChannelTitle.setText(String.format(Locale.US, "%s  %s%s",
+                        currentChannel.getChannelNumberDisplay(),
+                        currentChannel.getDisplayName(),
+                        tag));
+            } else {
+                tvTimeshiftChannelTitle.setText("北京联通 IPTV 时移");
+            }
+        }
+        if (tvTimeshiftStatusBadge != null) {
+            tvTimeshiftStatusBadge.setText(diffSec <= 3L ? "● 实时直播" : "↺ 时移回看");
+        }
+        if (tvTimeshiftCurrentTime != null) {
+            tvTimeshiftCurrentTime.setText(targetStr + " (" + TimeshiftThumbnailExtractor.formatOffsetText(diffSec) + ")");
+        }
+        if (tvTimeshiftLiveTime != null) {
+            tvTimeshiftLiveTime.setText("/ " + liveStr + " (直播)");
+        }
+
+        if (showThumbnail && timeshiftThumbnailContainer != null) {
+            timeshiftThumbnailContainer.setVisibility(View.VISIBLE);
+            if (tvTimeshiftThumbTime != null) {
+                tvTimeshiftThumbTime.setText(targetStr + " (" + TimeshiftThumbnailExtractor.formatOffsetText(diffSec) + ")");
+            }
+            updateThumbnailHorizontalPosition();
+            if (timeshiftThumbnailExtractor != null) {
+                Bitmap immediate = timeshiftThumbnailExtractor.requestThumbnail(
+                        currentChannel,
+                        timeshiftTargetEpochMs,
+                        timeshiftLiveEdgeEpochMs,
+                        (bitmap, epochMs, isDecodedFrame) -> {
+                            lastTimeshiftThumbnailBitmap = bitmap;
+                            if (ivTimeshiftThumbnail != null) {
+                                ivTimeshiftThumbnail.setImageBitmap(bitmap);
+                            }
+                        });
+                lastTimeshiftThumbnailBitmap = immediate;
+                if (ivTimeshiftThumbnail != null) {
+                    ivTimeshiftThumbnail.setImageBitmap(immediate);
+                }
+            }
+        }
+    }
+
+    private void updateThumbnailHorizontalPosition() {
+        if (sbTimeshift == null || timeshiftThumbnailContainer == null || timeshiftOverlay == null) {
+            return;
+        }
+        int barWidth = sbTimeshift.getWidth();
+        int overlayWidth = timeshiftOverlay.getWidth();
+        int thumbCardWidth = timeshiftThumbnailContainer.getWidth();
+        if (barWidth <= 0 || overlayWidth <= 0 || thumbCardWidth <= 0) {
+            return;
+        }
+        float ratio = (float) sbTimeshift.getProgress() / Math.max(1, sbTimeshift.getMax());
+        int barLeft = sbTimeshift.getLeft() + (timeshiftOverlay.findViewById(R.id.timeshift_bar_card) != null
+                ? timeshiftOverlay.findViewById(R.id.timeshift_bar_card).getLeft() : 0);
+        float thumbCenterX = barLeft + ratio * barWidth;
+        float desiredTranslationX = thumbCenterX - (overlayWidth / 2f);
+        float maxTranslation = Math.max(0f, (overlayWidth - thumbCardWidth) / 2f - 18f);
+        float clampedTranslationX = Math.max(-maxTranslation, Math.min(maxTranslation, desiredTranslationX));
+        timeshiftThumbnailContainer.setTranslationX(clampedTranslationX);
+    }
+
+    /**
+     * 立即应用选定的时移时间点：
+     * - 若拉回直播边缘 (<= 5 秒)，则恢复实时组播/单播直播流；
+     * - 若回退到历史时间，且频道具备北京联通 catchup-source，则通过 StreamUrlResolver 生成带 playseek= 的时移 URL 并切换播放。
+     */
+    public void applyTimeshiftPlaybackAt(long targetEpochMs) {
+        if (currentChannel == null) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        timeshiftLiveEdgeEpochMs = Math.max(timeshiftLiveEdgeEpochMs, now);
+        long diffSec = Math.max(0L, (timeshiftLiveEdgeEpochMs - targetEpochMs) / 1000L);
+
+        if (diffSec <= 5L) {
+            // 回到实时直播
+            if (isInTimeshiftPlayback) {
+                isInTimeshiftPlayback = false;
+                playChannel(currentChannel, false);
+                Toast.makeText(this, "已返回实时直播: " + currentChannel.getDisplayName(), Toast.LENGTH_SHORT).show();
+            }
+            scheduleTimeshiftBarAutoHide();
+            return;
+        }
+
+        if (!currentChannel.supportsTimeshift()) {
+            Toast.makeText(this, "当前频道暂不支持北京联通时移回看", Toast.LENGTH_SHORT).show();
+            scheduleTimeshiftBarAutoHide();
+            return;
+        }
+
+        long endEpochMs = Math.min(now + 3600_000L, targetEpochMs + StreamUrlResolver.DEFAULT_TIMESHIFT_SPAN_MS);
+        String timeshiftUrl = StreamUrlResolver.resolveTimeshiftUrl(
+                currentChannel, settings, targetEpochMs, endEpochMs, true);
+        if (TextUtils.isEmpty(timeshiftUrl)) {
+            Toast.makeText(this, "无法生成时移回看地址", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        isInTimeshiftPlayback = true;
+        SimpleDateFormat timeFmt = new SimpleDateFormat("HH:mm:ss", Locale.US);
+        timeFmt.setTimeZone(TimeZone.getTimeZone("Asia/Shanghai"));
+        String targetTimeStr = timeFmt.format(new Date(targetEpochMs));
+
+        loadingOverlay.setVisibility(View.VISIBLE);
+        tvLoadingHint.setText(String.format(Locale.US, "正在加载时移回看 [%s] %s (%s)...",
+                currentChannel.getChannelNumberDisplay(), currentChannel.getDisplayName(), targetTimeStr));
+        tvOsdStreamUrl.setText("北京联通时移源: " + timeshiftUrl);
+
+        videoView.setRawChannelUrl(currentChannel.getRawUrl());
+        videoView.setAudioCodecHint(currentChannel.getAudioTrackInfo());
+        videoView.setVideoPath(timeshiftUrl);
+        videoView.start();
+        scheduleTimeshiftBarAutoHide();
+    }
+
     @Override
     protected void onResume() {
         super.onResume();
@@ -1904,6 +2293,9 @@ public class MainActivity extends AppCompatActivity {
             repository.removeOnChannelsChangedListener(channelsChangedListener);
         }
         mainHandler.removeCallbacksAndMessages(null);
+        if (timeshiftThumbnailExtractor != null) {
+            timeshiftThumbnailExtractor.release();
+        }
         if (videoView != null) {
             videoView.stopPlayback();
         }

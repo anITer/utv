@@ -163,4 +163,41 @@ public class M3uParserTest {
         assertFalse(binaryReport.isValid());
         assertTrue(binaryReport.binaryOrCorrupted);
     }
+
+    @Test
+    public void testBeijingUnicomCatchupTimeshiftParsingAndUrlResolution() {
+        String zzM3u = "#EXTM3U name=\"bj-unicom-iptv\" x-tvg-url=\"https://raw.githubusercontent.com/zzzz0317/beijing-unicom-iptv-playlist/refs/heads/main/epg.xml.gz\"\n" +
+                "#EXTINF:-1 channel-number=\"1\" tvg-id=\"1\" tvg-name=\"CCTV-1高清\" group-title=\"央视\" zz-definition=\"HD\" catchup=\"default\" catchup-source=\"rtsp://61.135.88.136/TVOD/88888892/224/3221225880/10000100000000060000000000025506_0.smil?playseek=${(b)yyyyMMddHHmmss}-${(e)yyyyMMddHHmmss}\",CCTV-1高清\n" +
+                "rtp://239.3.1.129:8008\n" +
+                "#EXTINF:-1 channel-number=\"59\" tvg-id=\"59\" tvg-name=\"河南卫视高清\" group-title=\"卫视\" zz-definition=\"HD\" catchup=\"default\" catchup-source=\"http://61.135.88.136/TVOD/88888892/224/3221226156/10000100000000060000000001276309_0.smil/index.m3u8?fmt=ts2hls&playseek=${(b)yyyyMMddHHmmss}-${(e)yyyyMMddHHmmss}\",河南卫视高清\n" +
+                "http://iptv.local:8080/rtp/239.3.1.50:8184\n";
+
+        List<IptvChannel> list = M3uParser.parseString(zzM3u);
+        assertEquals(2, list.size());
+
+        IptvChannel cctv1 = list.get(0);
+        assertEquals(1, cctv1.getChannelNumber());
+        assertEquals("高清", cctv1.getResolutionTag());
+        assertEquals("default", cctv1.getCatchupType());
+        assertTrue(cctv1.supportsTimeshift());
+        assertTrue(cctv1.getCatchupSource().startsWith("rtsp://61.135.88.136/TVOD/"));
+
+        // 2026-11-01 10:00:00 CST (Asia/Shanghai) = 1793498400000L
+        long startMs = 1793498400000L;
+        long endMs = startMs + 3600_000L; // +1 hour -> 11:00:00 CST
+        String ts2hlsUrl = com.bjunicom.iptv.network.StreamUrlResolver.resolveTimeshiftUrl(
+                cctv1, null, startMs, endMs, true);
+        assertEquals(
+                "http://61.135.88.136/TVOD/88888892/224/3221225880/10000100000000060000000000025506_0.smil/index.m3u8?fmt=ts2hls&playseek=20261101100000-20261101110000",
+                ts2hlsUrl);
+
+        IptvChannel henan = list.get(1);
+        assertEquals(59, henan.getChannelNumber());
+        assertTrue(henan.supportsTimeshift());
+        String henanUrl = com.bjunicom.iptv.network.StreamUrlResolver.resolveTimeshiftUrl(
+                henan, null, startMs, endMs, true);
+        assertEquals(
+                "http://61.135.88.136/TVOD/88888892/224/3221226156/10000100000000060000000001276309_0.smil/index.m3u8?fmt=ts2hls&playseek=20261101100000-20261101110000",
+                henanUrl);
+    }
 }

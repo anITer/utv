@@ -112,10 +112,13 @@ app/src/main/
 
 ## 致谢 (Acknowledgments)
 
-本项目的开发基于以下两个优秀的开源项目，特此向原作者及社区贡献者致以诚挚感谢：
+本项目的开发基于以下优秀的开源项目，特此向原作者及社区贡献者致以诚挚感谢：
 
 1. **[bilibili/ijkplayer](https://github.com/bilibili/ijkplayer)**
    - 感谢 Bilibili 开源的基于 FFmpeg 的跨平台音视频播放器内核。`ijkplayer` 提供了扎实稳定的 Android 音视频解码、渲染框架与高度可扩展的 `IMediaDataSource` 接口，为本项目实现 MPEG-TS 直播流秒级切台、多架构硬解/软解协同以及 4K 超高清流畅播放奠定了核心基础。
 
 2. **[wuwentao/bj-unicom-iptv](https://github.com/wuwentao/bj-unicom-iptv)**
    - 感谢 `@wuwentao` 整理并持续维护的北京联通 IPTV 组播频道列表（`bj-unicom-iptv.m3u`）、网络拓扑配置指南以及 `check_iptv_m3u.sh` 自动化节目源巡检脚本。本项目的内置频道数据源、分组规范、轨道探测格式以及组播巡检导出逻辑均源自该项目的宝贵成果。
+
+3. **[zzzz0317/beijing-unicom-iptv-playlist](https://github.com/zzzz0317/beijing-unicom-iptv-playlist)**
+   - 感谢 `@zzzz0317` 持续维护的北京联通 IPTV 播放列表与时移回看（`catchup-source` / `playseek` / `ts2hls`）配置方案。本项目的北京联通 IPTV 时移回看地址解析、协议转换与进度回看能力参考并集成了该项目的宝贵成果。

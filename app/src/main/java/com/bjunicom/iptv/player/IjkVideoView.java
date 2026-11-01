@@ -156,8 +156,8 @@ public class IjkVideoView extends FrameLayout {
             if (state == STATE_IDLE || player == null) {
                 return false;
             }
-            if (targetUri != null && uri != null && targetUri.equals(uri)) {
-                return true;
+            if (targetUri != null && uri != null) {
+                return targetUri.equals(uri);
             }
             if (!TextUtils.isEmpty(targetRawUrl)
                     && !TextUtils.isEmpty(rawChannelUrl)

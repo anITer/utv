@@ -132,8 +132,11 @@ public class ChannelAdapter extends RecyclerView.Adapter<ChannelAdapter.ViewHold
             holder.tvResBadge.setTextColor(Color.parseColor("#CBD5E1"));
         }
 
-        // 组播地址与探测到的视频轨道摘要
+        // 组播地址、时移能力标识与探测到的视频轨道摘要
         String subText = ch.getRawUrl();
+        if (ch.supportsTimeshift()) {
+            subText = subText + "  •  ↺时移";
+        }
         if (!TextUtils.isEmpty(ch.getVideoTrackInfo())) {
             subText = subText + "  •  " + ch.getVideoTrackInfo().replace("#1 ", "");
         }

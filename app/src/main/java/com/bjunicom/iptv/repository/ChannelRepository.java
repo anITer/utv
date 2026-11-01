@@ -468,6 +468,12 @@ public class ChannelRepository {
                 if (scanned.getLatencyMs() > 0) {
                     existing.setLatencyMs(scanned.getLatencyMs());
                 }
+                if (!TextUtils.isEmpty(scanned.getCatchupSource())) {
+                    existing.setCatchupSource(scanned.getCatchupSource());
+                }
+                if (!TextUtils.isEmpty(scanned.getCatchupType())) {
+                    existing.setCatchupType(scanned.getCatchupType());
+                }
                 existing.setResolutionMismatch(scanned.isResolutionMismatch());
             } else {
                 // 新扫描发现的组播地址
@@ -619,6 +625,12 @@ public class ChannelRepository {
                 }
                 if (meta.getLatencyMs() > 0) {
                     ch.setLatencyMs(meta.getLatencyMs());
+                }
+                if (!TextUtils.isEmpty(meta.getCatchupSource())) {
+                    ch.setCatchupSource(meta.getCatchupSource());
+                }
+                if (!TextUtils.isEmpty(meta.getCatchupType())) {
+                    ch.setCatchupType(meta.getCatchupType());
                 }
                 ch.setDiscoveredByScan(meta.isDiscoveredByScan());
                 ch.setResolutionMismatch(meta.isResolutionMismatch());

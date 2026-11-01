@@ -28,6 +28,11 @@ public final class M3uParser {
     private static final Pattern ATTR_TVG_ID = Pattern.compile("tvg-id=\"([^\"]*)\"");
     private static final Pattern ATTR_TVG_NAME = Pattern.compile("tvg-name=\"([^\"]*)\"");
     private static final Pattern ATTR_TVG_LOGO = Pattern.compile("tvg-logo=\"([^\"]*)\"");
+    private static final Pattern ATTR_CHANNEL_NUMBER = Pattern.compile("(?:channel-number|tvg-chno)=\"([^\"]*)\"");
+    private static final Pattern ATTR_ZZ_DEFINITION = Pattern.compile("zz-definition=\"([^\"]*)\"");
+    private static final Pattern ATTR_CATCHUP = Pattern.compile("catchup=\"([^\"]*)\"");
+    private static final Pattern ATTR_CATCHUP_SOURCE = Pattern.compile("catchup-source=\"([^\"]*)\"");
+    private static final Pattern ATTR_CATCHUP_DAYS = Pattern.compile("(?:catchup-days|tvg-rec)=\"([^\"]*)\"");
     private static final Pattern ATTR_GROUP_TITLE = Pattern.compile("group-title=\"([^\"]*)\"");
     private static final Pattern ATTR_GROUP_TITLE_UNCLOSED = Pattern.compile("group-title=\"([^\",]*)");
     private static final Pattern ATTR_EPG_URL = Pattern.compile("(?:x-tvg-url|url-tvg)=\"([^\"]*)\"");
@@ -161,6 +166,8 @@ public final class M3uParser {
         String currentExtInf = null;
         int currentExtInfLineNum = 0;
         String currentGenreGroup = null;
+        String headerCatchupType = "";
+        String headerCatchupSource = "";
         int counter = 1;
         int lineNumber = 0;
 
@@ -181,6 +188,8 @@ public final class M3uParser {
                     if (!isEmpty(epg)) {
                         report.epgUrl = epg;
                     }
+                    headerCatchupType = extractAttr(ATTR_CATCHUP, trimmed);
+                    headerCatchupSource = extractAttr(ATTR_CATCHUP_SOURCE, trimmed);
                     continue;
                 }
 
@@ -213,6 +222,7 @@ public final class M3uParser {
                     if (validationErr == null) {
                         IptvChannel ch = buildChannel(counter, currentExtInf, trimmed);
                         if (ch != null) {
+                            applyHeaderCatchupFallback(ch, headerCatchupType, headerCatchupSource);
                             if (currentGenreGroup != null && isEmpty(ch.getGroupTitleRaw())) {
                                 List<String> gList = new ArrayList<>();
                                 gList.add(currentGenreGroup);
@@ -413,6 +423,8 @@ public final class M3uParser {
         List<IptvChannel> channels = new ArrayList<>();
         String line;
         String currentExtInf = null;
+        String headerCatchupType = "";
+        String headerCatchupSource = "";
         int counter = 1;
 
         while ((line = reader.readLine()) != null) {
@@ -421,11 +433,15 @@ public final class M3uParser {
             if (trimmed.isEmpty()) {
                 continue;
             }
-            if (trimmed.startsWith("#EXTINF")) {
+            if (trimmed.regionMatches(true, 0, "#EXTM3U", 0, 7)) {
+                headerCatchupType = extractAttr(ATTR_CATCHUP, trimmed);
+                headerCatchupSource = extractAttr(ATTR_CATCHUP_SOURCE, trimmed);
+            } else if (trimmed.startsWith("#EXTINF")) {
                 currentExtInf = trimmed;
             } else if (!trimmed.startsWith("#") && currentExtInf != null) {
                 IptvChannel channel = buildChannel(counter, currentExtInf, trimmed);
                 if (channel != null) {
+                    applyHeaderCatchupFallback(channel, headerCatchupType, headerCatchupSource);
                     channels.add(channel);
                     counter++;
                 }
@@ -433,6 +449,20 @@ public final class M3uParser {
             }
         }
         return channels;
+    }
+
+    private static void applyHeaderCatchupFallback(IptvChannel channel,
+                                                   String headerCatchupType,
+                                                   String headerCatchupSource) {
+        if (channel == null) {
+            return;
+        }
+        if (isEmpty(channel.getCatchupType()) && !isEmpty(headerCatchupType)) {
+            channel.setCatchupType(headerCatchupType);
+        }
+        if (isEmpty(channel.getCatchupSource()) && !isEmpty(headerCatchupSource)) {
+            channel.setCatchupSource(headerCatchupSource);
+        }
     }
 
     public static IptvChannel buildChannel(int index, String extInfLine, String urlLine) {
@@ -448,11 +478,31 @@ public final class M3uParser {
         channel.setTvgId(extractAttr(ATTR_TVG_ID, extInfLine));
         channel.setTvgName(extractAttr(ATTR_TVG_NAME, extInfLine));
         channel.setTvgLogo(extractAttr(ATTR_TVG_LOGO, extInfLine));
+        String catchupType = extractAttr(ATTR_CATCHUP, extInfLine);
+        String catchupSource = extractAttr(ATTR_CATCHUP_SOURCE, extInfLine);
+        String catchupDaysStr = extractAttr(ATTR_CATCHUP_DAYS, extInfLine);
+        if (!isEmpty(catchupType)) {
+            channel.setCatchupType(catchupType);
+        }
+        if (!isEmpty(catchupSource)) {
+            channel.setCatchupSource(catchupSource);
+            if (isEmpty(catchupType)) {
+                channel.setCatchupType("default");
+            }
+        }
+        if (!isEmpty(catchupDaysStr)) {
+            try {
+                channel.setCatchupDays(Integer.parseInt(catchupDaysStr));
+            } catch (NumberFormatException ignored) {
+            }
+        }
         String groupRaw = extractAttr(ATTR_GROUP_TITLE, extInfLine);
         if (isEmpty(groupRaw)) {
             groupRaw = extractAttr(ATTR_GROUP_TITLE_UNCLOSED, extInfLine);
         }
         channel.setGroupTitleRaw(groupRaw);
+        String zzDef = extractAttr(ATTR_ZZ_DEFINITION, extInfLine);
+        String attrChNo = extractAttr(ATTR_CHANNEL_NUMBER, extInfLine);
 
         // 提取逗号后的频道名
         String rawTitle;
@@ -464,30 +514,40 @@ public final class M3uParser {
         }
         channel.setRawTitle(rawTitle);
 
-        // 提取分辨率标识: [4K]/【4K】, [超清]/【超清】, [高清]/【高清】, [标清]/【标清】
+        // 提取分辨率标识: [4K]/【4K】, [超清]/【超清】, [高清]/【高清】, [标清]/【标清】 或 zz-definition="UHD/HD/SD"
         String resTag = "标清";
-        if (rawTitle.contains("[4K]")
+        if ("UHD".equalsIgnoreCase(zzDef)
+                || rawTitle.contains("[4K]")
                 || rawTitle.contains("【4K】")
                 || rawTitle.contains("[超清]")
                 || rawTitle.contains("【超清】")
                 || rawTitle.toUpperCase().contains("4K")
                 || (groupRaw != null && groupRaw.contains("4K"))) {
             resTag = "4K";
-        } else if (rawTitle.contains("[高清]")
+        } else if ("HD".equalsIgnoreCase(zzDef)
+                || rawTitle.contains("[高清]")
                 || rawTitle.contains("【高清】")
                 || rawTitle.endsWith("HD")
+                || rawTitle.endsWith("高清")
                 || (groupRaw != null && groupRaw.contains("[高清]"))) {
             resTag = "高清";
-        } else if (rawTitle.contains("[标清]")
+        } else if ("SD".equalsIgnoreCase(zzDef)
+                || rawTitle.contains("[标清]")
                 || rawTitle.contains("【标清】")
                 || (groupRaw != null && groupRaw.contains("[标清]"))) {
             resTag = "标清";
         }
         channel.setResolutionTag(resTag);
 
-        // 提取遥控器频道号，如 CCTV-1综合[1][高清] -> 1
+        // 提取遥控器频道号，优先使用 channel-number 属性，其次提取标题中的 [1]
         Matcher numMatcher = BRACKET_NUMBER.matcher(rawTitle);
-        if (numMatcher.find()) {
+        if (!isEmpty(attrChNo)) {
+            try {
+                channel.setChannelNumber(Integer.parseInt(attrChNo));
+            } catch (NumberFormatException ignored) {
+                channel.setChannelNumber(index);
+            }
+        } else if (numMatcher.find()) {
             try {
                 channel.setChannelNumber(Integer.parseInt(numMatcher.group(1)));
             } catch (NumberFormatException ignored) {

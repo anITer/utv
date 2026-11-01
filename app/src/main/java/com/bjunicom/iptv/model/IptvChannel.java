@@ -38,6 +38,9 @@ public class IptvChannel implements Serializable {
     private boolean discoveredByScan;       // 是否由网段动态扫描新发现的组播地址
     private boolean favorite;               // 是否收藏
     private String ispName;                 // 所属运营商标识 (如 "北京联通", "北京移动", "北京电信")
+    private String catchupType;             // 时移类型 (如 "default", "append", "shift")
+    private String catchupSource;           // 时移回看源地址模板 (如 rtsp://61.135.88.136/TVOD/.../*.smil?playseek=${(b)yyyyMMddHHmmss}-${(e)yyyyMMddHHmmss})
+    private int catchupDays = 7;            // 时移回看最大支持天数 (默认 7 天)
 
     public IptvChannel() {
         this.groups = new ArrayList<>();
@@ -242,6 +245,42 @@ public class IptvChannel implements Serializable {
         this.ispName = ispName;
     }
 
+    public String getCatchupType() {
+        return catchupType;
+    }
+
+    public void setCatchupType(String catchupType) {
+        this.catchupType = catchupType;
+    }
+
+    public String getCatchupSource() {
+        return catchupSource;
+    }
+
+    public void setCatchupSource(String catchupSource) {
+        this.catchupSource = catchupSource;
+    }
+
+    public int getCatchupDays() {
+        return catchupDays > 0 ? catchupDays : 7;
+    }
+
+    public void setCatchupDays(int catchupDays) {
+        this.catchupDays = catchupDays > 0 ? catchupDays : 7;
+    }
+
+    /**
+     * 判断当前频道是否支持时移回看：
+     * 1. M3U 中显式声明了 catchup-source；
+     * 2. 或地址中包含北京联通/移动/电信时移特征标识 (/PLTV/ 或 /TVOD/)
+     */
+    public boolean supportsTimeshift() {
+        if (!isEmpty(catchupSource)) {
+            return true;
+        }
+        return rawUrl != null && (rawUrl.contains("/PLTV/") || rawUrl.contains("/TVOD/"));
+    }
+
     public boolean isMulticastStream() {
         if (!isEmpty(multicastIp) && multicastPort > 0) {
             return true;
@@ -305,11 +344,17 @@ public class IptvChannel implements Serializable {
             return rawExtInfLine.substring(0, commaIdx + 1) + updatedTitle;
         }
         String groupStr = !isEmpty(groupTitleRaw) ? groupTitleRaw : "北京IPTV";
-        return String.format("#EXTINF:-1 tvg-id=\"%s\" tvg-name=\"%s\" tvg-logo=\"%s\" group-title=\"%s\",%s",
+        String catchupAttrs = "";
+        if (!isEmpty(catchupSource)) {
+            String type = !isEmpty(catchupType) ? catchupType : "default";
+            catchupAttrs = String.format(" catchup=\"%s\" catchup-source=\"%s\"", type, catchupSource);
+        }
+        return String.format("#EXTINF:-1 tvg-id=\"%s\" tvg-name=\"%s\" tvg-logo=\"%s\" group-title=\"%s\"%s,%s",
                 tvgId != null ? tvgId : "",
                 tvgName != null ? tvgName : "",
                 tvgLogo != null ? tvgLogo : "",
                 groupStr,
+                catchupAttrs,
                 updatedTitle);
     }
 
@@ -342,6 +387,9 @@ public class IptvChannel implements Serializable {
         c.discoveredByScan = this.discoveredByScan;
         c.favorite = this.favorite;
         c.ispName = this.ispName;
+        c.catchupType = this.catchupType;
+        c.catchupSource = this.catchupSource;
+        c.catchupDays = this.catchupDays;
         return c;
     }
 

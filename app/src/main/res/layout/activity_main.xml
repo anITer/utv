@@ -450,7 +450,156 @@
                 android:ellipsize="end"
                 android:includeFontPadding="false"
                 android:singleLine="true"
-                android:text="遥控器导航: [◄/►]调出频道列表/切换按钮  [OK]调出信息页/确认按钮  [▲/▼]上下换台  [长按OK/菜单]快捷面板"
+                android:text="遥控器导航: [◄/►]调出频道列表/切换按钮  [OK]调出信息页/确认按钮  [长按OK 2秒]时移回看  [▲/▼]上下换台  [菜单]快捷面板"
+                android:textColor="@color/text_muted"
+                android:textSize="12sp" />
+        </LinearLayout>
+    </RelativeLayout>
+
+    <!-- 4.5 北京联通 IPTV 时移回看进度条与缩略图预览浮层 (长按 OK 键 2 秒呼出) -->
+    <RelativeLayout
+        android:id="@+id/timeshift_overlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:clipChildren="false"
+        android:clipToPadding="false"
+        android:visibility="gone">
+
+        <!-- Seek 过程中的视频缩略图悬浮预览卡片 (跟随 SeekBar 游标上方显示) -->
+        <LinearLayout
+            android:id="@+id/timeshift_thumbnail_container"
+            android:layout_width="224dp"
+            android:layout_height="wrap_content"
+            android:layout_above="@+id/timeshift_bar_card"
+            android:layout_centerHorizontal="true"
+            android:layout_marginBottom="12dp"
+            android:background="@drawable/bg_md3_hud_surface"
+            android:elevation="16dp"
+            android:gravity="center_horizontal"
+            android:orientation="vertical"
+            android:padding="8dp"
+            android:visibility="gone">
+
+            <ImageView
+                android:id="@+id/iv_timeshift_thumbnail"
+                android:layout_width="208dp"
+                android:layout_height="117dp"
+                android:background="#0F172A"
+                android:contentDescription="时移缩略图画面"
+                android:scaleType="fitXY" />
+
+            <TextView
+                android:id="@+id/tv_timeshift_thumb_time"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:fontFamily="monospace"
+                android:includeFontPadding="false"
+                android:singleLine="true"
+                android:text="12:00:00 (-00:05:00)"
+                android:textColor="@color/md_theme_dark_primary"
+                android:textSize="13sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <!-- 底部时移 SeekBar 控制卡片 -->
+        <LinearLayout
+            android:id="@+id/timeshift_bar_card"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_alignParentBottom="true"
+            android:layout_marginHorizontal="18dp"
+            android:layout_marginBottom="18dp"
+            android:background="@drawable/bg_md3_hud_surface"
+            android:elevation="14dp"
+            android:orientation="vertical"
+            android:paddingHorizontal="22dp"
+            android:paddingVertical="16dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/tv_timeshift_status_badge"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/bg_channel_num_pill"
+                    android:fontFamily="sans-serif-medium"
+                    android:includeFontPadding="false"
+                    android:paddingHorizontal="10dp"
+                    android:paddingVertical="4dp"
+                    android:singleLine="true"
+                    android:text="↺ 时移回看"
+                    android:textColor="@color/accent_amber"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tv_timeshift_channel_title"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="12dp"
+                    android:layout_weight="1"
+                    android:ellipsize="end"
+                    android:fontFamily="sans-serif-medium"
+                    android:includeFontPadding="false"
+                    android:singleLine="true"
+                    android:text="001 CCTV-1综合"
+                    android:textColor="@color/text_primary"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tv_timeshift_current_time"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="monospace"
+                    android:includeFontPadding="false"
+                    android:singleLine="true"
+                    android:text="12:00:00"
+                    android:textColor="@color/accent_green"
+                    android:textSize="15sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tv_timeshift_live_time"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:fontFamily="monospace"
+                    android:includeFontPadding="false"
+                    android:singleLine="true"
+                    android:text="/ 12:00:00 (直播)"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="13sp" />
+            </LinearLayout>
+
+            <SeekBar
+                android:id="@+id/sb_timeshift"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:focusable="true"
+                android:max="21600"
+                android:maxHeight="6dp"
+                android:minHeight="6dp"
+                android:paddingVertical="6dp"
+                android:progress="21600"
+                android:progressTint="@color/md_theme_dark_primary"
+                android:splitTrack="false"
+                android:thumbTint="@color/accent_amber" />
+
+            <TextView
+                android:id="@+id/tv_timeshift_hint"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:includeFontPadding="false"
+                android:singleLine="true"
+                android:text="遥控器导航: [◄/►]快退/快进时移并预览缩略图  [OK]立即跳转/返回直播  [返回]收起进度条"
                 android:textColor="@color/text_muted"
                 android:textSize="12sp" />
         </LinearLayout>

@@ -1108,6 +1108,87 @@ public class StartupSmokeTest {
         }
     }
 
+    @Test
+    public void testBeijingUnicomTimeshiftLongPressOkSeekBarAndThumbnailPreview() {
+        try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class)) {
+            MainActivity activity = controller.create().start().resume().visible().get();
+            activity.onWindowFocusChanged(true);
+
+            com.bjunicom.iptv.repository.ChannelRepository repo =
+                    com.bjunicom.iptv.repository.ChannelRepository.getInstance(activity);
+            com.bjunicom.iptv.config.IptvSettings settings =
+                    new com.bjunicom.iptv.config.IptvSettings(activity);
+            activity.switchIspProvider(com.bjunicom.iptv.config.IptvSettings.ISP_BEIJING_UNICOM);
+
+            com.bjunicom.iptv.model.IptvChannel current = activity.getCurrentChannel();
+            assertNotNull(current);
+            assertTrue("Default Beijing Unicom channel (CCTV-1) must support timeshift",
+                    current.supportsTimeshift());
+            assertTrue(current.getCatchupSource().contains("61.135.88.136/TVOD/"));
+
+            // Hide initial HUD via BACK key so we are in full-screen playback
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK));
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BACK));
+            assertEquals(android.view.View.GONE, activity.findViewById(R.id.player_hud_overlay).getVisibility());
+            assertFalse(activity.isTimeshiftSeekBarVisible());
+
+            // 1. Long-press OK key for 2 seconds (2000ms) -> timeshift SeekBar and thumbnail preview must appear
+            long downTime = android.os.SystemClock.uptimeMillis();
+            activity.dispatchKeyEvent(new KeyEvent(downTime, downTime, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER, 0));
+            org.robolectric.shadows.ShadowLooper.idleMainLooper(MainActivity.LONG_PRESS_OK_TIMESHIFT_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
+            activity.dispatchKeyEvent(new KeyEvent(downTime, downTime + MainActivity.LONG_PRESS_OK_TIMESHIFT_MS, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_CENTER, 0));
+
+            assertTrue(activity.isTimeshiftSeekBarVisible());
+            assertEquals(android.view.View.VISIBLE, activity.findViewById(R.id.timeshift_overlay).getVisibility());
+            assertEquals(android.view.View.VISIBLE, activity.findViewById(R.id.timeshift_thumbnail_container).getVisibility());
+            android.widget.SeekBar sbTimeshift = activity.findViewById(R.id.sb_timeshift);
+            assertNotNull(sbTimeshift);
+            assertEquals(MainActivity.TIMESHIFT_WINDOW_SEC, sbTimeshift.getProgress());
+            assertNotNull(activity.getLastTimeshiftThumbnailBitmap());
+
+            long initialLiveEdge = activity.getTimeshiftLiveEdgeEpochMs();
+            assertEquals(initialLiveEdge, activity.getTimeshiftTargetEpochMs());
+
+            // 2. Press DPAD_LEFT twice to seek backward (-60 seconds) -> verify SeekBar progress, target time, and thumbnail update
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_LEFT));
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_LEFT));
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_LEFT));
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_LEFT));
+
+            assertEquals(MainActivity.TIMESHIFT_WINDOW_SEC - 2 * MainActivity.TIMESHIFT_STEP_SEC, sbTimeshift.getProgress());
+            assertEquals(initialLiveEdge - 60_000L, activity.getTimeshiftTargetEpochMs());
+            assertEquals(android.view.View.VISIBLE, activity.findViewById(R.id.timeshift_thumbnail_container).getVisibility());
+            android.widget.TextView tvThumbTime = activity.findViewById(R.id.tv_timeshift_thumb_time);
+            assertTrue(tvThumbTime.getText().toString().contains("-01:00"));
+            assertNotNull(activity.getLastTimeshiftThumbnailBitmap());
+            assertEquals(com.bjunicom.iptv.player.TimeshiftThumbnailExtractor.THUMB_WIDTH,
+                    activity.getLastTimeshiftThumbnailBitmap().getWidth());
+            assertEquals(com.bjunicom.iptv.player.TimeshiftThumbnailExtractor.THUMB_HEIGHT,
+                    activity.getLastTimeshiftThumbnailBitmap().getHeight());
+
+            // 3. Press DPAD_RIGHT once to seek forward (+30 seconds -> -30 seconds from live)
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_RIGHT));
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_RIGHT));
+            assertEquals(MainActivity.TIMESHIFT_WINDOW_SEC - MainActivity.TIMESHIFT_STEP_SEC, sbTimeshift.getProgress());
+            assertEquals(initialLiveEdge - 30_000L, activity.getTimeshiftTargetEpochMs());
+            assertTrue(tvThumbTime.getText().toString().contains("-00:30"));
+
+            // 4. Advance looper past debounce (900ms) -> verify timeshift stream URL with playseek= is loaded into player
+            org.robolectric.shadows.ShadowLooper.idleMainLooper(1000, java.util.concurrent.TimeUnit.MILLISECONDS);
+            assertTrue(activity.isInTimeshiftPlayback());
+            IjkVideoView videoView = activity.findViewById(R.id.ijk_video_view);
+            assertNotNull(videoView.getPlaybackUri());
+            String playingUri = videoView.getPlaybackUri().toString();
+            assertTrue("Expected Beijing Unicom ts2hls playseek URL, got: " + playingUri,
+                    playingUri.contains("http://61.135.88.136/TVOD/") && playingUri.contains("playseek="));
+
+            // 5. Press BACK to hide timeshift SeekBar
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK));
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BACK));
+            assertFalse(activity.isTimeshiftSeekBarVisible());
+        }
+    }
+
     private static String readHttpRequest(java.io.InputStream in,
                                           java.util.List<String> contentTypesOut) throws Exception {
         java.io.ByteArrayOutputStream headerBuf = new java.io.ByteArrayOutputStream();
