@@ -232,8 +232,8 @@ public class TimeshiftThumbnailExtractor {
         if (baseSnapshot != null && !baseSnapshot.isRecycled()) {
             RectF dst = new RectF(0, 0, THUMB_WIDTH, THUMB_HEIGHT);
             canvas.drawBitmap(baseSnapshot, null, dst, paint);
-            // 叠加半透明暗色遮罩使时间戳与回看标识清晰可读
-            paint.setColor(Color.argb(115, 10, 15, 28));
+            // 叠加高透光暗色遮罩，避免遮挡缩略图中的台标与关键画面细节
+            paint.setColor(Color.argb(72, 10, 15, 28));
             canvas.drawRect(0, 0, THUMB_WIDTH, THUMB_HEIGHT, paint);
         } else {
             // 根据目标时间点生成动态渐变背景与模拟视频帧画面纹理（不同时间点画面特征随之动态变化）
@@ -285,8 +285,8 @@ public class TimeshiftThumbnailExtractor {
         Canvas canvas = new Canvas(result);
         Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
-        // 顶部频道名称与「北京联通时移」角标
-        paint.setColor(Color.argb(170, 15, 23, 42));
+        // 顶部频道名称与「北京联通时移」角标 (高透光底栏 + 文字立体阴影)
+        paint.setColor(Color.argb(115, 15, 23, 42));
         canvas.drawRect(0, 0, THUMB_WIDTH, 34, paint);
 
         String chTitle = (channel != null && !TextUtils.isEmpty(channel.getDisplayName()))
@@ -295,6 +295,7 @@ public class TimeshiftThumbnailExtractor {
         paint.setColor(Color.parseColor("#F8FAFC"));
         paint.setTextSize(14f);
         paint.setFakeBoldText(true);
+        paint.setShadowLayer(3f, 0f, 1.5f, Color.argb(210, 0, 0, 0));
         canvas.drawText(chTitle, 12f, 22f, paint);
 
         long diffSec = Math.max(0L, (liveEdgeEpochMs - targetEpochMs) / 1000L);
@@ -304,8 +305,9 @@ public class TimeshiftThumbnailExtractor {
         float badgeW = paint.measureText(badgeText);
         canvas.drawText(badgeText, THUMB_WIDTH - badgeW - 12f, 22f, paint);
 
-        // 底部时间点胶囊栏
-        paint.setColor(Color.argb(190, 15, 23, 42));
+        // 底部时间点胶囊栏 (高透光底栏)
+        paint.clearShadowLayer();
+        paint.setColor(Color.argb(128, 15, 23, 42));
         canvas.drawRect(0, THUMB_HEIGHT - 44, THUMB_WIDTH, THUMB_HEIGHT, paint);
 
         SimpleDateFormat sdf = new SimpleDateFormat("MM-dd HH:mm:ss", Locale.US);
@@ -315,6 +317,7 @@ public class TimeshiftThumbnailExtractor {
         paint.setColor(Color.parseColor("#38BDF8"));
         paint.setTextSize(17f);
         paint.setFakeBoldText(true);
+        paint.setShadowLayer(3f, 0f, 1.5f, Color.argb(210, 0, 0, 0));
         canvas.drawText(timeStr, 12f, THUMB_HEIGHT - 15f, paint);
 
         String offsetLabel = formatOffsetText(diffSec);
@@ -323,6 +326,7 @@ public class TimeshiftThumbnailExtractor {
         paint.setFakeBoldText(false);
         float offsetW = paint.measureText(offsetLabel);
         canvas.drawText(offsetLabel, THUMB_WIDTH - offsetW - 12f, THUMB_HEIGHT - 16f, paint);
+        paint.clearShadowLayer();
 
         return result;
     }

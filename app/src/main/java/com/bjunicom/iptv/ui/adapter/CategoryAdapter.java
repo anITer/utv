@@ -132,12 +132,14 @@ public class CategoryAdapter extends RecyclerView.Adapter<CategoryAdapter.ViewHo
         holder.tvName.setText(cat);
         boolean isSelected = cat.equals(selectedCategory);
         holder.tvName.setSelected(isSelected);
+        com.bjunicom.iptv.ui.MainActivity.applyTranslucentEdgeShadow(holder.tvName, 4f, 8f);
 
         holder.tvName.setOnClickListener(v -> selectCategoryAt(position));
 
         holder.tvName.setOnFocusChangeListener((v, hasFocus) -> {
             v.animate().scaleX(hasFocus ? 1.04f : 1.0f).scaleY(hasFocus ? 1.04f : 1.0f).setDuration(120).start();
-            v.setElevation(hasFocus ? 6f : 0f);
+            v.setElevation(hasFocus ? 10f : 4f);
+            v.setTranslationZ(hasFocus ? 3f : 0f);
             if (hasFocus) {
                 centerTabInRecyclerView(v);
             } else {

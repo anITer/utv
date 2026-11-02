@@ -375,7 +375,72 @@ public class MainActivity extends AppCompatActivity {
         });
 
         setupButtonFocusEffects();
+        setupPlaybackUiEdgeShadows();
         updateIspButtonsVisualState();
+    }
+
+    /**
+     * 为高透光播放界面组件绑定 100% Alpha 的圆角硬件阴影轮廓 (ViewOutlineProvider)：
+     * 解决 Android 默认根据背景透明度衰减硬件阴影导致半透明 UI 阴影变淡的问题，使边缘立体感更强。
+     */
+    public static void applyTranslucentEdgeShadow(View view, float elevationDp, float cornerRadiusDp) {
+        applyTranslucentEdgeShadow(view, elevationDp, cornerRadiusDp, false);
+    }
+
+    public static void applyTranslucentEdgeShadow(View view,
+                                                  float elevationDp,
+                                                  float cornerRadiusDp,
+                                                  boolean clipToOutline) {
+        if (view == null) {
+            return;
+        }
+        float density = view.getResources().getDisplayMetrics().density;
+        final float radiusPx = cornerRadiusDp * density;
+        view.setElevation(elevationDp * density);
+        view.setClipToOutline(clipToOutline);
+        view.setOutlineProvider(new android.view.ViewOutlineProvider() {
+            @Override
+            public void getOutline(View v, android.graphics.Outline outline) {
+                int w = v.getWidth();
+                int h = v.getHeight();
+                if (w > 0 && h > 0) {
+                    outline.setRoundRect(0, 0, w, h, radiusPx);
+                    outline.setAlpha(1.0f);
+                }
+            }
+        });
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            view.setOutlineAmbientShadowColor(0xCC000000);
+            view.setOutlineSpotShadowColor(0xE6000000);
+        }
+    }
+
+    private void setupPlaybackUiEdgeShadows() {
+        applyTranslucentEdgeShadow(findViewById(R.id.top_hud_bar), 16f, 8f);
+        applyTranslucentEdgeShadow(findViewById(R.id.bottom_hud_card), 18f, 8f);
+        applyTranslucentEdgeShadow(drawerPanel, 24f, 8f, true);
+        applyTranslucentEdgeShadow(loadingOverlay, 18f, 8f);
+        applyTranslucentEdgeShadow(tvNumberInputOsd, 20f, 8f);
+        applyTranslucentEdgeShadow(timeshiftThumbnailContainer, 22f, 8f);
+        applyTranslucentEdgeShadow(findViewById(R.id.timeshift_bar_card), 20f, 8f);
+        applyTranslucentEdgeShadow(etSearchChannel, 6f, 8f);
+        if (rvCategories != null) {
+            rvCategories.setClipChildren(true);
+            rvCategories.setClipToPadding(true);
+            rvCategories.setOutlineProvider(android.view.ViewOutlineProvider.BOUNDS);
+            rvCategories.setClipToOutline(true);
+        }
+        if (rvChannels != null) {
+            rvChannels.setClipChildren(true);
+            rvChannels.setClipToPadding(true);
+            rvChannels.setOutlineProvider(android.view.ViewOutlineProvider.BOUNDS);
+            rvChannels.setClipToOutline(true);
+        }
+        if (hudButtons != null) {
+            for (View btn : hudButtons) {
+                applyTranslucentEdgeShadow(btn, 4f, 8f);
+            }
+        }
     }
 
     private void setupButtonFocusEffects() {
@@ -476,7 +541,8 @@ public class MainActivity extends AppCompatActivity {
             btn.setSelected(isTarget);
             btn.setBackgroundResource(isTarget ? R.drawable.bg_md3_primary_button : R.drawable.bg_group_tab);
             btn.setBackgroundTintList(null);
-            btn.setElevation(isTarget ? 12f : 0f);
+            btn.setElevation(isTarget ? 14f : 4f);
+            btn.setTranslationZ(isTarget ? 4f : 0f);
             btn.setScaleX(isTarget ? 1.04f : 1.0f);
             btn.setScaleY(isTarget ? 1.04f : 1.0f);
         }

@@ -159,15 +159,17 @@ public class ChannelAdapter extends RecyclerView.Adapter<ChannelAdapter.ViewHold
         boolean isPlaying = currentPlayingUrl.equals(ch.getRawUrl());
         holder.itemView.setSelected(isPlaying);
         holder.itemView.setLongClickable(true);
+        com.bjunicom.iptv.ui.MainActivity.applyTranslucentEdgeShadow(holder.itemView, 5f, 8f);
 
-        // 电视遥控器焦点缩放视觉反馈，并将当前获焦项自动滚动至列表可视区域正中间
+        // 电视遥控器焦点缩放视觉反馈与立体阴影抬升，并将当前获焦项自动滚动至列表可视区域正中间
         holder.itemView.setOnFocusChangeListener((v, hasFocus) -> {
             v.animate()
                     .scaleX(hasFocus ? 1.015f : 1.0f)
                     .scaleY(hasFocus ? 1.015f : 1.0f)
                     .setDuration(100)
                     .start();
-            v.setElevation(hasFocus ? 2f : 0f);
+            v.setElevation(hasFocus ? 14f : 5f);
+            v.setTranslationZ(hasFocus ? 4f : 0f);
             if (hasFocus) {
                 centerItemInRecyclerView(v);
             }

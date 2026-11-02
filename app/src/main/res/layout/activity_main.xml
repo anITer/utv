@@ -15,19 +15,22 @@
         android:layout_gravity="center"
         android:focusable="false" />
 
-    <!-- 2. Material 3 缓冲加载与状态提示浮层 (Elevated Surface Container Card) -->
+    <!-- 2. Material 3 缓冲加载与状态提示浮层 (高透光 + 边缘立体阴影) -->
     <LinearLayout
         android:id="@+id/loading_overlay"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="center"
         android:background="@drawable/bg_md3_hud_surface"
-        android:elevation="12dp"
+        android:elevation="18dp"
         android:gravity="center"
         android:minWidth="220dp"
         android:orientation="vertical"
+        android:outlineAmbientShadowColor="@color/ui_edge_shadow_ambient"
+        android:outlineSpotShadowColor="@color/ui_edge_shadow_spot"
         android:paddingHorizontal="28dp"
         android:paddingVertical="22dp"
+        android:translationZ="4dp"
         android:visibility="gone">
 
         <ProgressBar
@@ -43,12 +46,16 @@
             android:layout_marginTop="12dp"
             android:fontFamily="sans-serif-medium"
             android:letterSpacing="0.01"
+            android:shadowColor="@color/ui_text_shadow"
+            android:shadowDx="0"
+            android:shadowDy="1.5"
+            android:shadowRadius="3.5"
             android:text="正在连接组播流..."
             android:textColor="@color/text_primary"
             android:textSize="14sp" />
     </LinearLayout>
 
-    <!-- 3. 右上角遥控器数字选台 Material 3 悬浮胶囊 OSD -->
+    <!-- 3. 右上角遥控器数字选台 Material 3 悬浮胶囊 OSD (高透光 + 边缘立体阴影) -->
     <TextView
         android:id="@+id/tv_number_input_osd"
         android:layout_width="wrap_content"
@@ -57,14 +64,21 @@
         android:layout_marginTop="80dp"
         android:layout_marginEnd="28dp"
         android:background="@drawable/bg_md3_hud_surface"
-        android:elevation="14dp"
+        android:elevation="20dp"
         android:fontFamily="sans-serif-medium"
         android:letterSpacing="0.02"
+        android:outlineAmbientShadowColor="@color/ui_edge_shadow_ambient"
+        android:outlineSpotShadowColor="@color/ui_edge_shadow_spot"
         android:paddingHorizontal="24dp"
         android:paddingVertical="12dp"
+        android:shadowColor="@color/ui_text_shadow"
+        android:shadowDx="0"
+        android:shadowDy="2"
+        android:shadowRadius="4.0"
         android:textColor="@color/accent_green"
         android:textSize="24sp"
         android:textStyle="bold"
+        android:translationZ="6dp"
         android:visibility="gone"
         tools:text="001  CCTV-1综合" />
 
@@ -78,8 +92,9 @@
         android:descendantFocusability="afterDescendants"
         android:visibility="visible">
 
-        <!-- 顶部悬浮 Top App Bar (Material 3 Surface Container) -->
+        <!-- 顶部悬浮 Top App Bar (高透光避免遮挡左上/右上角台标 + 边缘立体阴影) -->
         <LinearLayout
+            android:id="@+id/top_hud_bar"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_alignParentTop="true"
@@ -88,11 +103,14 @@
             android:background="@drawable/bg_md3_hud_surface"
             android:clipChildren="false"
             android:clipToPadding="false"
-            android:elevation="8dp"
+            android:elevation="16dp"
             android:gravity="center_vertical"
             android:orientation="horizontal"
+            android:outlineAmbientShadowColor="@color/ui_edge_shadow_ambient"
+            android:outlineSpotShadowColor="@color/ui_edge_shadow_spot"
             android:paddingHorizontal="16dp"
-            android:paddingVertical="10dp">
+            android:paddingVertical="10dp"
+            android:translationZ="4dp">
 
             <Button
                 android:id="@+id/btn_toggle_drawer"
@@ -142,6 +160,10 @@
                 android:ellipsize="end"
                 android:fontFamily="sans-serif-medium"
                 android:includeFontPadding="false"
+                android:shadowColor="@color/ui_text_shadow"
+                android:shadowDx="0"
+                android:shadowDy="1.5"
+                android:shadowRadius="3.5"
                 android:singleLine="true"
                 android:text="001 CCTV-1综合 [高清]"
                 android:textColor="@color/text_primary"
@@ -155,10 +177,15 @@
                 android:layout_height="wrap_content"
                 android:layout_marginEnd="12dp"
                 android:background="@drawable/bg_channel_num_pill"
+                android:elevation="4dp"
                 android:fontFamily="monospace"
                 android:includeFontPadding="false"
                 android:paddingHorizontal="12dp"
                 android:paddingVertical="6dp"
+                android:shadowColor="@color/ui_text_shadow"
+                android:shadowDx="0"
+                android:shadowDy="1.5"
+                android:shadowRadius="3.0"
                 android:singleLine="true"
                 android:text="0 KB/s | 25 fps"
                 android:textColor="@color/md_theme_dark_primary"
@@ -216,8 +243,9 @@
                 android:textSize="13sp" />
         </LinearLayout>
 
-        <!-- 底部悬浮播放信息与快捷控制卡片 (Material 3 Elevated Card) -->
+        <!-- 底部悬浮播放信息与快捷控制卡片 (高透光 + 边缘立体阴影) -->
         <LinearLayout
+            android:id="@+id/bottom_hud_card"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_alignParentBottom="true"
@@ -226,10 +254,13 @@
             android:background="@drawable/bg_md3_hud_surface"
             android:clipChildren="false"
             android:clipToPadding="false"
-            android:elevation="10dp"
+            android:elevation="18dp"
             android:orientation="vertical"
+            android:outlineAmbientShadowColor="@color/ui_edge_shadow_ambient"
+            android:outlineSpotShadowColor="@color/ui_edge_shadow_spot"
             android:paddingHorizontal="20dp"
-            android:paddingVertical="14dp">
+            android:paddingVertical="14dp"
+            android:translationZ="4dp">
 
             <!-- 第一行：频道徽章 + 标题 + 动作按钮组 -->
             <LinearLayout
@@ -246,10 +277,15 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:background="@drawable/bg_channel_num_pill"
+                    android:elevation="4dp"
                     android:fontFamily="monospace"
                     android:includeFontPadding="false"
                     android:paddingHorizontal="12dp"
                     android:paddingVertical="5dp"
+                    android:shadowColor="@color/ui_text_shadow"
+                    android:shadowDx="0"
+                    android:shadowDy="1.5"
+                    android:shadowRadius="3.0"
                     android:singleLine="true"
                     android:text="001"
                     android:textColor="@color/accent_amber"
@@ -265,6 +301,10 @@
                     android:fontFamily="sans-serif-medium"
                     android:includeFontPadding="false"
                     android:maxWidth="240dp"
+                    android:shadowColor="@color/ui_text_shadow"
+                    android:shadowDx="0"
+                    android:shadowDy="1.5"
+                    android:shadowRadius="3.5"
                     android:singleLine="true"
                     android:text="CCTV-1综合"
                     android:textColor="@color/text_primary"
@@ -277,9 +317,14 @@
                     android:layout_height="wrap_content"
                     android:layout_marginStart="10dp"
                     android:background="@drawable/bg_res_badge_hd"
+                    android:elevation="4dp"
                     android:includeFontPadding="false"
                     android:paddingHorizontal="9dp"
                     android:paddingVertical="3dp"
+                    android:shadowColor="@color/ui_text_shadow"
+                    android:shadowDx="0"
+                    android:shadowDy="1"
+                    android:shadowRadius="2.5"
                     android:singleLine="true"
                     android:text="高清"
                     android:textColor="@color/text_primary"
@@ -295,6 +340,10 @@
                     android:layout_weight="1"
                     android:ellipsize="end"
                     android:includeFontPadding="false"
+                    android:shadowColor="@color/ui_text_shadow"
+                    android:shadowDx="0"
+                    android:shadowDy="1.5"
+                    android:shadowRadius="3.0"
                     android:singleLine="true"
                     android:text="[高清]央视"
                     android:textColor="@color/text_secondary"
@@ -406,7 +455,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="1dp"
                 android:layout_marginVertical="8dp"
-                android:background="@color/md_theme_dark_outlineVariant" />
+                android:background="#40A8C7FA" />
 
             <!-- 第二行：流协议地址与音视频轨道详情 -->
             <LinearLayout
@@ -423,6 +472,10 @@
                     android:ellipsize="middle"
                     android:fontFamily="monospace"
                     android:includeFontPadding="false"
+                    android:shadowColor="@color/ui_text_shadow"
+                    android:shadowDx="0"
+                    android:shadowDy="1.5"
+                    android:shadowRadius="3.0"
                     android:singleLine="true"
                     android:text="组播源: rtp://239.3.1.129:8008 -> http://192.168.2.1:8012/rtp/239.3.1.129:8008"
                     android:textColor="@color/text_secondary"
@@ -435,6 +488,10 @@
                     android:layout_marginStart="14dp"
                     android:fontFamily="sans-serif-medium"
                     android:includeFontPadding="false"
+                    android:shadowColor="@color/ui_text_shadow"
+                    android:shadowDx="0"
+                    android:shadowDy="1.5"
+                    android:shadowRadius="3.0"
                     android:singleLine="true"
                     android:text="Video: #1 h264, 1920x1080,25fps | Audio: #1 mp2,2ch,48khz"
                     android:textColor="@color/accent_green"
@@ -449,9 +506,13 @@
                 android:layout_marginTop="6dp"
                 android:ellipsize="end"
                 android:includeFontPadding="false"
+                android:shadowColor="@color/ui_text_shadow"
+                android:shadowDx="0"
+                android:shadowDy="1.5"
+                android:shadowRadius="3.0"
                 android:singleLine="true"
                 android:text="遥控器导航: [◄/►]调出频道列表/切换按钮  [OK]调出信息页/确认按钮  [长按OK 2秒]时移回看  [▲/▼]上下换台  [菜单]快捷面板"
-                android:textColor="@color/text_muted"
+                android:textColor="@color/text_secondary"
                 android:textSize="12sp" />
         </LinearLayout>
     </RelativeLayout>
@@ -474,17 +535,20 @@
             android:layout_centerHorizontal="true"
             android:layout_marginBottom="12dp"
             android:background="@drawable/bg_md3_hud_surface"
-            android:elevation="16dp"
+            android:elevation="22dp"
             android:gravity="center_horizontal"
             android:orientation="vertical"
+            android:outlineAmbientShadowColor="@color/ui_edge_shadow_ambient"
+            android:outlineSpotShadowColor="@color/ui_edge_shadow_spot"
             android:padding="8dp"
+            android:translationZ="6dp"
             android:visibility="gone">
 
             <ImageView
                 android:id="@+id/iv_timeshift_thumbnail"
                 android:layout_width="208dp"
                 android:layout_height="117dp"
-                android:background="#0F172A"
+                android:background="#800F172A"
                 android:contentDescription="时移缩略图画面"
                 android:scaleType="fitXY" />
 
@@ -495,6 +559,10 @@
                 android:layout_marginTop="6dp"
                 android:fontFamily="monospace"
                 android:includeFontPadding="false"
+                android:shadowColor="@color/ui_text_shadow"
+                android:shadowDx="0"
+                android:shadowDy="1.5"
+                android:shadowRadius="3.0"
                 android:singleLine="true"
                 android:text="12:00:00 (-00:05:00)"
                 android:textColor="@color/md_theme_dark_primary"
@@ -511,10 +579,13 @@
             android:layout_marginHorizontal="18dp"
             android:layout_marginBottom="18dp"
             android:background="@drawable/bg_md3_hud_surface"
-            android:elevation="14dp"
+            android:elevation="20dp"
             android:orientation="vertical"
+            android:outlineAmbientShadowColor="@color/ui_edge_shadow_ambient"
+            android:outlineSpotShadowColor="@color/ui_edge_shadow_spot"
             android:paddingHorizontal="22dp"
-            android:paddingVertical="16dp">
+            android:paddingVertical="16dp"
+            android:translationZ="4dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -527,10 +598,15 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:background="@drawable/bg_channel_num_pill"
+                    android:elevation="4dp"
                     android:fontFamily="sans-serif-medium"
                     android:includeFontPadding="false"
                     android:paddingHorizontal="10dp"
                     android:paddingVertical="4dp"
+                    android:shadowColor="@color/ui_text_shadow"
+                    android:shadowDx="0"
+                    android:shadowDy="1.5"
+                    android:shadowRadius="3.0"
                     android:singleLine="true"
                     android:text="↺ 时移回看"
                     android:textColor="@color/accent_amber"
@@ -546,6 +622,10 @@
                     android:ellipsize="end"
                     android:fontFamily="sans-serif-medium"
                     android:includeFontPadding="false"
+                    android:shadowColor="@color/ui_text_shadow"
+                    android:shadowDx="0"
+                    android:shadowDy="1.5"
+                    android:shadowRadius="3.5"
                     android:singleLine="true"
                     android:text="001 CCTV-1综合"
                     android:textColor="@color/text_primary"
@@ -558,6 +638,10 @@
                     android:layout_height="wrap_content"
                     android:fontFamily="monospace"
                     android:includeFontPadding="false"
+                    android:shadowColor="@color/ui_text_shadow"
+                    android:shadowDx="0"
+                    android:shadowDy="1.5"
+                    android:shadowRadius="3.0"
                     android:singleLine="true"
                     android:text="12:00:00"
                     android:textColor="@color/accent_green"
@@ -571,6 +655,10 @@
                     android:layout_marginStart="8dp"
                     android:fontFamily="monospace"
                     android:includeFontPadding="false"
+                    android:shadowColor="@color/ui_text_shadow"
+                    android:shadowDx="0"
+                    android:shadowDy="1.5"
+                    android:shadowRadius="3.0"
                     android:singleLine="true"
                     android:text="/ 12:00:00 (直播)"
                     android:textColor="@color/text_secondary"
@@ -598,14 +686,18 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="6dp"
                 android:includeFontPadding="false"
+                android:shadowColor="@color/ui_text_shadow"
+                android:shadowDx="0"
+                android:shadowDy="1.5"
+                android:shadowRadius="3.0"
                 android:singleLine="true"
                 android:text="遥控器导航: [◄/►]快退/快进时移并预览缩略图  [OK]立即跳转/返回直播  [返回]收起进度条"
-                android:textColor="@color/text_muted"
+                android:textColor="@color/text_secondary"
                 android:textSize="12sp" />
         </LinearLayout>
     </RelativeLayout>
 
-    <!-- 5. 左侧 Material Design 3 Navigation Drawer / Side Sheet 频道面板 -->
+    <!-- 5. 左侧 Material Design 3 Navigation Drawer / Side Sheet 频道面板 (高透光避免遮挡左上角台标 + 边缘立体阴影) -->
     <LinearLayout
         android:id="@+id/channel_drawer_panel"
         android:layout_width="456dp"
@@ -616,10 +708,13 @@
         android:clipChildren="true"
         android:clipToPadding="true"
         android:descendantFocusability="afterDescendants"
-        android:elevation="18dp"
+        android:elevation="24dp"
         android:orientation="vertical"
+        android:outlineAmbientShadowColor="@color/ui_edge_shadow_ambient"
+        android:outlineSpotShadowColor="@color/ui_edge_shadow_spot"
         android:paddingHorizontal="16dp"
         android:paddingVertical="16dp"
+        android:translationZ="6dp"
         android:visibility="gone">
 
         <!-- Material 3 Pill Search Bar -->
@@ -631,6 +726,7 @@
             android:background="@drawable/bg_md3_search_bar"
             android:drawableStart="@drawable/ic_md_search"
             android:drawablePadding="10dp"
+            android:elevation="6dp"
             android:focusable="false"
             android:focusableInTouchMode="false"
             android:gravity="center_vertical"
@@ -641,25 +737,30 @@
             android:nextFocusDown="@id/rv_categories"
             android:paddingHorizontal="14dp"
             android:paddingVertical="0dp"
+            android:shadowColor="@color/ui_text_shadow"
+            android:shadowDx="0"
+            android:shadowDy="1"
+            android:shadowRadius="2.5"
             android:singleLine="true"
             android:textColor="@color/text_primary"
-            android:textColorHint="@color/text_muted"
+            android:textColorHint="@color/text_secondary"
             android:textSize="13sp" />
 
-        <!-- Material 3 Filter Chips 横向分类栏 -->
+        <!-- Material 3 Filter Chips 横向分类栏 (严格限制在频道列表右边界范围内) -->
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/rv_categories"
             android:layout_width="match_parent"
-            android:layout_height="48dp"
+            android:layout_height="46dp"
+            android:layout_marginHorizontal="10dp"
             android:layout_marginTop="8dp"
-            android:clipChildren="false"
-            android:clipToPadding="false"
+            android:clipChildren="true"
+            android:clipToPadding="true"
             android:descendantFocusability="afterDescendants"
-            android:elevation="4dp"
             android:focusable="true"
             android:nextFocusDown="@id/rv_channels"
             android:nextFocusUp="@id/et_search_channel"
-            android:paddingHorizontal="4dp"
+            android:overScrollMode="never"
+            android:paddingHorizontal="0dp"
             android:paddingVertical="4dp" />
 
         <!-- Material 3 频道卡片列表 -->
@@ -674,6 +775,7 @@
             android:descendantFocusability="afterDescendants"
             android:focusable="false"
             android:nextFocusUp="@id/rv_categories"
+            android:overScrollMode="never"
             android:paddingHorizontal="6dp"
             android:paddingVertical="4dp"
             android:scrollbars="vertical" />
@@ -685,9 +787,13 @@
             android:layout_marginTop="6dp"
             android:gravity="center"
             android:includeFontPadding="false"
+            android:shadowColor="@color/ui_text_shadow"
+            android:shadowDx="0"
+            android:shadowDy="1.5"
+            android:shadowRadius="3.0"
             android:singleLine="true"
             android:text="[▲/▼]选台  [◄/►]切换分类  [OK]播放  [长按OK]收藏  [返回]收起"
-            android:textColor="@color/text_muted"
+            android:textColor="@color/text_secondary"
             android:textSize="12sp" />
     </LinearLayout>
 

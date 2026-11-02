@@ -1186,6 +1186,42 @@ public class StartupSmokeTest {
             activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK));
             activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BACK));
             assertFalse(activity.isTimeshiftSeekBarVisible());
+
+            // 6. Verify playback UI containers have translucent backgrounds, 3D edge shadow OutlineProvider & text shadows
+            android.view.View topHudBar = activity.findViewById(R.id.top_hud_bar);
+            android.view.View bottomHudCard = activity.findViewById(R.id.bottom_hud_card);
+            android.view.View drawerPanel = activity.findViewById(R.id.channel_drawer_panel);
+            assertNotNull(topHudBar);
+            assertNotNull(bottomHudCard);
+            assertNotNull(drawerPanel);
+            assertTrue(topHudBar.getElevation() >= 16f);
+            assertTrue(bottomHudCard.getElevation() >= 18f);
+            assertTrue(drawerPanel.getElevation() >= 20f);
+            assertNotNull(topHudBar.getOutlineProvider());
+            assertNotNull(bottomHudCard.getOutlineProvider());
+            assertNotNull(drawerPanel.getOutlineProvider());
+            assertTrue(drawerPanel.getClipToOutline());
+            assertTrue(((android.view.ViewGroup) drawerPanel).getClipChildren());
+            assertTrue(((android.view.ViewGroup) drawerPanel).getClipToPadding());
+            android.view.ViewGroup rootContainer = activity.findViewById(R.id.root_container);
+            assertTrue(rootContainer.getClipChildren());
+            androidx.recyclerview.widget.RecyclerView rvCats = activity.findViewById(R.id.rv_categories);
+            androidx.recyclerview.widget.RecyclerView rvChans = activity.findViewById(R.id.rv_channels);
+            assertNotNull(rvCats);
+            assertNotNull(rvChans);
+            assertTrue(rvCats.getClipChildren());
+            assertTrue(rvCats.getClipToPadding());
+            assertTrue(rvCats.getClipToOutline());
+            drawerPanel.setVisibility(android.view.View.VISIBLE);
+            drawerPanel.measure(
+                    android.view.View.MeasureSpec.makeMeasureSpec(456, android.view.View.MeasureSpec.EXACTLY),
+                    android.view.View.MeasureSpec.makeMeasureSpec(1080, android.view.View.MeasureSpec.EXACTLY));
+            drawerPanel.layout(0, 0, 456, 1080);
+            int channelListRightBoundary = rvChans.getRight() - rvChans.getPaddingRight() - 4;
+            assertTrue("Category right bound must not exceed channel list right boundary",
+                    rvCats.getRight() <= channelListRightBoundary);
+            android.widget.TextView tvTopTitle = activity.findViewById(R.id.tv_top_channel_title);
+            assertTrue(tvTopTitle.getShadowRadius() > 0f);
         }
     }
 

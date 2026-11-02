@@ -29,14 +29,17 @@
     <color name="md_theme_dark_outlineVariant">#2E3C54</color>
     <color name="md_theme_dark_ripple">#33A8C7FA</color>
 
-    <!-- App Semantic & Legacy Mapped Tokens -->
+    <!-- App Semantic & Legacy Mapped Tokens (高透光 + 立体层次配色) -->
     <color name="bg_primary">#0B0F17</color>
-    <color name="bg_surface">#131A26</color>
-    <color name="bg_panel">#EB121926</color>
-    <color name="bg_panel_solid">#161F2E</color>
-    <color name="bg_card">#1B2536</color>
-    <color name="bg_card_selected">#12397A</color>
-    <color name="bg_card_focused">#1E4E9E</color>
+    <color name="bg_surface">#8C131A26</color>
+    <color name="bg_panel">#80121926</color>
+    <color name="bg_panel_solid">#99161F2E</color>
+    <color name="bg_card">#591B2536</color>
+    <color name="bg_card_selected">#8812397A</color>
+    <color name="bg_card_focused">#B81E4E9E</color>
+    <color name="ui_edge_shadow_ambient">#CC000000</color>
+    <color name="ui_edge_shadow_spot">#E6000000</color>
+    <color name="ui_text_shadow">#CC000000</color>
 
     <color name="accent_blue">#3B82F6</color>
     <color name="accent_cyan">#38BDF8</color>
