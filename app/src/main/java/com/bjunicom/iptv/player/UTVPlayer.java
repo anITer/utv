@@ -23,6 +23,7 @@ import com.google.android.exoplayer2.ExoPlaybackException;
 import com.google.android.exoplayer2.Format;
 import com.google.android.exoplayer2.MediaItem;
 import com.google.android.exoplayer2.PlaybackException;
+import com.google.android.exoplayer2.PlaybackParameters;
 import com.google.android.exoplayer2.Player;
 import com.google.android.exoplayer2.Renderer;
 import com.google.android.exoplayer2.audio.AudioRendererEventListener;
@@ -75,16 +76,24 @@ public class UTVPlayer extends AbstractMediaPlayer {
     private final IptvSettings settings;
     private final UTVLoadControl loadControl;
     private final UTVStreamDataSource.Factory dataSourceFactory;
+    private final LivePauseFrameBuffer frameBuffer = new LivePauseFrameBuffer();
     private final ExoPlayer exoPlayer;
     private final DefaultTrackSelector trackSelector;
     private final Handler applicationHandler;
     private volatile String currentMediaId = "";
     private long mediaSequence;
     private volatile boolean forceMp2Software;
+    private volatile boolean decoderPaused = false;
     private boolean released;
     private PlaybackFailure lastFailure = PlaybackFailure.UNKNOWN;
     private int mp2AudioRendererIndex = -1;
     private final List<Integer> mediaCodecAudioRenderers = new ArrayList<>();
+    @Nullable
+    private AudioSink mp2AudioSink;
+    @Nullable
+    private AudioSink defaultAudioSink;
+    @Nullable
+    private LivePauseFrameBuffer.CatchUpStateListener externalCatchUpListener;
     private Map<String, String> currentHeaders = Collections.emptyMap();
 
     private final AtomicInteger codecReuseHitCount = new AtomicInteger(0);
@@ -419,7 +428,11 @@ public class UTVPlayer extends AbstractMediaPlayer {
             if (mp2Sink == null) {
                 mp2Sink = audioSink;
             }
-            if (owner != null) owner.mp2AudioRendererIndex = out.size();
+            if (owner != null) {
+                owner.mp2AudioRendererIndex = out.size();
+                owner.mp2AudioSink = mp2Sink;
+                owner.defaultAudioSink = audioSink;
+            }
             out.add(new Mp2DecoderAudioRenderer(eventHandler, eventListener, mp2Sink, owner));
             super.buildAudioRenderers(
                     context,
@@ -453,6 +466,24 @@ public class UTVPlayer extends AbstractMediaPlayer {
                 .build();
         this.applicationHandler = new Handler(exoPlayer.getApplicationLooper());
         this.exoPlayer.addAnalyticsListener(playerListener);
+        this.frameBuffer.setCatchUpStateListener(new LivePauseFrameBuffer.CatchUpStateListener() {
+            @Override
+            public void onCatchUpStarted(float speed) {
+                applyPlaybackSpeedInternal(speed);
+                if (externalCatchUpListener != null) {
+                    externalCatchUpListener.onCatchUpStarted(speed);
+                }
+            }
+
+            @Override
+            public void onCatchUpCompleted() {
+                applyPlaybackSpeedInternal(LivePauseFrameBuffer.NORMAL_PLAYBACK_SPEED);
+                loadControl.setLivePauseExpanded(false);
+                if (externalCatchUpListener != null) {
+                    externalCatchUpListener.onCatchUpCompleted();
+                }
+            }
+        });
 
         // 等待前台 Surface 创建；邻台预收流无需 Surface 或解码器。
         parkToPlaceholderSurface();
@@ -468,6 +499,102 @@ public class UTVPlayer extends AbstractMediaPlayer {
 
     public UTVLoadControl getLoadControl() {
         return loadControl;
+    }
+
+    public LivePauseFrameBuffer getFrameBuffer() {
+        return frameBuffer;
+    }
+
+    public int getFrameBufferSlotCapacity() {
+        return frameBuffer.getSlotCapacity();
+    }
+
+    public boolean isDecoderPaused() {
+        return decoderPaused;
+    }
+
+    public void setCatchUpStateListener(@Nullable LivePauseFrameBuffer.CatchUpStateListener listener) {
+        this.externalCatchUpListener = listener;
+    }
+
+    public boolean isCatchingUp() {
+        return frameBuffer.isCatchingUp();
+    }
+
+    public void setPlaybackSpeed(float speed) {
+        applyPlaybackSpeedInternal(speed);
+    }
+
+    private void applyPlaybackSpeedInternal(float speed) {
+        float safeSpeed = speed > 0f ? speed : LivePauseFrameBuffer.NORMAL_PLAYBACK_SPEED;
+        PlaybackParameters params = new PlaybackParameters(safeSpeed, 1.0f);
+        try {
+            exoPlayer.setPlaybackParameters(params);
+        } catch (Throwable ignored) {
+        }
+        try {
+            if (mp2AudioSink != null) {
+                mp2AudioSink.setPlaybackParameters(params);
+            }
+        } catch (Throwable ignored) {
+        }
+        try {
+            if (defaultAudioSink != null) {
+                defaultAudioSink.setPlaybackParameters(params);
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    public float getPlaybackSpeed() {
+        if (frameBuffer.isCatchingUp()) {
+            return frameBuffer.getPlaybackSpeed();
+        }
+        try {
+            PlaybackParameters params = exoPlayer.getPlaybackParameters();
+            if (params != null && params.speed > 0f) {
+                return params.speed;
+            }
+        } catch (Throwable ignored) {
+        }
+        return LivePauseFrameBuffer.NORMAL_PLAYBACK_SPEED;
+    }
+
+    public float getAudioPlaybackSpeed() {
+        if (frameBuffer.isCatchingUp()) {
+            return frameBuffer.getAudioPlaybackSpeed();
+        }
+        try {
+            if (mp2AudioSink != null && mp2AudioSink.getPlaybackParameters() != null) {
+                return mp2AudioSink.getPlaybackParameters().speed;
+            }
+            if (defaultAudioSink != null && defaultAudioSink.getPlaybackParameters() != null) {
+                return defaultAudioSink.getPlaybackParameters().speed;
+            }
+        } catch (Throwable ignored) {
+        }
+        return getPlaybackSpeed();
+    }
+
+    public boolean syncAndAdvanceCatchUpProgressMs(long realElapsedMs) {
+        if (!frameBuffer.isCatchingUp() || decoderPaused) {
+            return !frameBuffer.isCatchingUp();
+        }
+        try {
+            long posMs = exoPlayer.getCurrentPosition();
+            if (posMs > 0L) {
+                long playbackPtsUs = posMs * 1000L + frameBuffer.getTotalEvictedVideoDurationUs();
+                if (frameBuffer.updatePlaybackTimestampUs(playbackPtsUs)) {
+                    return true;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return frameBuffer.advanceCatchUpWithLiveStreamMs(realElapsedMs);
+    }
+
+    public boolean advanceCatchUpProgressMs(long realElapsedMs) {
+        return syncAndAdvanceCatchUpProgressMs(realElapsedMs);
     }
 
     public void preloadChannel(Uri uri) {
@@ -581,9 +708,13 @@ public class UTVPlayer extends AbstractMediaPlayer {
     public void prepareForSlotReuse() {
         preparedNotified = false;
         promotedFromPreload = false;
+        decoderPaused = false;
         videoWidth = 0;
         videoHeight = 0;
         activeAudioDecoderName = "";
+        frameBuffer.reset();
+        loadControl.setLivePauseExpanded(false);
+        applyPlaybackSpeedInternal(LivePauseFrameBuffer.NORMAL_PLAYBACK_SPEED);
     }
 
     // ==================== IMediaPlayer 接口实现 ====================
@@ -649,6 +780,10 @@ public class UTVPlayer extends AbstractMediaPlayer {
             return;
         }
         preparedNotified = false;
+        decoderPaused = false;
+        frameBuffer.reset();
+        loadControl.setLivePauseExpanded(false);
+        applyPlaybackSpeedInternal(LivePauseFrameBuffer.NORMAL_PLAYBACK_SPEED);
         currentMediaId = Long.toString(++mediaSequence);
         dataSourceFactory.cancelActiveReads();
         activeAudioDecoderName = "";
@@ -693,13 +828,21 @@ public class UTVPlayer extends AbstractMediaPlayer {
         if (uriStr.contains(".mpd") || rawLower.contains(".mpd")) {
             return new DashMediaSource.Factory(playbackFactory).createMediaSource(item);
         }
-        return new ProgressiveMediaSource.Factory(playbackFactory, new IptvTsExtractorsFactory())
+        return new ProgressiveMediaSource.Factory(playbackFactory, new IptvTsExtractorsFactory(frameBuffer))
                 .setContinueLoadingCheckIntervalBytes(256 * 1024)
                 .createMediaSource(item);
     }
 
     @Override
     public void start() throws IllegalStateException {
+        boolean wasPaused = decoderPaused || frameBuffer.isPaused();
+        decoderPaused = false;
+        if (wasPaused) {
+            frameBuffer.onResume();
+            applyPlaybackSpeedInternal(frameBuffer.getPlaybackSpeed());
+        } else if (!frameBuffer.isCatchingUp()) {
+            applyPlaybackSpeedInternal(LivePauseFrameBuffer.NORMAL_PLAYBACK_SPEED);
+        }
         exoPlayer.setPlayWhenReady(true);
     }
 
@@ -711,6 +854,10 @@ public class UTVPlayer extends AbstractMediaPlayer {
     @Override
     public void pause() throws IllegalStateException {
         dataSourceFactory.stopBackgroundPreload();
+        decoderPaused = true;
+        applyPlaybackSpeedInternal(LivePauseFrameBuffer.NORMAL_PLAYBACK_SPEED);
+        frameBuffer.onPause();
+        loadControl.setLivePauseExpanded(true);
         exoPlayer.setPlayWhenReady(false);
     }
 
@@ -763,7 +910,11 @@ public class UTVPlayer extends AbstractMediaPlayer {
         currentMediaId = "";
         preparedNotified = false;
         promotedFromPreload = false;
+        decoderPaused = false;
         currentVolume = 0f;
+        frameBuffer.reset();
+        loadControl.setLivePauseExpanded(false);
+        applyPlaybackSpeedInternal(LivePauseFrameBuffer.NORMAL_PLAYBACK_SPEED);
         dataSourceFactory.stopBackgroundPreload();
         dataSourceFactory.cancelActiveReads();
         try {

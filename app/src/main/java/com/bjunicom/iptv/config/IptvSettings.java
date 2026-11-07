@@ -46,6 +46,7 @@ public class IptvSettings {
     private static final String KEY_ASPECT_RATIO = "aspect_ratio";
     private static final String KEY_INCLUDE_HISTORICAL = "include_historical_channels";
     private static final String KEY_ONLY_SHOW_AVAILABLE = "only_show_available";
+    private static final String KEY_AUTO_START_ON_BOOT = "auto_start_on_boot";
     private static final String KEY_LAST_CHANNEL_URL = "last_channel_url";
     private static final String KEY_SCAN_SUBNET = "scan_subnet";
     private static final String KEY_SCAN_START_HOST = "scan_start_host";
@@ -282,6 +283,17 @@ public class IptvSettings {
 
     public void setOnlyShowAvailable(boolean onlyAvailable) {
         prefs.edit().putBoolean(KEY_ONLY_SHOW_AVAILABLE, onlyAvailable).apply();
+    }
+
+    /**
+     * 是否开启开机自动启动应用（默认关闭）
+     */
+    public boolean isAutoStartOnBoot() {
+        return prefs.getBoolean(KEY_AUTO_START_ON_BOOT, false);
+    }
+
+    public void setAutoStartOnBoot(boolean autoStart) {
+        prefs.edit().putBoolean(KEY_AUTO_START_ON_BOOT, autoStart).apply();
     }
 
     public String getLastChannelUrl() {

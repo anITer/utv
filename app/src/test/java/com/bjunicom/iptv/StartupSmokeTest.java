@@ -27,6 +27,13 @@ import org.robolectric.shadows.ShadowSurfaceView;
 @Config(sdk = 33, application = IptvApplication.class)
 public class StartupSmokeTest {
 
+    @org.junit.Before
+    public void setUpTestIsolation() {
+        android.app.Application app = org.robolectric.RuntimeEnvironment.getApplication();
+        com.bjunicom.iptv.report.ChannelListShareManager.getInstance(app)
+                .setListEndpointUrl("http://127.0.0.1:1/api/v1/channel-lists");
+    }
+
     @Test
     public void testMainActivityStartupAndSurfaceCreated() {
         ShadowLog.stream = System.out;
@@ -1574,6 +1581,180 @@ public class StartupSmokeTest {
             total += n;
         }
         return new String(body, 0, total, java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    @Test
+    public void testDoubleClickOkPauseResumeWith3600SlotBufferAndGopEviction() {
+        try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class)) {
+            MainActivity activity = controller.create().start().resume().visible().get();
+            activity.onWindowFocusChanged(true);
+
+            IjkVideoView videoView = activity.findViewById(R.id.ijk_video_view);
+            SurfaceView surfaceView = (SurfaceView) videoView.getChildAt(0);
+            ShadowSurfaceView.FakeSurfaceHolder holder = Shadows.shadowOf(surfaceView).getFakeSurfaceHolder();
+            for (SurfaceHolder.Callback cb : holder.getCallbacks()) {
+                cb.surfaceCreated(holder);
+                cb.surfaceChanged(holder, 1, 1920, 1080);
+            }
+
+            // Initially playing: not paused, pause icon hidden, default slot capacity (240)
+            assertFalse(activity.isPlaybackPaused());
+            assertFalse(activity.isPauseIconVisible());
+            assertEquals(android.view.View.GONE, activity.findViewById(R.id.iv_pause_icon).getVisibility());
+            assertFalse(videoView.isDecoderPaused());
+            assertEquals(com.bjunicom.iptv.player.LivePauseFrameBuffer.DEFAULT_SLOT_CAPACITY,
+                    videoView.getFrameBufferSlotCapacity());
+
+            // 1. Double-click OK key -> pause decoder, expand frame buffer to 3600 slots, show toast and pause icon
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER));
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_CENTER));
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER));
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_CENTER));
+
+            assertTrue(activity.isPlaybackPaused());
+            assertTrue(videoView.isDecoderPaused());
+            assertTrue(videoView.getFrameBuffer().isPaused());
+            assertEquals(3600, videoView.getFrameBufferSlotCapacity());
+            assertEquals(com.bjunicom.iptv.player.LivePauseFrameBuffer.PAUSED_SLOT_CAPACITY,
+                    videoView.getFrameBufferSlotCapacity());
+            assertTrue(activity.isPauseIconVisible());
+            assertEquals(android.view.View.VISIBLE, activity.findViewById(R.id.iv_pause_icon).getVisibility());
+            assertEquals("已暂停，最长暂停 1 分钟", org.robolectric.shadows.ShadowToast.getTextOfLatestToast());
+
+            // 2. While paused, incoming stream frames are cached in the 3600-slot memory buffer;
+            // when the 3600 slots fill up, video evicts by GOP and audio evicts the exact same duration
+            com.bjunicom.iptv.player.LivePauseFrameBuffer frameBuffer = videoView.getFrameBuffer();
+            int gopSize = 30; // 30 video frames per GOP (e.g. 1.2s at 25fps, 40ms/frame -> 1,200,000 us per GOP)
+            long videoFrameDurUs = 40_000L;
+            long audioFrameDurUs = 20_000L; // 20ms per audio frame -> 60 audio frames per 1.2s GOP
+            int totalGopsToFill = 3600 / gopSize; // 120 GOPs = 3600 video frames
+
+            for (int g = 0; g < totalGopsToFill; g++) {
+                for (int f = 0; f < gopSize; f++) {
+                    int frameIdx = g * gopSize + f;
+                    boolean isKey = (f == 0);
+                    frameBuffer.offerVideoFrame(new byte[]{(byte) g, (byte) f},
+                            frameIdx * videoFrameDurUs, videoFrameDurUs, isKey);
+                }
+                for (int a = 0; a < 60; a++) {
+                    int audioIdx = g * 60 + a;
+                    frameBuffer.offerAudioFrame(new byte[]{(byte) g, (byte) a},
+                            audioIdx * audioFrameDurUs, audioFrameDurUs);
+                }
+            }
+
+            assertEquals(3600, frameBuffer.getVideoFrameCount());
+            assertEquals(7200, frameBuffer.getAudioFrameCount());
+            assertEquals(0, frameBuffer.getEvictedGopCount());
+
+            // Push 3601st video frame -> triggers GOP eviction of GOP #0 (30 video frames = 1,200,000 us)
+            // and evicts 60 audio frames (1,200,000 us) matching the evicted video GOP duration
+            frameBuffer.offerVideoFrame(new byte[]{(byte) 120, 0},
+                    3600L * videoFrameDurUs, videoFrameDurUs, true);
+
+            assertEquals(1, frameBuffer.getEvictedGopCount());
+            assertEquals(gopSize, frameBuffer.getTotalEvictedVideoFrames());
+            assertEquals(60, frameBuffer.getTotalEvictedAudioFrames());
+            assertEquals(gopSize * videoFrameDurUs, frameBuffer.getLastEvictedVideoDurationUs());
+            assertEquals(frameBuffer.getLastEvictedVideoDurationUs(), frameBuffer.getLastEvictedAudioDurationUs());
+            assertEquals(frameBuffer.getTotalEvictedVideoDurationUs(), frameBuffer.getTotalEvictedAudioDurationUs());
+            // Video buffer now has 3600 - 30 + 1 = 3571 frames, and its first frame is the keyframe of GOP #1
+            assertEquals(3600 - gopSize + 1, frameBuffer.getVideoFrameCount());
+            assertNotNull(frameBuffer.peekFirstVideoFrame());
+            assertTrue(frameBuffer.peekFirstVideoFrame().isKeyFrame);
+            assertEquals(gopSize * videoFrameDurUs, frameBuffer.peekFirstVideoFrame().ptsUs);
+            assertNotNull(frameBuffer.peekFirstAudioFrame());
+            assertEquals(gopSize * videoFrameDurUs, frameBuffer.peekFirstAudioFrame().ptsUs);
+
+            // 3. Double-click OK key again -> resume playback at 1.5x speed (both video and audio),
+            // hide pause icon, and display "1.5x" badge in the bottom-right corner
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER));
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_CENTER));
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER));
+            activity.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_CENTER));
+
+            assertFalse(activity.isPlaybackPaused());
+            assertFalse(videoView.isDecoderPaused());
+            assertFalse(videoView.getFrameBuffer().isPaused());
+            assertFalse(activity.isPauseIconVisible());
+            assertEquals(android.view.View.GONE, activity.findViewById(R.id.iv_pause_icon).getVisibility());
+
+            // Verify 1.5x catch-up playback speed for both video and audio, and "1.5x" UI badge in bottom-right
+            assertTrue(activity.isCatchingUpPlayback());
+            assertTrue(videoView.isCatchingUp());
+            assertEquals(1.5f, videoView.getPlaybackSpeed(), 0.001f);
+            assertEquals(1.5f, videoView.getAudioPlaybackSpeed(), 0.001f);
+            assertTrue(activity.isCatchupSpeedBadgeVisible());
+            android.widget.TextView tvCatchupBadge = activity.findViewById(R.id.tv_catchup_speed_badge);
+            assertNotNull(tvCatchupBadge);
+            assertEquals(android.view.View.VISIBLE, tvCatchupBadge.getVisibility());
+            assertEquals("1.5x", tvCatchupBadge.getText().toString());
+            android.widget.FrameLayout.LayoutParams badgeLp =
+                    (android.widget.FrameLayout.LayoutParams) tvCatchupBadge.getLayoutParams();
+            assertEquals(android.view.Gravity.BOTTOM | android.view.Gravity.END, badgeLp.gravity);
+
+            // 4. Advance catch-up until playback timestamp catches up with live stream timestamp ->
+            // speed restores to 1.0x for both video and audio, and bottom-right "1.5x" badge disappears
+            long remainingLagUs = frameBuffer.getRemainingCatchUpLagUs();
+            assertTrue(remainingLagUs > 0L);
+            // At 1.5x playback vs 1.0x live stream (net 0.5x catch-up rate), advancing 2 * remainingLag catches up
+            long realTimeToCatchUpMs = (remainingLagUs * 2L) / 1000L + 1000L;
+            org.robolectric.shadows.ShadowLooper.idleMainLooper(realTimeToCatchUpMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+
+            assertFalse(videoView.isCatchingUp());
+            assertFalse(activity.isCatchingUpPlayback());
+            assertEquals(1.0f, videoView.getPlaybackSpeed(), 0.001f);
+            assertEquals(1.0f, videoView.getAudioPlaybackSpeed(), 0.001f);
+            assertFalse(activity.isCatchupSpeedBadgeVisible());
+            assertEquals(android.view.View.GONE, tvCatchupBadge.getVisibility());
+        }
+    }
+
+    @Test
+    public void testAutoStartOnBootSettingAndBootReceiver() {
+        try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class)) {
+            MainActivity activity = controller.create().start().resume().visible().get();
+            com.bjunicom.iptv.config.IptvSettings settings =
+                    new com.bjunicom.iptv.config.IptvSettings(activity);
+            settings.setAutoStartOnBoot(false);
+            assertFalse(settings.isAutoStartOnBoot());
+
+            // 1. When auto-start on boot is disabled, BootCompletedReceiver must not start MainActivity
+            Shadows.shadowOf(activity.getApplication()).clearNextStartedActivities();
+            com.bjunicom.iptv.receiver.BootCompletedReceiver receiver =
+                    new com.bjunicom.iptv.receiver.BootCompletedReceiver();
+            receiver.onReceive(activity, new android.content.Intent(android.content.Intent.ACTION_BOOT_COMPLETED));
+            assertEquals(null, Shadows.shadowOf(activity.getApplication()).getNextStartedActivity());
+
+            // 2. Open settings dialog, check cb_settings_auto_start_boot, and save
+            activity.showSettingsDialog();
+            androidx.appcompat.app.AlertDialog dialog = activity.getLastSettingsDialog();
+            assertNotNull(dialog);
+            assertTrue(dialog.isShowing());
+
+            android.widget.CheckBox cbAutoStart = dialog.findViewById(R.id.cb_settings_auto_start_boot);
+            assertNotNull(cbAutoStart);
+            assertFalse(cbAutoStart.isChecked());
+
+            cbAutoStart.setChecked(true);
+            dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).performClick();
+            org.robolectric.shadows.ShadowLooper.runUiThreadTasks();
+
+            assertTrue(settings.isAutoStartOnBoot());
+
+            // 3. When auto-start on boot is enabled, BootCompletedReceiver starts MainActivity with NEW_TASK flag
+            Shadows.shadowOf(activity.getApplication()).clearNextStartedActivities();
+            receiver.onReceive(activity, new android.content.Intent(android.content.Intent.ACTION_BOOT_COMPLETED));
+            android.content.Intent started = Shadows.shadowOf(activity.getApplication()).getNextStartedActivity();
+            assertNotNull(started);
+            assertEquals(MainActivity.class.getName(), started.getComponent().getClassName());
+            assertTrue((started.getFlags() & android.content.Intent.FLAG_ACTIVITY_NEW_TASK) != 0);
+            assertTrue(started.getBooleanExtra(
+                    com.bjunicom.iptv.receiver.BootCompletedReceiver.EXTRA_FROM_BOOT_COMPLETED, false));
+
+            // Restore default
+            settings.setAutoStartOnBoot(false);
+        }
     }
 
     private static String readHttpRequest(java.io.InputStream in,

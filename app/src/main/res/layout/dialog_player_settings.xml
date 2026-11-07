@@ -417,6 +417,23 @@
                 android:textColor="@color/text_primary"
                 android:textSize="13sp" />
 
+            <CheckBox
+                android:id="@+id/cb_settings_auto_start_boot"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="2dp"
+                android:layout_marginTop="6dp"
+                android:background="@drawable/bg_badge"
+                android:buttonTint="@color/md_theme_dark_primary"
+                android:focusable="true"
+                android:includeFontPadding="false"
+                android:minHeight="38dp"
+                android:paddingHorizontal="8dp"
+                android:paddingVertical="6dp"
+                android:text="开机自动启动 uTV (设备开机后自动进入直播)"
+                android:textColor="@color/text_primary"
+                android:textSize="13sp" />
+
             <Button
                 android:id="@+id/btn_settings_check_update"
                 style="@style/Widget.BjUnicomIptv.HudButton"
