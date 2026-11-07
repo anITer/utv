@@ -123,6 +123,7 @@ public class CustomM3uDialogHelper {
     private final ChannelRepository repository;
     private final IptvSettings settings;
     private final OnCustomM3uAppliedListener listener;
+    private final ChannelListUploadDialogHelper uploadDialogHelper;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     private AlertDialog activeDialog;
@@ -133,6 +134,7 @@ public class CustomM3uDialogHelper {
     private TextView tvReport;
     private ProgressBar pbProbe;
     private Button btnProbeStreams;
+    private Button btnUploadToServer;
     private boolean contentScrollBarEnabled = false;
 
     private String currentFileName = "custom.m3u";
@@ -144,6 +146,13 @@ public class CustomM3uDialogHelper {
         this.repository = ChannelRepository.getInstance(activity);
         this.settings = new IptvSettings(activity);
         this.listener = listener;
+        this.uploadDialogHelper = new ChannelListUploadDialogHelper(activity, (uploadSettings, response) -> {
+            repository.notifyChannelsChanged();
+        });
+    }
+
+    public ChannelListUploadDialogHelper getUploadDialogHelper() {
+        return uploadDialogHelper;
     }
 
     /**
@@ -321,6 +330,7 @@ public class CustomM3uDialogHelper {
         tvReport = view.findViewById(R.id.tv_custom_m3u_report);
         pbProbe = view.findViewById(R.id.pb_custom_m3u_probe);
         btnProbeStreams = view.findViewById(R.id.btn_probe_m3u_streams);
+        btnUploadToServer = view.findViewById(R.id.btn_upload_custom_m3u_server);
 
         Button btnPickFile = view.findViewById(R.id.btn_pick_m3u_file);
         Button btnScanLocal = view.findViewById(R.id.btn_scan_local_m3u_files);
@@ -365,6 +375,9 @@ public class CustomM3uDialogHelper {
         });
 
         btnProbeStreams.setOnClickListener(v -> toggleStreamConnectivityProbe());
+        if (btnUploadToServer != null) {
+            btnUploadToServer.setOnClickListener(v -> showUploadCustomM3uToServerDialog());
+        }
 
         activeDialog = new MaterialAlertDialogBuilder(activity)
                 .setTitle("上传并检测自定义 M3U 播放列表")
@@ -526,6 +539,16 @@ public class CustomM3uDialogHelper {
         });
     }
 
+    public void showUploadCustomM3uToServerDialog() {
+        M3uParser.M3uInspectionReport report = inspectCurrentContent();
+        if (!report.isValid()) {
+            Toast.makeText(activity, "请先选择或粘贴包含有效频道的 M3U 播放列表内容后再上传", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        String rawText = etContent != null ? etContent.getText().toString() : "";
+        uploadDialogHelper.showUploadSettingsDialog(rawText, currentFileName, report.channels);
+    }
+
     private void showProbeCompletedOptionsDialog(final List<IptvChannel> resultChannels,
                                                  final M3uParser.M3uInspectionReport report) {
         if (activity == null || activity.isFinishing()) {
@@ -534,7 +557,8 @@ public class CustomM3uDialogHelper {
         String msg = String.format(Locale.US,
                 "频道流检测完成：可用 %d / %d 个频道。\n\n"
                         + "• 立即应用：将扫描后的结果替换掉默认使用的 M3U 内容，并立即刷新频道列表\n"
-                        + "• 保存到本地：将扫描结果存储为本地的 .m3u 文件",
+                        + "• 保存到本地：将扫描结果存储为本地的 .m3u 文件\n"
+                        + "• 上传至服务器：设置运营商信息、频道信息及文件名后分享上传至服务端",
                 report.reachableCount, report.validChannelCount);
 
         AlertDialog dialog = new MaterialAlertDialogBuilder(activity)
@@ -553,7 +577,7 @@ public class CustomM3uDialogHelper {
                             Toast.LENGTH_LONG).show();
                 })
                 .setNeutralButton("保存到本地", null)
-                .setNegativeButton("暂不处理", null)
+                .setNegativeButton("上传至服务器", null)
                 .create();
 
         dialog.show();
@@ -565,6 +589,11 @@ public class CustomM3uDialogHelper {
                         "已保存到本地 M3U 文件:\n" + savedFile.getAbsolutePath(),
                         Toast.LENGTH_LONG).show();
             });
+        }
+        Button btnUploadServer = dialog.getButton(AlertDialog.BUTTON_NEGATIVE);
+        if (btnUploadServer != null) {
+            btnUploadServer.setOnClickListener(v ->
+                    uploadDialogHelper.showUploadSettingsDialogForChannels(resultChannels, currentFileName));
         }
     }
 

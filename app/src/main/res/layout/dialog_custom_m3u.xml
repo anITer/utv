@@ -177,12 +177,26 @@
                     style="@style/Widget.BjUnicomIptv.HudButton"
                     android:layout_width="wrap_content"
                     android:layout_height="36dp"
+                    android:layout_marginEnd="8dp"
                     android:drawableStart="@drawable/ic_flat_radar"
                     android:drawablePadding="5dp"
                     android:focusable="true"
                     android:paddingHorizontal="12dp"
                     android:text="检测流连通性"
                     android:textColor="@color/accent_green"
+                    android:textSize="12sp" />
+
+                <Button
+                    android:id="@+id/btn_upload_custom_m3u_server"
+                    style="@style/Widget.BjUnicomIptv.HudButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="36dp"
+                    android:drawableStart="@drawable/ic_flat_upload"
+                    android:drawablePadding="5dp"
+                    android:focusable="true"
+                    android:paddingHorizontal="12dp"
+                    android:text="上传至服务器"
+                    android:textColor="@color/accent_amber"
                     android:textSize="12sp" />
             </LinearLayout>
 

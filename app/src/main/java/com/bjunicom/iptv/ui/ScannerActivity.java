@@ -59,6 +59,7 @@ public class ScannerActivity extends AppCompatActivity {
     private ChannelRepository repository;
     private MulticastScannerEngine scannerEngine;
     private CustomM3uDialogHelper customM3uDialogHelper;
+    private ChannelListUploadDialogHelper uploadDialogHelper;
     private ScanStatistics lastStats;
     private List<IptvChannel> lastScannedChannels;
     private AlertDialog lastCompletionDialog;
@@ -74,6 +75,14 @@ public class ScannerActivity extends AppCompatActivity {
         settings = new IptvSettings(this);
         repository = ChannelRepository.getInstance(this);
         scannerEngine = new MulticastScannerEngine(this);
+        uploadDialogHelper = new ChannelListUploadDialogHelper(this, (uploadSettings, response) -> {
+            String logMsg = String.format(Locale.US,
+                    "[UPLOAD] 已将频道列表上传至服务器: %s (%s-%s-%s-%s, 共 %d 个频道)",
+                    response.fileName, uploadSettings.province, uploadSettings.city,
+                    uploadSettings.ispType, uploadSettings.channelType, response.channelCount);
+            appendConsoleLog(logMsg);
+            tvProgressLabel.setText("已上传至服务器: " + response.fileName);
+        });
         customM3uDialogHelper = new CustomM3uDialogHelper(this, (report, switchedToCustomIsp) -> {
             etScanSubnet.setText(settings.getScanSubnet());
             rgScanMode.check(R.id.rb_mode_check_playlist);
@@ -127,6 +136,10 @@ public class ScannerActivity extends AppCompatActivity {
             btnImportM3u.setOnClickListener(v -> customM3uDialogHelper.showUploadAndInspectDialog());
         }
         findViewById(R.id.btn_export_m3u).setOnClickListener(v -> saveScanResultsToLocalM3u(getTargetChannelsForAction()));
+        View btnUploadServer = findViewById(R.id.btn_upload_server_m3u);
+        if (btnUploadServer != null) {
+            btnUploadServer.setOnClickListener(v -> showUploadScanResultsDialog(getTargetChannelsForAction()));
+        }
         View btnApplyScan = findViewById(R.id.btn_apply_scan_m3u);
         if (btnApplyScan != null) {
             btnApplyScan.setOnClickListener(v -> applyScanResultsImmediately(getTargetChannelsForAction()));
@@ -156,6 +169,7 @@ public class ScannerActivity extends AppCompatActivity {
                 R.id.btn_scanner_back,
                 R.id.btn_import_m3u,
                 R.id.btn_export_m3u,
+                R.id.btn_upload_server_m3u,
                 R.id.btn_apply_scan_m3u,
                 R.id.btn_start_scan,
                 R.id.btn_stop_scan,
@@ -365,23 +379,48 @@ public class ScannerActivity extends AppCompatActivity {
         }
         msg.append("本次扫描共整理出 ").append(effective.size()).append(" 个有效频道，请选择后续操作：\n\n");
         msg.append("• 立即应用：先保存为本地 .m3u 文件，再导入该本地 .m3u 文件更新频道列表，并跳转到第一个频道\n");
-        msg.append("• 保存到本地：仅将扫描结果存储为本地的 .m3u 文件");
+        msg.append("• 保存到本地：仅将扫描结果存储为本地的 .m3u 文件\n");
+        msg.append("• 上传至服务器：设置运营商信息、频道信息及文件名后分享上传至服务端");
 
         lastCompletionDialog = new MaterialAlertDialogBuilder(this)
                 .setTitle("频道扫描完成")
                 .setMessage(msg.toString())
                 .setPositiveButton("立即应用", (d, w) -> applyScanResultsImmediately(scannedChannels))
                 .setNeutralButton("保存到本地", null)
-                .setNegativeButton("暂不处理", null)
+                .setNegativeButton("上传至服务器", null)
                 .create();
 
         lastCompletionDialog.show();
 
-        // 绑定「保存到本地」按钮：点击后立即保存为本地 .m3u 文件，同时保留弹窗以便用户还可继续点击「立即应用」
+        // 绑定「保存到本地」按钮：点击后立即保存为本地 .m3u 文件，同时保留弹窗以便用户还可继续点击「立即应用」或「上传至服务器」
         Button btnSaveLocal = lastCompletionDialog.getButton(AlertDialog.BUTTON_NEUTRAL);
         if (btnSaveLocal != null) {
             btnSaveLocal.setOnClickListener(v -> saveScanResultsToLocalM3u(scannedChannels));
         }
+
+        // 绑定「上传至服务器」按钮：点击后弹出上传设置界面（省、市、运营商类型、频道信息、文件名）
+        Button btnUploadToServer = lastCompletionDialog.getButton(AlertDialog.BUTTON_NEGATIVE);
+        if (btnUploadToServer != null) {
+            btnUploadToServer.setOnClickListener(v -> showUploadScanResultsDialog(scannedChannels));
+        }
+    }
+
+    /**
+     * 弹出扫描结果上传至服务器的设置界面
+     */
+    public void showUploadScanResultsDialog(List<IptvChannel> scannedChannels) {
+        if (uploadDialogHelper == null) {
+            uploadDialogHelper = new ChannelListUploadDialogHelper(this, null);
+        }
+        File lastFile = repository.getLastSavedLocalM3uFile();
+        String defaultName = (lastFile != null && !lastFile.getName().isEmpty())
+                ? lastFile.getName()
+                : "iptv_scanned.m3u";
+        uploadDialogHelper.showUploadSettingsDialogForChannels(scannedChannels, defaultName);
+    }
+
+    public ChannelListUploadDialogHelper getUploadDialogHelper() {
+        return uploadDialogHelper;
     }
 
     /**

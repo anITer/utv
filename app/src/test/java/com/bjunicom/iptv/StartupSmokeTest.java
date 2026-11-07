@@ -1225,6 +1225,357 @@ public class StartupSmokeTest {
         }
     }
 
+    @Test
+    public void testChannelListShareUploadFlowFromScannerAndCustomM3u() throws Exception {
+        final java.util.List<String> requestPaths = new java.util.concurrent.CopyOnWriteArrayList<>();
+        final java.util.List<String> requestBodies = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+        try (java.net.ServerSocket serverSocket = new java.net.ServerSocket(0)) {
+            int port = serverSocket.getLocalPort();
+            Thread serverThread = new Thread(() -> {
+                try {
+                    // Request 1: GET /api/v1/channel-lists/check -> exists=true (simulate duplicate name + attributes)
+                    try (java.net.Socket s1 = serverSocket.accept();
+                         java.io.InputStream in1 = s1.getInputStream();
+                         java.io.OutputStream out1 = s1.getOutputStream()) {
+                        readHttpRequestWithRequestLine(in1, requestPaths, null);
+                        String dupCheckJson = "{\"code\":0,\"message\":\"success\",\"data\":{\"exists\":true,\"is_duplicate\":true,\"file_name\":\"dup_list.m3u\",\"province\":\"北京\",\"city\":\"北京\",\"isp_type\":\"联通\",\"channel_type\":\"直连\",\"existing_id\":9}}";
+                        byte[] respBytes = dupCheckJson.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                        String header = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " + respBytes.length + "\r\nConnection: close\r\n\r\n";
+                        out1.write(header.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                        out1.write(respBytes);
+                        out1.flush();
+                    }
+
+                    // Request 2: GET /api/v1/channel-lists/check -> exists=false
+                    try (java.net.Socket s2 = serverSocket.accept();
+                         java.io.InputStream in2 = s2.getInputStream();
+                         java.io.OutputStream out2 = s2.getOutputStream()) {
+                        readHttpRequestWithRequestLine(in2, requestPaths, null);
+                        String okCheckJson = "{\"code\":0,\"message\":\"success\",\"data\":{\"exists\":false,\"is_duplicate\":false,\"file_name\":\"bj_unicom_timeshift.m3u\",\"province\":\"北京\",\"city\":\"北京\",\"isp_type\":\"联通\",\"channel_type\":\"时移列表\"}}";
+                        byte[] respBytes = okCheckJson.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                        String header = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " + respBytes.length + "\r\nConnection: close\r\n\r\n";
+                        out2.write(header.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                        out2.write(respBytes);
+                        out2.flush();
+                    }
+
+                    // Request 3: POST /api/v1/channel-lists/upload -> HTTP 201 Created
+                    try (java.net.Socket s3 = serverSocket.accept();
+                         java.io.InputStream in3 = s3.getInputStream();
+                         java.io.OutputStream out3 = s3.getOutputStream()) {
+                        String body = readHttpRequestWithRequestLine(in3, requestPaths, null);
+                        requestBodies.add(body);
+                        String uploadOkJson = "{\"code\":0,\"message\":\"created\",\"data\":{\"id\":15,\"file_name\":\"bj_unicom_timeshift.m3u\",\"province\":\"北京\",\"city\":\"北京\",\"isp_type\":\"联通\",\"channel_type\":\"时移列表\",\"channel_count\":2,\"file_size\":256,\"created_at\":\"2026-11-07T08:00:00Z\"}}";
+                        byte[] respBytes = uploadOkJson.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                        String header = "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: " + respBytes.length + "\r\nConnection: close\r\n\r\n";
+                        out3.write(header.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                        out3.write(respBytes);
+                        out3.flush();
+                    }
+                } catch (Throwable ignored) {
+                }
+            });
+            serverThread.setDaemon(true);
+            serverThread.start();
+
+            try (ActivityController<com.bjunicom.iptv.ui.ScannerActivity> scanCtrl =
+                         Robolectric.buildActivity(com.bjunicom.iptv.ui.ScannerActivity.class)) {
+                com.bjunicom.iptv.ui.ScannerActivity scannerActivity = scanCtrl.create().start().resume().visible().get();
+
+                com.bjunicom.iptv.report.ChannelListShareManager shareMgr =
+                        com.bjunicom.iptv.report.ChannelListShareManager.getInstance(scannerActivity);
+                String origCheckUrl = shareMgr.getCheckEndpointUrl();
+                String origUploadUrl = shareMgr.getUploadEndpointUrl();
+                try {
+                    shareMgr.setCheckEndpointUrl("http://127.0.0.1:" + port + "/api/v1/channel-lists/check");
+                    shareMgr.setUploadEndpointUrl("http://127.0.0.1:" + port + "/api/v1/channel-lists/upload");
+
+                    // 1. Verify ScannerActivity top bar has "上传至服务器" button (btn_upload_server_m3u)
+                    android.widget.Button btnScannerUpload = scannerActivity.findViewById(R.id.btn_upload_server_m3u);
+                    assertNotNull(btnScannerUpload);
+                    assertEquals("上传至服务器", btnScannerUpload.getText().toString());
+
+                    // 2. Verify scan completion dialog includes "上传至服务器" button and opens upload settings dialog
+                    com.bjunicom.iptv.model.IptvChannel ch1 = com.bjunicom.iptv.parser.M3uParser.buildChannel(
+                            1,
+                            "#EXTINF:-1 tvg-id=\"1\" tvg-name=\"CCTV1\" group-title=\"[高清]央视\" catchup=\"default\" catchup-source=\"rtsp://61.135.88.136/TVOD/88888892/224/3221225880/1.smil?playseek=${(b)yyyyMMddHHmmss}-${(e)yyyyMMddHHmmss}\",CCTV-1综合[1][高清]",
+                            "rtp://239.3.1.129:8008");
+                    ch1.setConnected(true);
+                    java.util.List<com.bjunicom.iptv.model.IptvChannel> scannedList = java.util.Collections.singletonList(ch1);
+                    scannerActivity.handleScanCompleted(scannedList, new com.bjunicom.iptv.scanner.ScanStatistics());
+
+                    androidx.appcompat.app.AlertDialog completionDialog = scannerActivity.getLastCompletionDialog();
+                    assertNotNull(completionDialog);
+                    assertEquals("上传至服务器",
+                            completionDialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_NEGATIVE).getText().toString());
+
+                    completionDialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_NEGATIVE).performClick();
+                    org.robolectric.shadows.ShadowLooper.runUiThreadTasks();
+
+                    com.bjunicom.iptv.ui.ChannelListUploadDialogHelper uploadHelper = scannerActivity.getUploadDialogHelper();
+                    assertNotNull(uploadHelper);
+                    androidx.appcompat.app.AlertDialog uploadDialog = uploadHelper.getActiveUploadDialog();
+                    assertNotNull(uploadDialog);
+                    assertTrue(uploadDialog.isShowing());
+
+                    // Verify upload settings dialog fields (省、市、运营商类型、频道信息、文件名)
+                    assertNotNull(uploadHelper.getProvinceEditText());
+                    assertNotNull(uploadHelper.getCityEditText());
+                    assertNotNull(uploadHelper.getIspTypeRadioGroup());
+                    assertNotNull(uploadHelper.getChannelTypeRadioGroup());
+                    assertNotNull(uploadHelper.getFileNameEditText());
+                    assertEquals("北京", uploadHelper.getProvinceEditText().getText().toString());
+                    assertEquals("北京", uploadHelper.getCityEditText().getText().toString());
+                    // Since ch1 has catchup-source, channelType defaults to "时移列表"
+                    assertEquals(R.id.rb_upload_channel_timeshift,
+                            uploadHelper.getChannelTypeRadioGroup().getCheckedRadioButtonId());
+                    uploadDialog.dismiss();
+
+                    // 3. Verify CustomM3uDialogHelper also provides "上传至服务器" button (btn_upload_custom_m3u_server)
+                    com.bjunicom.iptv.ui.CustomM3uDialogHelper customHelper =
+                            new com.bjunicom.iptv.ui.CustomM3uDialogHelper(scannerActivity, null);
+                    customHelper.showUploadAndInspectDialog();
+                    org.robolectric.shadows.ShadowLooper.runUiThreadTasks();
+                    androidx.appcompat.app.AlertDialog customDialog = customHelper.getActiveDialog();
+                    assertNotNull(customDialog);
+                    android.widget.Button btnCustomUpload = customDialog.findViewById(R.id.btn_upload_custom_m3u_server);
+                    assertNotNull(btnCustomUpload);
+                    assertEquals("上传至服务器", btnCustomUpload.getText().toString());
+                    customDialog.findViewById(R.id.btn_load_sample_m3u).performClick();
+                    btnCustomUpload.performClick();
+                    assertNotNull(customHelper.getUploadDialogHelper().getActiveUploadDialog());
+                    assertTrue(customHelper.getUploadDialogHelper().getActiveUploadDialog().isShowing());
+                    customHelper.getUploadDialogHelper().getActiveUploadDialog().dismiss();
+                    customDialog.dismiss();
+
+                    // 4. Test checkAndUploadSync: first with duplicate name -> aborted before upload
+                    String m3uContent = "#EXTM3U\n#EXTINF:-1,CCTV-1\nrtp://239.3.1.129:8008\n#EXTINF:-1,CCTV-2\nrtp://239.3.1.130:8008\n";
+                    com.bjunicom.iptv.report.ChannelListShareManager.UploadSettings dupSettings =
+                            new com.bjunicom.iptv.report.ChannelListShareManager.UploadSettings(
+                                    "北京", "北京", "联通", "直连", "dup_list.m3u");
+                    com.bjunicom.iptv.report.ChannelListShareManager.ShareResult dupResult =
+                            shareMgr.checkAndUploadSync(dupSettings, m3uContent, 2);
+                    assertTrue(dupResult.duplicateDetected);
+                    assertFalse(dupResult.uploaded);
+                    assertEquals(1, requestPaths.size());
+                    assertTrue(requestPaths.get(0).startsWith("GET /api/v1/channel-lists/check?"));
+
+                    // 5. Test checkAndUploadSync: non-duplicate name -> check passes, then uploads M3U file stream + metadata
+                    com.bjunicom.iptv.report.ChannelListShareManager.UploadSettings okSettings =
+                            new com.bjunicom.iptv.report.ChannelListShareManager.UploadSettings(
+                                    "北京", "北京", "联通", "时移列表", "bj_unicom_timeshift");
+                    assertEquals("bj_unicom_timeshift.m3u", okSettings.fileName);
+                    com.bjunicom.iptv.report.ChannelListShareManager.ShareResult okResult =
+                            shareMgr.checkAndUploadSync(okSettings, m3uContent, 2);
+                    assertFalse(okResult.duplicateDetected);
+                    assertTrue(okResult.uploaded);
+                    assertNotNull(okResult.uploadResponse);
+                    assertEquals(15L, okResult.uploadResponse.id);
+                    assertEquals("bj_unicom_timeshift.m3u", okResult.uploadResponse.fileName);
+                    assertEquals(3, requestPaths.size());
+                    assertTrue(requestPaths.get(1).startsWith("GET /api/v1/channel-lists/check?"));
+                    assertTrue(requestPaths.get(2).startsWith("POST /api/v1/channel-lists/upload"));
+                    assertEquals(1, requestBodies.size());
+                    String multipartPayload = requestBodies.get(0);
+                    assertTrue(multipartPayload.contains("name=\"province\""));
+                    assertTrue(multipartPayload.contains("北京"));
+                    assertTrue(multipartPayload.contains("name=\"isp_type\""));
+                    assertTrue(multipartPayload.contains("联通"));
+                    assertTrue(multipartPayload.contains("name=\"channel_type\""));
+                    assertTrue(multipartPayload.contains("时移列表"));
+                    assertTrue(multipartPayload.contains("filename=\"bj_unicom_timeshift.m3u\""));
+                    assertTrue(multipartPayload.contains("rtp://239.3.1.129:8008"));
+
+                    // 6. Verify the uploaded channel list is immediately added to ChannelRepository's uploaded channel sources
+                    com.bjunicom.iptv.repository.ChannelRepository repo =
+                            com.bjunicom.iptv.repository.ChannelRepository.getInstance(scannerActivity);
+                    assertEquals(1, repo.getUploadedChannelSources().size());
+                    assertEquals("bj_unicom_timeshift.m3u", repo.getUploadedChannelSources().get(0).fileName);
+                    assertEquals("北京联通·时移列表", repo.getUploadedChannelSources().get(0).getShortDisplayName());
+                    repo.clearUploadedChannelSources();
+                } finally {
+                    shareMgr.setCheckEndpointUrl(origCheckUrl);
+                    shareMgr.setUploadEndpointUrl(origUploadUrl);
+                }
+            }
+        }
+    }
+
+    @Test
+    public void testHomeChannelSourceListDisplaysAndSwitchesUserUploadedSources() throws Exception {
+        String serverListJson = "{\n" +
+                "  \"code\": 0,\n" +
+                "  \"message\": \"success\",\n" +
+                "  \"data\": {\n" +
+                "    \"items\": [\n" +
+                "      {\n" +
+                "        \"id\": 21,\n" +
+                "        \"file_name\": \"bj_unicom_timeshift.m3u\",\n" +
+                "        \"province\": \"北京\",\n" +
+                "        \"city\": \"北京\",\n" +
+                "        \"isp_type\": \"联通\",\n" +
+                "        \"channel_type\": \"时移列表\",\n" +
+                "        \"channel_count\": 2,\n" +
+                "        \"file_size\": 256,\n" +
+                "        \"m3u_content\": \"#EXTM3U\\n#EXTINF:-1 group-title=\\\"时移专区\\\",CCTV-1时移[1][高清]\\nrtp://239.3.1.129:8008\\n#EXTINF:-1 group-title=\\\"时移专区\\\",北京卫视时移[21][高清]\\nrtp://239.3.1.141:8000\\n\"\n" +
+                "      },\n" +
+                "      {\n" +
+                "        \"id\": 22,\n" +
+                "        \"file_name\": \"sh_telecom_proxy.m3u\",\n" +
+                "        \"province\": \"上海\",\n" +
+                "        \"city\": \"上海\",\n" +
+                "        \"isp_type\": \"电信\",\n" +
+                "        \"channel_type\": \"经过代理后的\",\n" +
+                "        \"channel_count\": 1,\n" +
+                "        \"file_size\": 128,\n" +
+                "        \"m3u_content\": \"#EXTM3U\\n#EXTINF:-1 group-title=\\\"上海专区\\\",东方卫视[2][高清]\\nhttp://192.168.1.1:8012/rtp/239.253.64.1:5140\\n\"\n" +
+                "      }\n" +
+                "    ],\n" +
+                "    \"total\": 2,\n" +
+                "    \"page\": 1,\n" +
+                "    \"page_size\": 100\n" +
+                "  }\n" +
+                "}";
+
+        try (java.net.ServerSocket serverSocket = new java.net.ServerSocket(0)) {
+            int port = serverSocket.getLocalPort();
+            Thread serverThread = new Thread(() -> {
+                try (java.net.Socket s = serverSocket.accept();
+                     java.io.InputStream in = s.getInputStream();
+                     java.io.OutputStream out = s.getOutputStream()) {
+                    readHttpRequestWithRequestLine(in, null, null);
+                    byte[] respBytes = serverListJson.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                    String header = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
+                            + respBytes.length + "\r\nConnection: close\r\n\r\n";
+                    out.write(header.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    out.write(respBytes);
+                    out.flush();
+                } catch (Throwable ignored) {
+                }
+            });
+            serverThread.setDaemon(true);
+            serverThread.start();
+
+            try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class)) {
+                MainActivity activity = controller.create().start().resume().visible().get();
+                com.bjunicom.iptv.repository.ChannelRepository repo =
+                        com.bjunicom.iptv.repository.ChannelRepository.getInstance(activity);
+                com.bjunicom.iptv.config.IptvSettings settings =
+                        new com.bjunicom.iptv.config.IptvSettings(activity);
+                com.bjunicom.iptv.report.ChannelListShareManager shareMgr =
+                        com.bjunicom.iptv.report.ChannelListShareManager.getInstance(activity);
+                String origListUrl = shareMgr.getListEndpointUrl();
+                repo.clearUploadedChannelSources();
+
+                try {
+                    shareMgr.setListEndpointUrl("http://127.0.0.1:" + port + "/api/v1/channel-lists");
+
+                    // 1. Fetch user-uploaded channel lists from server
+                    java.util.List<com.bjunicom.iptv.report.ChannelListShareManager.SharedChannelListItem> fetched =
+                            shareMgr.fetchUploadedChannelListsSync();
+                    assertEquals(2, fetched.size());
+                    assertEquals(2, repo.getUploadedChannelSources().size());
+
+                    // 2. Verify home page channel source options display user-uploaded sources alongside 北京联通, 北京移动, 北京电信
+                    java.util.List<String> options = activity.getIspSwitchOptions();
+                    assertEquals(7, options.size());
+                    assertTrue(options.get(0).contains("北京联通 IPTV"));
+                    assertTrue(options.get(1).contains("北京移动 IPTV"));
+                    assertTrue(options.get(2).contains("北京电信 IPTV"));
+                    assertTrue(options.get(3).contains("北京三网聚合"));
+                    assertTrue(options.get(4).contains("自定义 M3U"));
+                    assertEquals("北京联通 IPTV [用户上传 · 时移列表] (bj_unicom_timeshift.m3u · 2 频道)", options.get(5));
+                    assertEquals("上海电信 IPTV [用户上传 · 经过代理后的] (sh_telecom_proxy.m3u · 1 频道)", options.get(6));
+
+                    // 3. Click btn_switch_isp on home page top bar -> verify dialog shows all 7 sources
+                    android.widget.Button btnSwitchIsp = activity.findViewById(R.id.btn_switch_isp);
+                    assertNotNull(btnSwitchIsp);
+                    btnSwitchIsp.performClick();
+                    assertNotNull(activity.getLastIspSwitchDialog());
+                    assertTrue(activity.getLastIspSwitchDialog().isShowing());
+                    assertEquals(7, activity.getLastIspSwitchDialog().getListView().getAdapter().getCount());
+                    activity.getLastIspSwitchDialog().dismiss();
+
+                    // 4. Switch to the first user-uploaded channel source (index 5 = ISP_USER_UPLOADED_BASE + 0)
+                    activity.switchIspProvider(com.bjunicom.iptv.config.IptvSettings.ISP_USER_UPLOADED_BASE);
+                    assertEquals(com.bjunicom.iptv.config.IptvSettings.ISP_USER_UPLOADED_LIST, settings.getIspProvider());
+                    assertEquals(5, repo.getCurrentChannelSourceOptionIndex());
+                    assertEquals("北京联通·时移列表", btnSwitchIsp.getText().toString());
+                    assertEquals(2, repo.getAllChannels().size());
+                    assertEquals("CCTV-1时移", repo.getAllChannels().get(0).getDisplayName());
+                    assertTrue(repo.getCategoryGroups().contains("时移专区"));
+
+                    // 5. Switch to the second user-uploaded channel source (index 6 = ISP_USER_UPLOADED_BASE + 1)
+                    activity.switchIspProvider(com.bjunicom.iptv.config.IptvSettings.ISP_USER_UPLOADED_BASE + 1);
+                    assertEquals(com.bjunicom.iptv.config.IptvSettings.ISP_USER_UPLOADED_LIST, settings.getIspProvider());
+                    assertEquals(6, repo.getCurrentChannelSourceOptionIndex());
+                    assertEquals("上海电信·经过代理后的", btnSwitchIsp.getText().toString());
+                    assertEquals(1, repo.getAllChannels().size());
+                    assertEquals("东方卫视", repo.getAllChannels().get(0).getDisplayName());
+
+                    // 6. Verify settings dialog rg_isp_provider also includes the 2 user-uploaded RadioButtons alongside 5 built-in ones
+                    activity.showSettingsDialog();
+                    assertNotNull(activity.getLastSettingsDialog());
+                    android.widget.RadioGroup rgIsp = activity.getLastSettingsDialog().findViewById(R.id.rg_isp_provider);
+                    assertNotNull(rgIsp);
+                    assertEquals(7, rgIsp.getChildCount());
+                    activity.getLastSettingsDialog().dismiss();
+
+                    // 7. Verify ISP_ALL_MERGED also includes user-uploaded channel sources in category tabs alongside 北京联通, 北京移动, 北京电信
+                    activity.switchIspProvider(com.bjunicom.iptv.config.IptvSettings.ISP_ALL_MERGED);
+                    java.util.List<String> mergedCategories = repo.getCategoryGroups();
+                    assertTrue(mergedCategories.contains("北京联通"));
+                    assertTrue(mergedCategories.contains("北京移动"));
+                    assertTrue(mergedCategories.contains("北京电信"));
+                    assertTrue(mergedCategories.contains("北京联通·时移列表"));
+                    assertTrue(mergedCategories.contains("上海电信·经过代理后的"));
+                } finally {
+                    shareMgr.setListEndpointUrl(origListUrl);
+                    repo.clearUploadedChannelSources();
+                    activity.switchIspProvider(com.bjunicom.iptv.config.IptvSettings.ISP_BEIJING_UNICOM);
+                }
+            }
+        }
+    }
+
+    private static String readHttpRequestWithRequestLine(java.io.InputStream in,
+                                                         java.util.List<String> requestLinesOut,
+                                                         java.util.List<String> contentTypesOut) throws Exception {
+        java.io.ByteArrayOutputStream headerBuf = new java.io.ByteArrayOutputStream();
+        int b;
+        int state = 0;
+        while ((b = in.read()) != -1) {
+            headerBuf.write(b);
+            if ((state == 0 || state == 2) && b == '\r') state++;
+            else if ((state == 1 || state == 3) && b == '\n') state++;
+            else state = 0;
+            if (state == 4) break;
+        }
+        String headers = new String(headerBuf.toByteArray(), java.nio.charset.StandardCharsets.UTF_8);
+        String[] lines = headers.split("\r\n");
+        if (lines.length > 0 && requestLinesOut != null) {
+            requestLinesOut.add(lines[0]);
+        }
+        int contentLength = 0;
+        for (String line : lines) {
+            String lower = line.toLowerCase(java.util.Locale.US);
+            if (lower.startsWith("content-length:")) {
+                contentLength = Integer.parseInt(line.substring("content-length:".length()).trim());
+            } else if (lower.startsWith("content-type:") && contentTypesOut != null) {
+                contentTypesOut.add(line.substring("content-type:".length()).trim());
+            }
+        }
+        byte[] body = new byte[contentLength];
+        int total = 0;
+        while (total < contentLength) {
+            int n = in.read(body, total, contentLength - total);
+            if (n < 0) break;
+            total += n;
+        }
+        return new String(body, 0, total, java.nio.charset.StandardCharsets.UTF_8);
+    }
+
     private static String readHttpRequest(java.io.InputStream in,
                                           java.util.List<String> contentTypesOut) throws Exception {
         java.io.ByteArrayOutputStream headerBuf = new java.io.ByteArrayOutputStream();

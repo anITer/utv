@@ -1,0 +1,342 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/sv_upload_channel_list"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@drawable/bg_md3_dialog_surface"
+    android:clipChildren="false"
+    android:clipToPadding="false"
+    android:padding="18dp"
+    android:scrollbars="none">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:clipChildren="false"
+        android:clipToPadding="false"
+        android:orientation="vertical"
+        android:padding="4dp">
+
+        <!-- 1. 运营商信息设置卡片（省、市、运营商类型） -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_md3_card_container"
+            android:clipChildren="false"
+            android:clipToPadding="false"
+            android:orientation="vertical"
+            android:padding="14dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fontFamily="sans-serif-medium"
+                android:includeFontPadding="false"
+                android:text="1. 运营商信息 (省、市、运营商类型)"
+                android:textColor="@color/md_theme_dark_primary"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:clipChildren="false"
+                android:clipToPadding="false"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:includeFontPadding="false"
+                    android:text="省份:"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="13sp" />
+
+                <EditText
+                    android:id="@+id/et_upload_province"
+                    android:layout_width="0dp"
+                    android:layout_height="38dp"
+                    android:layout_marginStart="8dp"
+                    android:layout_marginEnd="12dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/bg_badge"
+                    android:focusable="true"
+                    android:gravity="center_vertical"
+                    android:hint="如: 北京"
+                    android:includeFontPadding="false"
+                    android:paddingHorizontal="12dp"
+                    android:paddingVertical="0dp"
+                    android:singleLine="true"
+                    android:text="北京"
+                    android:textColor="@color/text_primary"
+                    android:textColorHint="@color/text_muted"
+                    android:textSize="13sp" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:includeFontPadding="false"
+                    android:text="城市:"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="13sp" />
+
+                <EditText
+                    android:id="@+id/et_upload_city"
+                    android:layout_width="0dp"
+                    android:layout_height="38dp"
+                    android:layout_marginStart="8dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/bg_badge"
+                    android:focusable="true"
+                    android:gravity="center_vertical"
+                    android:hint="如: 北京"
+                    android:includeFontPadding="false"
+                    android:paddingHorizontal="12dp"
+                    android:paddingVertical="0dp"
+                    android:singleLine="true"
+                    android:text="北京"
+                    android:textColor="@color/text_primary"
+                    android:textColorHint="@color/text_muted"
+                    android:textSize="13sp" />
+            </LinearLayout>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:includeFontPadding="false"
+                android:text="运营商类型:"
+                android:textColor="@color/text_secondary"
+                android:textSize="13sp" />
+
+            <RadioGroup
+                android:id="@+id/rg_upload_isp_type"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:clipChildren="false"
+                android:clipToPadding="false"
+                android:orientation="horizontal">
+
+                <RadioButton
+                    android:id="@+id/rb_upload_isp_unicom"
+                    android:layout_width="0dp"
+                    android:layout_height="38dp"
+                    android:layout_marginEnd="6dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/bg_badge"
+                    android:buttonTint="@color/md_theme_dark_primary"
+                    android:checked="true"
+                    android:focusable="true"
+                    android:includeFontPadding="false"
+                    android:paddingHorizontal="8dp"
+                    android:text="联通"
+                    android:textColor="@color/text_primary"
+                    android:textSize="13sp" />
+
+                <RadioButton
+                    android:id="@+id/rb_upload_isp_mobile"
+                    android:layout_width="0dp"
+                    android:layout_height="38dp"
+                    android:layout_marginEnd="6dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/bg_badge"
+                    android:buttonTint="@color/md_theme_dark_primary"
+                    android:focusable="true"
+                    android:includeFontPadding="false"
+                    android:paddingHorizontal="8dp"
+                    android:text="移动"
+                    android:textColor="@color/text_primary"
+                    android:textSize="13sp" />
+
+                <RadioButton
+                    android:id="@+id/rb_upload_isp_telecom"
+                    android:layout_width="0dp"
+                    android:layout_height="38dp"
+                    android:layout_marginEnd="6dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/bg_badge"
+                    android:buttonTint="@color/md_theme_dark_primary"
+                    android:focusable="true"
+                    android:includeFontPadding="false"
+                    android:paddingHorizontal="8dp"
+                    android:text="电信"
+                    android:textColor="@color/text_primary"
+                    android:textSize="13sp" />
+
+                <RadioButton
+                    android:id="@+id/rb_upload_isp_broadnet"
+                    android:layout_width="0dp"
+                    android:layout_height="38dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/bg_badge"
+                    android:buttonTint="@color/md_theme_dark_primary"
+                    android:focusable="true"
+                    android:includeFontPadding="false"
+                    android:paddingHorizontal="8dp"
+                    android:text="广电"
+                    android:textColor="@color/text_primary"
+                    android:textSize="13sp" />
+            </RadioGroup>
+        </LinearLayout>
+
+        <!-- 2. 频道信息与文件名设置卡片 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:background="@drawable/bg_md3_card_container"
+            android:clipChildren="false"
+            android:clipToPadding="false"
+            android:orientation="vertical"
+            android:padding="14dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fontFamily="sans-serif-medium"
+                android:includeFontPadding="false"
+                android:text="2. 频道信息与文件名设置"
+                android:textColor="@color/md_theme_dark_primary"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:includeFontPadding="false"
+                android:text="频道信息 (列表类型):"
+                android:textColor="@color/text_secondary"
+                android:textSize="13sp" />
+
+            <RadioGroup
+                android:id="@+id/rg_upload_channel_type"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:clipChildren="false"
+                android:clipToPadding="false"
+                android:orientation="horizontal">
+
+                <RadioButton
+                    android:id="@+id/rb_upload_channel_direct"
+                    android:layout_width="0dp"
+                    android:layout_height="38dp"
+                    android:layout_marginEnd="6dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/bg_badge"
+                    android:buttonTint="@color/md_theme_dark_primary"
+                    android:checked="true"
+                    android:focusable="true"
+                    android:includeFontPadding="false"
+                    android:paddingHorizontal="8dp"
+                    android:text="直连"
+                    android:textColor="@color/text_primary"
+                    android:textSize="13sp" />
+
+                <RadioButton
+                    android:id="@+id/rb_upload_channel_proxy"
+                    android:layout_width="0dp"
+                    android:layout_height="38dp"
+                    android:layout_marginEnd="6dp"
+                    android:layout_weight="1.2"
+                    android:background="@drawable/bg_badge"
+                    android:buttonTint="@color/md_theme_dark_primary"
+                    android:focusable="true"
+                    android:includeFontPadding="false"
+                    android:paddingHorizontal="8dp"
+                    android:text="经过代理后的"
+                    android:textColor="@color/text_primary"
+                    android:textSize="13sp" />
+
+                <RadioButton
+                    android:id="@+id/rb_upload_channel_timeshift"
+                    android:layout_width="0dp"
+                    android:layout_height="38dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/bg_badge"
+                    android:buttonTint="@color/md_theme_dark_primary"
+                    android:focusable="true"
+                    android:includeFontPadding="false"
+                    android:paddingHorizontal="8dp"
+                    android:text="时移列表"
+                    android:textColor="@color/text_primary"
+                    android:textSize="13sp" />
+            </RadioGroup>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:clipChildren="false"
+                android:clipToPadding="false"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:includeFontPadding="false"
+                    android:text="文件名:"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="13sp" />
+
+                <EditText
+                    android:id="@+id/et_upload_file_name"
+                    android:layout_width="0dp"
+                    android:layout_height="38dp"
+                    android:layout_marginStart="8dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/bg_badge"
+                    android:focusable="true"
+                    android:fontFamily="monospace"
+                    android:gravity="center_vertical"
+                    android:hint="如: bj-unicom-iptv.m3u"
+                    android:includeFontPadding="false"
+                    android:paddingHorizontal="12dp"
+                    android:paddingVertical="0dp"
+                    android:singleLine="true"
+                    android:textColor="@color/text_primary"
+                    android:textColorHint="@color/text_muted"
+                    android:textSize="13sp" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/tv_upload_channel_summary"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:fontFamily="sans-serif-medium"
+                android:text="待上传频道: 0 个"
+                android:textColor="@color/accent_amber"
+                android:textSize="12sp" />
+
+            <ProgressBar
+                android:id="@+id/pb_upload_progress"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="6dp"
+                android:layout_marginTop="8dp"
+                android:indeterminate="true"
+                android:progressTint="@color/md_theme_dark_primary"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/tv_upload_status"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:background="@drawable/bg_badge"
+                android:fontFamily="monospace"
+                android:lineSpacingExtra="2dp"
+                android:padding="10dp"
+                android:text="完成设置后点击「确认上传」，将先调用服务端接口检测是否存在同名列表，确认无重名后开始上传。"
+                android:textColor="@color/accent_green"
+                android:textSize="11sp" />
+        </LinearLayout>
+
+    </LinearLayout>
+</ScrollView>

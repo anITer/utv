@@ -7,6 +7,10 @@ import android.text.TextUtils;
 import com.bjunicom.iptv.config.IptvSettings;
 import com.bjunicom.iptv.model.IptvChannel;
 import com.bjunicom.iptv.parser.M3uParser;
+import com.bjunicom.iptv.report.ChannelListShareManager;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -47,6 +51,7 @@ public class ChannelRepository {
     private static final String CUSTOM_SCANNED_M3U_TELECOM = "modified_iptv_telecom.m3u";
     private static final String CUSTOM_SCANNED_M3U_ALL = "modified_iptv_all.m3u";
     private static final String CUSTOM_SCANNED_M3U_CUSTOM = "modified_iptv_custom.m3u";
+    private static final String CUSTOM_SCANNED_M3U_UPLOADED = "modified_iptv_uploaded.m3u";
     public static final String CUSTOM_UPLOADED_M3U_FILE = "custom_uploaded_iptv.m3u";
 
     public static final String GROUP_ALL = "全部频道";
@@ -81,12 +86,14 @@ public class ChannelRepository {
     private final IptvSettings settings;
     private final List<IptvChannel> allChannels = new ArrayList<>();
     private final Map<String, IptvChannel> knownMulticastMap = new LinkedHashMap<>();
+    private final List<ChannelListShareManager.SharedChannelListItem> uploadedChannelSources = new ArrayList<>();
     private final List<OnChannelsChangedListener> listeners = new CopyOnWriteArrayList<>();
     private volatile File lastSavedLocalM3uFile;
 
     private ChannelRepository(Context context) {
         this.appContext = context.getApplicationContext();
         this.settings = new IptvSettings(appContext);
+        loadPersistedUploadedChannelSources();
         reloadChannels();
     }
 
@@ -162,8 +169,16 @@ public class ChannelRepository {
             if (hasCustomUploadedM3u()) {
                 baseList.addAll(loadCustomUploadedWithIsp(true));
             }
+            for (ChannelListShareManager.SharedChannelListItem item : uploadedChannelSources) {
+                baseList.addAll(loadFromUploadedSourceItem(item, true));
+            }
         } else if (ispProvider == IptvSettings.ISP_CUSTOM_M3U) {
             baseList.addAll(loadCustomUploadedWithIsp(false));
+        } else if (ispProvider == IptvSettings.ISP_USER_UPLOADED_LIST) {
+            ChannelListShareManager.SharedChannelListItem selected = getSelectedUploadedChannelSource();
+            if (selected != null) {
+                baseList.addAll(loadFromUploadedSourceItem(selected, false));
+            }
         } else {
             String assetName = includeAll ? ASSET_UNICOM_ALL : ASSET_UNICOM_LATEST;
             baseList.addAll(loadFromAssetsWithIsp(assetName, GROUP_ISP_UNICOM, false));
@@ -208,6 +223,8 @@ public class ChannelRepository {
                 return GROUP_ISP_TELECOM;
             case IptvSettings.ISP_CUSTOM_M3U:
                 return GROUP_ISP_CUSTOM;
+            case IptvSettings.ISP_USER_UPLOADED_LIST:
+                return settings.getSelectedUploadedSourceShortName();
             case IptvSettings.ISP_BEIJING_UNICOM:
             default:
                 return GROUP_ISP_UNICOM;
@@ -251,6 +268,8 @@ public class ChannelRepository {
                 return CUSTOM_SCANNED_M3U_ALL;
             case IptvSettings.ISP_CUSTOM_M3U:
                 return CUSTOM_SCANNED_M3U_CUSTOM;
+            case IptvSettings.ISP_USER_UPLOADED_LIST:
+                return CUSTOM_SCANNED_M3U_UPLOADED;
             case IptvSettings.ISP_BEIJING_UNICOM:
             default:
                 return CUSTOM_SCANNED_M3U_UNICOM;
@@ -308,6 +327,247 @@ public class ChannelRepository {
         } catch (IOException e) {
             return new ArrayList<>();
         }
+    }
+
+    /**
+     * 获取用户上传的频道来源列表（与北京联通、北京移动、北京电信等内置频道来源并列展示）
+     */
+    public synchronized List<ChannelListShareManager.SharedChannelListItem> getUploadedChannelSources() {
+        return new ArrayList<>(uploadedChannelSources);
+    }
+
+    public synchronized ChannelListShareManager.SharedChannelListItem getSelectedUploadedChannelSource() {
+        if (uploadedChannelSources.isEmpty()) {
+            return null;
+        }
+        String selectedKey = settings.getSelectedUploadedSourceKey();
+        if (!TextUtils.isEmpty(selectedKey)) {
+            for (ChannelListShareManager.SharedChannelListItem item : uploadedChannelSources) {
+                if (selectedKey.equals(item.getSourceKey()) || selectedKey.equals(item.fileName)) {
+                    return item;
+                }
+            }
+        }
+        return uploadedChannelSources.get(0);
+    }
+
+    /**
+     * 新增或更新一条用户上传的频道来源（上传成功或从服务端拉取详情后立即加入列表）
+     */
+    public synchronized void addOrUpdateUploadedChannelSource(ChannelListShareManager.SharedChannelListItem item) {
+        if (item == null || TextUtils.isEmpty(item.fileName)) {
+            return;
+        }
+        upsertUploadedSourceLocked(item);
+        persistUploadedChannelSourcesLocked();
+        if (settings.getIspProvider() == IptvSettings.ISP_USER_UPLOADED_LIST
+                || settings.getIspProvider() == IptvSettings.ISP_ALL_MERGED) {
+            reloadChannels();
+        }
+        notifyChannelsChanged();
+    }
+
+    /**
+     * 合并从服务端拉取的用户上传频道来源列表 (/api/v1/channel-lists)
+     */
+    public synchronized void mergeServerUploadedChannelSources(List<ChannelListShareManager.SharedChannelListItem> serverItems) {
+        if (serverItems == null) {
+            return;
+        }
+        for (ChannelListShareManager.SharedChannelListItem item : serverItems) {
+            if (item != null && !TextUtils.isEmpty(item.fileName)) {
+                upsertUploadedSourceLocked(item);
+            }
+        }
+        persistUploadedChannelSourcesLocked();
+        if (settings.getIspProvider() == IptvSettings.ISP_USER_UPLOADED_LIST
+                || settings.getIspProvider() == IptvSettings.ISP_ALL_MERGED) {
+            reloadChannels();
+        }
+        notifyChannelsChanged();
+    }
+
+    public synchronized void setUploadedChannelSources(List<ChannelListShareManager.SharedChannelListItem> items) {
+        uploadedChannelSources.clear();
+        if (items != null) {
+            for (ChannelListShareManager.SharedChannelListItem item : items) {
+                if (item != null && !TextUtils.isEmpty(item.fileName)) {
+                    upsertUploadedSourceLocked(item);
+                }
+            }
+        }
+        persistUploadedChannelSourcesLocked();
+        if (settings.getIspProvider() == IptvSettings.ISP_USER_UPLOADED_LIST
+                || settings.getIspProvider() == IptvSettings.ISP_ALL_MERGED) {
+            reloadChannels();
+        }
+        notifyChannelsChanged();
+    }
+
+    public synchronized void clearUploadedChannelSources() {
+        uploadedChannelSources.clear();
+        settings.setUploadedChannelSourcesJson("");
+        if (settings.getIspProvider() == IptvSettings.ISP_USER_UPLOADED_LIST) {
+            settings.setIspProvider(IptvSettings.ISP_BEIJING_UNICOM);
+        }
+        reloadChannels();
+        notifyChannelsChanged();
+    }
+
+    private void upsertUploadedSourceLocked(ChannelListShareManager.SharedChannelListItem incoming) {
+        String key = incoming.getSourceKey();
+        for (int i = 0; i < uploadedChannelSources.size(); i++) {
+            ChannelListShareManager.SharedChannelListItem existing = uploadedChannelSources.get(i);
+            boolean sameId = incoming.id > 0 && existing.id == incoming.id;
+            boolean sameKey = key.equals(existing.getSourceKey());
+            if (sameId || sameKey) {
+                ChannelListShareManager.SharedChannelListItem merged = incoming;
+                if (!incoming.hasM3uContent() && existing.hasM3uContent()) {
+                    merged = incoming.withM3uContent(existing.m3uContent, existing.channelCount);
+                }
+                uploadedChannelSources.set(i, merged);
+                return;
+            }
+        }
+        uploadedChannelSources.add(incoming);
+    }
+
+    private synchronized void loadPersistedUploadedChannelSources() {
+        uploadedChannelSources.clear();
+        String json = settings.getUploadedChannelSourcesJson();
+        if (TextUtils.isEmpty(json)) {
+            return;
+        }
+        try {
+            JSONArray arr = new JSONArray(json);
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject obj = arr.optJSONObject(i);
+                ChannelListShareManager.SharedChannelListItem item =
+                        ChannelListShareManager.SharedChannelListItem.fromJson(obj);
+                if (item != null) {
+                    uploadedChannelSources.add(item);
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private synchronized void persistUploadedChannelSourcesLocked() {
+        try {
+            JSONArray arr = new JSONArray();
+            for (ChannelListShareManager.SharedChannelListItem item : uploadedChannelSources) {
+                arr.put(item.toJson());
+            }
+            settings.setUploadedChannelSourcesJson(arr.toString());
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private List<IptvChannel> loadFromUploadedSourceItem(ChannelListShareManager.SharedChannelListItem item,
+                                                         boolean appendIspToDisplay) {
+        if (item == null || !item.hasM3uContent()) {
+            return new ArrayList<>();
+        }
+        M3uParser.M3uInspectionReport report = M3uParser.inspectAndParse(item.m3uContent, item.fileName);
+        List<IptvChannel> list = report.channels;
+        String ispTag = item.getShortDisplayName();
+        for (IptvChannel ch : list) {
+            ch.setIspName(ispTag);
+            List<String> groups = new ArrayList<>(ch.getGroups());
+            if (!groups.contains(ispTag)) {
+                groups.add(ispTag);
+                ch.setGroups(groups);
+            }
+            if (appendIspToDisplay && !TextUtils.isEmpty(ispTag)) {
+                String disp = ch.getDisplayName();
+                if (disp != null && !disp.contains("(" + ispTag + ")")) {
+                    ch.setDisplayName(disp + " (" + ispTag + ")");
+                }
+            }
+        }
+        return list;
+    }
+
+    /**
+     * 切换当前频道来源为指定的用户上传频道列表项
+     */
+    public synchronized boolean selectUploadedChannelSource(ChannelListShareManager.SharedChannelListItem item) {
+        if (item == null) {
+            return false;
+        }
+        upsertUploadedSourceLocked(item);
+        persistUploadedChannelSourcesLocked();
+        ChannelListShareManager.SharedChannelListItem resolved = item;
+        for (ChannelListShareManager.SharedChannelListItem existing : uploadedChannelSources) {
+            if (existing.getSourceKey().equals(item.getSourceKey())
+                    || (item.id > 0 && existing.id == item.id)) {
+                resolved = existing;
+                break;
+            }
+        }
+        File staleUploadedScan = new File(getScanRootDir(), CUSTOM_SCANNED_M3U_UPLOADED);
+        if (staleUploadedScan.exists()) {
+            staleUploadedScan.delete();
+        }
+        settings.setSelectedUploadedSource(
+                resolved.getSourceKey(),
+                resolved.getDisplayName(),
+                resolved.getShortDisplayName(),
+                resolved.ispType
+        );
+        settings.setIspProvider(IptvSettings.ISP_USER_UPLOADED_LIST);
+        reloadChannels();
+        if (!allChannels.isEmpty()) {
+            settings.setLastChannelUrl(allChannels.get(0).getRawUrl());
+        }
+        notifyChannelsChanged();
+        return !allChannels.isEmpty();
+    }
+
+    public synchronized boolean selectUploadedChannelSourceByIndex(int uploadedIndex) {
+        if (uploadedIndex < 0 || uploadedIndex >= uploadedChannelSources.size()) {
+            return false;
+        }
+        return selectUploadedChannelSource(uploadedChannelSources.get(uploadedIndex));
+    }
+
+    /**
+     * 构建首页频道来源列表展示项（内置北京联通、北京移动、北京电信、北京三网聚合、自定义M3U 与用户上传的频道来源列表并列展示）
+     */
+    public synchronized List<String> getChannelSourceDisplayOptions() {
+        List<String> options = new ArrayList<>();
+        String customLabel = hasCustomUploadedM3u()
+                ? "自定义 M3U 播放列表 (" + settings.getCustomM3uName() + ")"
+                : "自定义 M3U 播放列表 (点击上传并检测文件内容)";
+        options.add("北京联通 IPTV (bj-unicom-iptv 组播源 rtp://239.3.1.x)");
+        options.add("北京移动 IPTV (bj-mobile-iptv 单播源 http://.../*.m3u8)");
+        options.add("北京电信 IPTV (bj-telecom-iptv 组播源 rtp://225.1.8.x)");
+        options.add("北京三网聚合 (联通 + 移动 + 电信全部频道)");
+        options.add(customLabel);
+        for (ChannelListShareManager.SharedChannelListItem item : uploadedChannelSources) {
+            options.add(item.getOptionTitle());
+        }
+        return options;
+    }
+
+    /**
+     * 返回当前选中的频道来源在 getChannelSourceDisplayOptions() 中的索引
+     */
+    public synchronized int getCurrentChannelSourceOptionIndex() {
+        int isp = settings.getIspProvider();
+        if (isp == IptvSettings.ISP_USER_UPLOADED_LIST) {
+            String selectedKey = settings.getSelectedUploadedSourceKey();
+            for (int i = 0; i < uploadedChannelSources.size(); i++) {
+                if (uploadedChannelSources.get(i).getSourceKey().equals(selectedKey)) {
+                    return IptvSettings.ISP_USER_UPLOADED_BASE + i;
+                }
+            }
+            if (!uploadedChannelSources.isEmpty()) {
+                return IptvSettings.ISP_USER_UPLOADED_BASE;
+            }
+            return IptvSettings.ISP_BEIJING_UNICOM;
+        }
+        return isp;
     }
 
     /**
@@ -653,6 +913,7 @@ public class ChannelRepository {
                 CUSTOM_SCANNED_M3U_TELECOM,
                 CUSTOM_SCANNED_M3U_ALL,
                 CUSTOM_SCANNED_M3U_CUSTOM,
+                CUSTOM_SCANNED_M3U_UPLOADED,
                 CUSTOM_UPLOADED_M3U_FILE
         };
         File root = getScanRootDir();
@@ -662,7 +923,8 @@ public class ChannelRepository {
                 f.delete();
             }
         }
-        if (settings.getIspProvider() == IptvSettings.ISP_CUSTOM_M3U) {
+        if (settings.getIspProvider() == IptvSettings.ISP_CUSTOM_M3U
+                || settings.getIspProvider() == IptvSettings.ISP_USER_UPLOADED_LIST) {
             settings.setIspProvider(IptvSettings.ISP_BEIJING_UNICOM);
         }
         reloadChannels();
@@ -706,6 +968,9 @@ public class ChannelRepository {
         List<String> categories = new ArrayList<>();
         categories.add(GROUP_ALL);
         int isp = settings.getIspProvider();
+        boolean isCustomOrUploaded = (isp == IptvSettings.ISP_CUSTOM_M3U
+                || isp == IptvSettings.ISP_USER_UPLOADED_LIST);
+        String activeUploadedGroup = settings.getSelectedUploadedSourceShortName();
         if (isp == IptvSettings.ISP_ALL_MERGED) {
             categories.add(GROUP_ISP_UNICOM);
             categories.add(GROUP_ISP_MOBILE);
@@ -713,17 +978,25 @@ public class ChannelRepository {
             if (hasAnyChannelInGroup(GROUP_ISP_CUSTOM)) {
                 categories.add(GROUP_ISP_CUSTOM);
             }
+            for (ChannelListShareManager.SharedChannelListItem item : uploadedChannelSources) {
+                String upGroup = item.getShortDisplayName();
+                if (!TextUtils.isEmpty(upGroup)
+                        && hasAnyChannelInGroup(upGroup)
+                        && !categories.contains(upGroup)) {
+                    categories.add(upGroup);
+                }
+            }
         }
-        if (isp != IptvSettings.ISP_CUSTOM_M3U || hasAnyChannelInGroup(GROUP_HD_CCTV)) {
+        if (!isCustomOrUploaded || hasAnyChannelInGroup(GROUP_HD_CCTV)) {
             categories.add(GROUP_HD_CCTV);
         }
-        if (isp != IptvSettings.ISP_CUSTOM_M3U || hasAnyChannelInGroup(GROUP_HD_SATELLITE)) {
+        if (!isCustomOrUploaded || hasAnyChannelInGroup(GROUP_HD_SATELLITE)) {
             categories.add(GROUP_HD_SATELLITE);
         }
-        if (isp != IptvSettings.ISP_CUSTOM_M3U || hasAnyChannelInGroup(GROUP_HD_BJ)) {
+        if (!isCustomOrUploaded || hasAnyChannelInGroup(GROUP_HD_BJ)) {
             categories.add(GROUP_HD_BJ);
         }
-        if (isp != IptvSettings.ISP_CUSTOM_M3U || hasAnyChannelInGroup(GROUP_HD_IPTV)) {
+        if (!isCustomOrUploaded || hasAnyChannelInGroup(GROUP_HD_IPTV)) {
             categories.add(GROUP_HD_IPTV);
         }
         if (hasAnyChannelInGroup(GROUP_HD_NEWTV)) {
@@ -744,6 +1017,7 @@ public class ChannelRepository {
                         || GROUP_ISP_MOBILE.equals(g)
                         || GROUP_ISP_TELECOM.equals(g)
                         || (isp == IptvSettings.ISP_CUSTOM_M3U && GROUP_ISP_CUSTOM.equals(g))
+                        || (isp == IptvSettings.ISP_USER_UPLOADED_LIST && g.equals(activeUploadedGroup))
                         || GROUP_4K.equals(g)
                         || GROUP_KIDS.equals(g)
                         || GROUP_SD_ALL.equals(g)
@@ -758,7 +1032,7 @@ public class ChannelRepository {
         }
 
         categories.add(GROUP_4K);
-        if (isp != IptvSettings.ISP_CUSTOM_M3U || hasAnyChannelInGroup(GROUP_KIDS)) {
+        if (!isCustomOrUploaded || hasAnyChannelInGroup(GROUP_KIDS)) {
             categories.add(GROUP_KIDS);
         }
         categories.add(GROUP_SD_ALL);

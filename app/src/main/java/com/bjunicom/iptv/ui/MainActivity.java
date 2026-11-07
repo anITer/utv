@@ -18,6 +18,7 @@ import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.RadioButton;
 import android.widget.RadioGroup;
 import android.widget.RelativeLayout;
 import android.widget.SeekBar;
@@ -42,6 +43,7 @@ import com.bjunicom.iptv.player.TimeshiftThumbnailExtractor;
 import com.bjunicom.iptv.network.TransportRouteCache;
 import com.bjunicom.iptv.player.MeasureHelper;
 import com.bjunicom.iptv.repository.ChannelRepository;
+import com.bjunicom.iptv.report.ChannelListShareManager;
 import com.bjunicom.iptv.report.DataReportManager;
 import com.bjunicom.iptv.ui.adapter.CategoryAdapter;
 import com.bjunicom.iptv.ui.adapter.ChannelAdapter;
@@ -119,6 +121,8 @@ public class MainActivity extends AppCompatActivity {
     private boolean longPressCenterHandled = false;
     private boolean drawerFocusOnCategories = false;
     private CustomM3uDialogHelper customM3uDialogHelper;
+    private AlertDialog lastIspSwitchDialog;
+    private AlertDialog lastSettingsDialog;
 
     private EditText etSearchChannel;
     private RecyclerView rvCategories;
@@ -245,6 +249,7 @@ public class MainActivity extends AppCompatActivity {
         handleIncomingM3uIntent(getIntent());
         AppUpdateManager.getInstance(this).checkForUpdatesOnStartup(this);
         DataReportManager.getInstance(this).reportDeviceProfileInitOnStartup();
+        ChannelListShareManager.getInstance(this).fetchUploadedChannelListsAsync(null);
     }
 
     @Override
@@ -1341,6 +1346,14 @@ public class MainActivity extends AppCompatActivity {
         if (settings == null) {
             return;
         }
+        if (newIsp >= IptvSettings.ISP_USER_UPLOADED_BASE) {
+            int uploadedIndex = newIsp - IptvSettings.ISP_USER_UPLOADED_BASE;
+            List<ChannelListShareManager.SharedChannelListItem> uploadedList = repository.getUploadedChannelSources();
+            if (uploadedIndex >= 0 && uploadedIndex < uploadedList.size()) {
+                switchToUploadedChannelSource(uploadedList.get(uploadedIndex));
+                return;
+            }
+        }
         int oldIsp = settings.getIspProvider();
         String oldDefaultSubnet = IptvSettings.getDefaultScanSubnetForIsp(oldIsp);
         String currentSubnet = settings.getScanSubnet();
@@ -1364,21 +1377,90 @@ public class MainActivity extends AppCompatActivity {
                 Toast.LENGTH_SHORT).show();
     }
 
-    private void showIspSwitchDialog() {
-        String customLabel = repository.hasCustomUploadedM3u()
-                ? "自定义 M3U 播放列表 (" + settings.getCustomM3uName() + ")"
-                : "自定义 M3U 播放列表 (点击上传并检测文件内容)";
-        String[] ispOptions = {
-                "北京联通 IPTV (bj-unicom-iptv 组播源 rtp://239.3.1.x)",
-                "北京移动 IPTV (bj-mobile-iptv 单播源 http://.../*.m3u8)",
-                "北京电信 IPTV (bj-telecom-iptv 组播源 rtp://225.1.8.x)",
-                "北京三网聚合 (联通 + 移动 + 电信全部频道)",
-                customLabel
-        };
-        int currentIsp = settings.getIspProvider();
-        new MaterialAlertDialogBuilder(this)
+    /**
+     * 切换至用户上传的频道来源列表项
+     */
+    public void switchToUploadedChannelSource(ChannelListShareManager.SharedChannelListItem item) {
+        if (item == null || repository == null) {
+            return;
+        }
+        if (item.hasM3uContent()) {
+            applyUploadedChannelSource(item);
+            return;
+        }
+        for (ChannelListShareManager.SharedChannelListItem cached : repository.getUploadedChannelSources()) {
+            if ((item.id > 0 && cached.id == item.id || cached.getSourceKey().equals(item.getSourceKey()))
+                    && cached.hasM3uContent()) {
+                applyUploadedChannelSource(cached);
+                return;
+            }
+        }
+        if (item.id > 0) {
+            Toast.makeText(this, "正在从服务器加载频道列表: " + item.getDisplayName() + "...", Toast.LENGTH_SHORT).show();
+            ChannelListShareManager.getInstance(this).fetchUploadedChannelListDetailAsync(
+                    item.id,
+                    new ChannelListShareManager.FetchDetailCallback() {
+                        @Override
+                        public void onChannelListDetailFetched(ChannelListShareManager.SharedChannelListItem detailItem) {
+                            applyUploadedChannelSource(detailItem);
+                        }
+
+                        @Override
+                        public void onFailure(int httpStatusCode, String errorMessage) {
+                            Toast.makeText(MainActivity.this, errorMessage, Toast.LENGTH_SHORT).show();
+                        }
+                    });
+        } else {
+            applyUploadedChannelSource(item);
+        }
+    }
+
+    private void applyUploadedChannelSource(ChannelListShareManager.SharedChannelListItem item) {
+        repository.selectUploadedChannelSource(item);
+        if (categoryAdapter != null) {
+            categoryAdapter.setCategories(repository.getCategoryGroups());
+            categoryAdapter.setSelectedCategory(ChannelRepository.GROUP_ALL);
+        }
+        updateIspButtonsVisualState();
+        refreshChannelList();
+        playInitialChannel();
+        Toast.makeText(this,
+                "已切换至: " + settings.getIspDisplayName() + " (" + repository.getAllChannels().size() + " 频道)",
+                Toast.LENGTH_SHORT).show();
+    }
+
+    public List<String> getIspSwitchOptions() {
+        return repository.getChannelSourceDisplayOptions();
+    }
+
+    @Nullable
+    public AlertDialog getLastIspSwitchDialog() {
+        return lastIspSwitchDialog;
+    }
+
+    @Nullable
+    public AlertDialog getLastSettingsDialog() {
+        return lastSettingsDialog;
+    }
+
+    public void showIspSwitchDialog() {
+        showIspSwitchDialogInternal(true);
+    }
+
+    private void showIspSwitchDialogInternal(boolean triggerRemoteFetch) {
+        if (isFinishing()) {
+            return;
+        }
+        if (lastIspSwitchDialog != null && lastIspSwitchDialog.isShowing()) {
+            lastIspSwitchDialog.dismiss();
+        }
+        final List<String> optionList = repository.getChannelSourceDisplayOptions();
+        final String[] ispOptions = optionList.toArray(new String[0]);
+        int checkedIndex = repository.getCurrentChannelSourceOptionIndex();
+
+        lastIspSwitchDialog = new MaterialAlertDialogBuilder(this)
                 .setTitle("切换北京 IPTV 运营商节目源")
-                .setSingleChoiceItems(ispOptions, currentIsp, (dialog, which) -> {
+                .setSingleChoiceItems(ispOptions, checkedIndex, (dialog, which) -> {
                     dialog.dismiss();
                     if (which == IptvSettings.ISP_CUSTOM_M3U && !repository.hasCustomUploadedM3u()) {
                         showCustomM3uDialog();
@@ -1389,6 +1471,18 @@ public class MainActivity extends AppCompatActivity {
                 .setNeutralButton("上传/检测自定义 M3U", (d, w) -> showCustomM3uDialog())
                 .setNegativeButton("取消", null)
                 .show();
+
+        if (triggerRemoteFetch) {
+            ChannelListShareManager.getInstance(this).fetchUploadedChannelListsAsync(items -> {
+                if (isFinishing() || lastIspSwitchDialog == null || !lastIspSwitchDialog.isShowing()) {
+                    return;
+                }
+                List<String> updatedOptions = repository.getChannelSourceDisplayOptions();
+                if (!updatedOptions.equals(optionList)) {
+                    showIspSwitchDialogInternal(false);
+                }
+            });
+        }
     }
 
     private void showHudTemporarily() {
@@ -1575,7 +1669,7 @@ public class MainActivity extends AppCompatActivity {
                 .show();
     }
 
-    private void showSettingsDialog() {
+    public void showSettingsDialog() {
         View view = LayoutInflater.from(this).inflate(R.layout.dialog_player_settings, null);
         RadioGroup rgIspProvider = view.findViewById(R.id.rg_isp_provider);
         Button btnSettingsUploadM3u = view.findViewById(R.id.btn_settings_upload_m3u);
@@ -1588,7 +1682,22 @@ public class MainActivity extends AppCompatActivity {
         CheckBox cbTextureView = view.findViewById(R.id.cb_settings_textureview);
         CheckBox cbAllChannels = view.findViewById(R.id.cb_settings_all_channels);
 
+        final android.widget.ScrollView svSettings = view.findViewById(R.id.sv_player_settings);
+        final View.OnFocusChangeListener settingsFocusCenterListener = (v, hasFocus) -> {
+            if (hasFocus && svSettings != null && svSettings.getHeight() > 0) {
+                android.graphics.Rect rect = new android.graphics.Rect();
+                v.getDrawingRect(rect);
+                try {
+                    svSettings.offsetDescendantRectToMyCoords(v, rect);
+                    int targetY = Math.max(0, rect.centerY() - svSettings.getHeight() / 2);
+                    svSettings.smoothScrollTo(0, targetY);
+                } catch (IllegalArgumentException ignored) {
+                }
+            }
+        };
+
         if (rgIspProvider != null) {
+            populateUploadedSourcesInSettingsRadioGroup(rgIspProvider, settingsFocusCenterListener);
             int currentIsp = settings.getIspProvider();
             if (currentIsp == IptvSettings.ISP_BEIJING_MOBILE) {
                 rgIspProvider.check(R.id.rb_isp_mobile);
@@ -1598,6 +1707,8 @@ public class MainActivity extends AppCompatActivity {
                 rgIspProvider.check(R.id.rb_isp_all);
             } else if (currentIsp == IptvSettings.ISP_CUSTOM_M3U) {
                 rgIspProvider.check(R.id.rb_isp_custom);
+            } else if (currentIsp == IptvSettings.ISP_USER_UPLOADED_LIST) {
+                checkActiveUploadedRadioInSettings(rgIspProvider);
             } else {
                 rgIspProvider.check(R.id.rb_isp_unicom);
             }
@@ -1667,11 +1778,21 @@ public class MainActivity extends AppCompatActivity {
                     }
 
                     boolean prevAll = settings.isIncludeAllRepoChannels();
+                    if (prevAll != cbAllChannels.isChecked()) {
+                        settings.setIncludeAllRepoChannels(cbAllChannels.isChecked());
+                    }
+
                     int prevIsp = settings.getIspProvider();
                     int newIsp = prevIsp;
+                    ChannelListShareManager.SharedChannelListItem selectedUploadedItem = null;
                     if (rgIspProvider != null) {
                         int checkedIspId = rgIspProvider.getCheckedRadioButtonId();
-                        if (checkedIspId == R.id.rb_isp_mobile) {
+                        View checkedRadioView = rgIspProvider.findViewById(checkedIspId);
+                        if (checkedRadioView != null
+                                && checkedRadioView.getTag() instanceof ChannelListShareManager.SharedChannelListItem) {
+                            selectedUploadedItem = (ChannelListShareManager.SharedChannelListItem) checkedRadioView.getTag();
+                            newIsp = IptvSettings.ISP_USER_UPLOADED_LIST;
+                        } else if (checkedIspId == R.id.rb_isp_mobile) {
                             newIsp = IptvSettings.ISP_BEIJING_MOBILE;
                         } else if (checkedIspId == R.id.rb_isp_telecom) {
                             newIsp = IptvSettings.ISP_BEIJING_TELECOM;
@@ -1684,8 +1805,9 @@ public class MainActivity extends AppCompatActivity {
                         }
                     }
 
-                    if (prevAll != cbAllChannels.isChecked()) {
-                        settings.setIncludeAllRepoChannels(cbAllChannels.isChecked());
+                    if (selectedUploadedItem != null) {
+                        switchToUploadedChannelSource(selectedUploadedItem);
+                        return;
                     }
 
                     if (newIsp == IptvSettings.ISP_CUSTOM_M3U && !repository.hasCustomUploadedM3u()) {
@@ -1711,6 +1833,8 @@ public class MainActivity extends AppCompatActivity {
                 .setNegativeButton("取消", null)
                 .create();
 
+        lastSettingsDialog = settingsDialog;
+
         if (btnSettingsUploadM3u != null) {
             btnSettingsUploadM3u.setOnClickListener(v -> {
                 settingsDialog.dismiss();
@@ -1728,7 +1852,6 @@ public class MainActivity extends AppCompatActivity {
             });
         }
 
-        final android.widget.ScrollView svSettings = view.findViewById(R.id.sv_player_settings);
         int[] settingsFocusableIds = {
                 R.id.rb_isp_unicom, R.id.rb_isp_mobile, R.id.rb_isp_telecom,
                 R.id.rb_isp_all, R.id.rb_isp_custom, R.id.btn_settings_upload_m3u,
@@ -1736,18 +1859,6 @@ public class MainActivity extends AppCompatActivity {
                 R.id.et_settings_udpxy, R.id.rb_core_ijk, R.id.rb_core_utv, R.id.rb_core_android,
                 R.id.cb_settings_mediacodec, R.id.cb_settings_hevc, R.id.cb_settings_opensles,
                 R.id.cb_settings_textureview, R.id.cb_settings_all_channels, R.id.btn_settings_check_update
-        };
-        View.OnFocusChangeListener settingsFocusCenterListener = (v, hasFocus) -> {
-            if (hasFocus && svSettings != null && svSettings.getHeight() > 0) {
-                android.graphics.Rect rect = new android.graphics.Rect();
-                v.getDrawingRect(rect);
-                try {
-                    svSettings.offsetDescendantRectToMyCoords(v, rect);
-                    int targetY = Math.max(0, rect.centerY() - svSettings.getHeight() / 2);
-                    svSettings.smoothScrollTo(0, targetY);
-                } catch (IllegalArgumentException ignored) {
-                }
-            }
         };
         for (int id : settingsFocusableIds) {
             View item = view.findViewById(id);
@@ -1762,6 +1873,87 @@ public class MainActivity extends AppCompatActivity {
             if (checkedIspRadio != null) {
                 checkedIspRadio.post(() -> requestFocusCompat(checkedIspRadio));
             }
+            ChannelListShareManager.getInstance(this).fetchUploadedChannelListsAsync(items -> {
+                if (!isFinishing() && settingsDialog.isShowing()) {
+                    populateUploadedSourcesInSettingsRadioGroup(rgIspProvider, settingsFocusCenterListener);
+                    if (settings.getIspProvider() == IptvSettings.ISP_USER_UPLOADED_LIST) {
+                        checkActiveUploadedRadioInSettings(rgIspProvider);
+                    }
+                }
+            });
+        }
+    }
+
+    private void populateUploadedSourcesInSettingsRadioGroup(RadioGroup rgIspProvider,
+                                                             View.OnFocusChangeListener focusListener) {
+        if (rgIspProvider == null || repository == null) {
+            return;
+        }
+        // 移除先前动态添加的用户上传频道来源单选项，避免重复添加
+        for (int i = rgIspProvider.getChildCount() - 1; i >= 0; i--) {
+            View child = rgIspProvider.getChildAt(i);
+            if (child != null && child.getTag() instanceof ChannelListShareManager.SharedChannelListItem) {
+                rgIspProvider.removeViewAt(i);
+            }
+        }
+        List<ChannelListShareManager.SharedChannelListItem> uploadedList = repository.getUploadedChannelSources();
+        float density = getResources().getDisplayMetrics().density;
+        int marginH = Math.round(2f * density);
+        int marginTop = Math.round(6f * density);
+        int padH = Math.round(8f * density);
+        int padV = Math.round(6f * density);
+        int minH = Math.round(38f * density);
+
+        for (ChannelListShareManager.SharedChannelListItem item : uploadedList) {
+            RadioButton rb = new RadioButton(this);
+            rb.setId(View.generateViewId());
+            rb.setTag(item);
+            rb.setText(item.getOptionTitle());
+            rb.setTextSize(13f);
+            rb.setTextColor(getResources().getColor(R.color.text_primary));
+            rb.setBackgroundResource(R.drawable.bg_badge);
+            rb.setButtonTintList(android.content.res.ColorStateList.valueOf(
+                    getResources().getColor(R.color.md_theme_dark_primary)));
+            rb.setFocusable(true);
+            rb.setIncludeFontPadding(false);
+            rb.setMinHeight(minH);
+            rb.setPadding(padH, padV, padH, padV);
+            if (focusListener != null) {
+                rb.setOnFocusChangeListener(focusListener);
+            }
+            RadioGroup.LayoutParams lp = new RadioGroup.LayoutParams(
+                    RadioGroup.LayoutParams.MATCH_PARENT,
+                    RadioGroup.LayoutParams.WRAP_CONTENT
+            );
+            lp.setMargins(marginH, marginTop, marginH, 0);
+            rgIspProvider.addView(rb, lp);
+        }
+    }
+
+    private void checkActiveUploadedRadioInSettings(RadioGroup rgIspProvider) {
+        if (rgIspProvider == null) {
+            return;
+        }
+        String selectedKey = settings.getSelectedUploadedSourceKey();
+        RadioButton firstUploadedRb = null;
+        for (int i = 0; i < rgIspProvider.getChildCount(); i++) {
+            View child = rgIspProvider.getChildAt(i);
+            if (child instanceof RadioButton
+                    && child.getTag() instanceof ChannelListShareManager.SharedChannelListItem) {
+                RadioButton rb = (RadioButton) child;
+                ChannelListShareManager.SharedChannelListItem item =
+                        (ChannelListShareManager.SharedChannelListItem) rb.getTag();
+                if (firstUploadedRb == null) {
+                    firstUploadedRb = rb;
+                }
+                if (item.getSourceKey().equals(selectedKey)) {
+                    rgIspProvider.check(rb.getId());
+                    return;
+                }
+            }
+        }
+        if (firstUploadedRb != null) {
+            rgIspProvider.check(firstUploadedRb.getId());
         }
     }
 

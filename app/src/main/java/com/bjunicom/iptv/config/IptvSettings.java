@@ -16,6 +16,8 @@ public class IptvSettings {
     public static final int ISP_BEIJING_TELECOM = 2;        // 北京电信 IPTV (rtp://225.1.8.x:port)
     public static final int ISP_ALL_MERGED = 3;             // 北京三网聚合 (联通 + 移动 + 电信)
     public static final int ISP_CUSTOM_M3U = 4;             // 用户上传的自定义 M3U 播放列表
+    public static final int ISP_USER_UPLOADED_LIST = 5;     // 用户上传至服务器的频道来源列表项
+    public static final int ISP_USER_UPLOADED_BASE = 5;     // 频道来源列表中用户上传频道源的起始索引
 
     // 流播放传输模式
     public static final int STREAM_MODE_UDPXY = 0;          // 路由器/软路由 udpxy 组播转单播 (如 http://192.168.2.1:8012/rtp/...)
@@ -29,6 +31,11 @@ public class IptvSettings {
 
     private static final String KEY_ISP_PROVIDER = "isp_provider";
     private static final String KEY_CUSTOM_M3U_NAME = "custom_m3u_name";
+    private static final String KEY_SELECTED_UPLOADED_SOURCE_KEY = "selected_uploaded_source_key";
+    private static final String KEY_SELECTED_UPLOADED_SOURCE_DISPLAY = "selected_uploaded_source_display";
+    private static final String KEY_SELECTED_UPLOADED_SOURCE_SHORT = "selected_uploaded_source_short";
+    private static final String KEY_SELECTED_UPLOADED_SOURCE_ISP_TYPE = "selected_uploaded_source_isp_type";
+    private static final String KEY_UPLOADED_CHANNEL_SOURCES_JSON = "uploaded_channel_sources_json";
     private static final String KEY_STREAM_MODE = "stream_mode";
     private static final String KEY_UDPXY_ADDR = "udpxy_addr";
     private static final String KEY_PLAYER_TYPE = "player_type";
@@ -68,10 +75,52 @@ public class IptvSettings {
     }
 
     public void setIspProvider(int ispProvider) {
-        if (ispProvider < ISP_BEIJING_UNICOM || ispProvider > ISP_CUSTOM_M3U) {
+        if (ispProvider < ISP_BEIJING_UNICOM || ispProvider > ISP_USER_UPLOADED_LIST) {
             ispProvider = ISP_BEIJING_UNICOM;
         }
         prefs.edit().putInt(KEY_ISP_PROVIDER, ispProvider).apply();
+    }
+
+    public String getSelectedUploadedSourceKey() {
+        return prefs.getString(KEY_SELECTED_UPLOADED_SOURCE_KEY, "");
+    }
+
+    public String getSelectedUploadedSourceDisplayName() {
+        String name = prefs.getString(KEY_SELECTED_UPLOADED_SOURCE_DISPLAY, "");
+        return TextUtils.isEmpty(name) ? "用户上传频道源" : name.trim();
+    }
+
+    public String getSelectedUploadedSourceShortName() {
+        String name = prefs.getString(KEY_SELECTED_UPLOADED_SOURCE_SHORT, "");
+        return TextUtils.isEmpty(name) ? "用户上传源" : name.trim();
+    }
+
+    public String getSelectedUploadedSourceIspType() {
+        return prefs.getString(KEY_SELECTED_UPLOADED_SOURCE_ISP_TYPE, "");
+    }
+
+    public void setSelectedUploadedSource(String sourceKey,
+                                          String displayName,
+                                          String shortName,
+                                          String ispType) {
+        prefs.edit()
+                .putString(KEY_SELECTED_UPLOADED_SOURCE_KEY, sourceKey != null ? sourceKey.trim() : "")
+                .putString(KEY_SELECTED_UPLOADED_SOURCE_DISPLAY, displayName != null ? displayName.trim() : "")
+                .putString(KEY_SELECTED_UPLOADED_SOURCE_SHORT, shortName != null ? shortName.trim() : "")
+                .putString(KEY_SELECTED_UPLOADED_SOURCE_ISP_TYPE, ispType != null ? ispType.trim() : "")
+                .apply();
+    }
+
+    public String getUploadedChannelSourcesJson() {
+        return prefs.getString(KEY_UPLOADED_CHANNEL_SOURCES_JSON, "");
+    }
+
+    public void setUploadedChannelSourcesJson(String json) {
+        if (TextUtils.isEmpty(json)) {
+            prefs.edit().remove(KEY_UPLOADED_CHANNEL_SOURCES_JSON).apply();
+        } else {
+            prefs.edit().putString(KEY_UPLOADED_CHANNEL_SOURCES_JSON, json).apply();
+        }
     }
 
     public String getCustomM3uName() {
@@ -84,10 +133,14 @@ public class IptvSettings {
     }
 
     public String getIspDisplayName() {
-        if (getIspProvider() == ISP_CUSTOM_M3U) {
+        int isp = getIspProvider();
+        if (isp == ISP_CUSTOM_M3U) {
             return "自定义 M3U (" + getCustomM3uName() + ")";
         }
-        return getIspDisplayName(getIspProvider());
+        if (isp == ISP_USER_UPLOADED_LIST) {
+            return getSelectedUploadedSourceDisplayName();
+        }
+        return getIspDisplayName(isp);
     }
 
     public static String getIspDisplayName(int ispProvider) {
@@ -100,6 +153,8 @@ public class IptvSettings {
                 return "北京三网聚合";
             case ISP_CUSTOM_M3U:
                 return "自定义 M3U";
+            case ISP_USER_UPLOADED_LIST:
+                return "用户上传频道源";
             case ISP_BEIJING_UNICOM:
             default:
                 return "北京联通 IPTV";
@@ -107,6 +162,9 @@ public class IptvSettings {
     }
 
     public String getIspShortName() {
+        if (getIspProvider() == ISP_USER_UPLOADED_LIST) {
+            return getSelectedUploadedSourceShortName();
+        }
         return getIspShortName(getIspProvider());
     }
 
@@ -120,6 +178,8 @@ public class IptvSettings {
                 return "三网聚合";
             case ISP_CUSTOM_M3U:
                 return "自定义源";
+            case ISP_USER_UPLOADED_LIST:
+                return "用户上传源";
             case ISP_BEIJING_UNICOM:
             default:
                 return "北京联通";
@@ -229,6 +289,10 @@ public class IptvSettings {
         if (isp == ISP_BEIJING_UNICOM) {
             return prefs.getString(KEY_LAST_CHANNEL_URL, "rtp://239.3.1.129:8008");
         }
+        if (isp == ISP_USER_UPLOADED_LIST) {
+            String srcKey = getSelectedUploadedSourceKey();
+            return prefs.getString(KEY_LAST_CHANNEL_URL + "_uploaded_" + srcKey, "");
+        }
         String key = KEY_LAST_CHANNEL_URL + "_" + isp;
         String defaultUrl = (isp == ISP_BEIJING_TELECOM)
                 ? "rtp://225.1.8.1:8008"
@@ -240,6 +304,9 @@ public class IptvSettings {
         int isp = getIspProvider();
         if (isp == ISP_BEIJING_UNICOM) {
             prefs.edit().putString(KEY_LAST_CHANNEL_URL, url).apply();
+        } else if (isp == ISP_USER_UPLOADED_LIST) {
+            String srcKey = getSelectedUploadedSourceKey();
+            prefs.edit().putString(KEY_LAST_CHANNEL_URL + "_uploaded_" + srcKey, url).apply();
         } else {
             prefs.edit().putString(KEY_LAST_CHANNEL_URL + "_" + isp, url).apply();
         }
@@ -311,6 +378,15 @@ public class IptvSettings {
     }
 
     public String getCarrierReportName() {
+        if (getIspProvider() == ISP_USER_UPLOADED_LIST) {
+            String ispType = getSelectedUploadedSourceIspType();
+            if ("电信".equals(ispType)) {
+                return "China Telecom";
+            } else if ("移动".equals(ispType)) {
+                return "China Mobile";
+            }
+            return "China Unicom";
+        }
         return getCarrierReportName(getIspProvider());
     }
 
