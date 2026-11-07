@@ -211,6 +211,28 @@ public class IjkVideoView extends FrameLayout {
     private Map<String, String> mHeaders;
     private boolean mSimulateBackgroundPlayerCreationFailure = false;
     private final TsHardwareAudioCompanion mHwAudioCompanion = new TsHardwareAudioCompanion();
+    private final LivePauseFrameBuffer mFallbackFrameBuffer = new LivePauseFrameBuffer();
+    private boolean mDecoderPaused = false;
+    private float mCurrentPlaybackSpeed = LivePauseFrameBuffer.NORMAL_PLAYBACK_SPEED;
+    private LivePauseFrameBuffer.CatchUpStateListener mCatchUpStateListener;
+    private final LivePauseFrameBuffer.CatchUpStateListener mInternalCatchUpListener =
+            new LivePauseFrameBuffer.CatchUpStateListener() {
+                @Override
+                public void onCatchUpStarted(float speed) {
+                    applySpeedToActivePlayer(speed);
+                    if (mCatchUpStateListener != null) {
+                        mCatchUpStateListener.onCatchUpStarted(speed);
+                    }
+                }
+
+                @Override
+                public void onCatchUpCompleted() {
+                    applySpeedToActivePlayer(LivePauseFrameBuffer.NORMAL_PLAYBACK_SPEED);
+                    if (mCatchUpStateListener != null) {
+                        mCatchUpStateListener.onCatchUpCompleted();
+                    }
+                }
+            };
 
     private int mCurrentState = STATE_IDLE;
     private int mTargetState = STATE_IDLE;
@@ -275,6 +297,7 @@ public class IjkVideoView extends FrameLayout {
         }
         mActiveSlot = mPlayerSlots[0];
         mBackgroundSlot = null;
+        mFallbackFrameBuffer.setCatchUpStateListener(mInternalCatchUpListener);
 
         setRender(mSettings.getRenderViewType());
 
@@ -558,6 +581,9 @@ public class IjkVideoView extends FrameLayout {
             mForceIjkForCurrentStream = false;
             mForceIjkVideoSoftware = false;
             mExpandedIjkProbeWindow = false;
+            mDecoderPaused = false;
+            mCurrentPlaybackSpeed = LivePauseFrameBuffer.NORMAL_PLAYBACK_SPEED;
+            mFallbackFrameBuffer.reset();
             mPlaybackMetrics = new PlaybackMetrics(++mRequestSequence);
         }
         mLastRequestedPlayerType = mSettings.getPlayerType();
@@ -895,7 +921,9 @@ public class IjkVideoView extends FrameLayout {
         IMediaPlayer mediaPlayer;
         switch (playerType) {
             case IptvSettings.PLAYER_UTV:
-                return new UTVPlayer(mAppContext);
+                UTVPlayer utvPlayer = new UTVPlayer(mAppContext);
+                utvPlayer.setCatchUpStateListener(mInternalCatchUpListener);
+                return utvPlayer;
             case IptvSettings.PLAYER_IJK:
                 try {
                     IjkMediaPlayer ijkPlayer = new IjkMediaPlayer();
@@ -1307,6 +1335,9 @@ public class IjkVideoView extends FrameLayout {
             }
         }
         mMediaPlayer = null;
+        mDecoderPaused = false;
+        mCurrentPlaybackSpeed = LivePauseFrameBuffer.NORMAL_PLAYBACK_SPEED;
+        mFallbackFrameBuffer.reset();
         mCurrentState = STATE_IDLE;
         if (cleartargetstate) {
             mTargetState = STATE_IDLE;
@@ -1317,10 +1348,134 @@ public class IjkVideoView extends FrameLayout {
         }
     }
 
+    public void setCatchUpStateListener(LivePauseFrameBuffer.CatchUpStateListener listener) {
+        mCatchUpStateListener = listener;
+    }
+
+    public LivePauseFrameBuffer getFrameBuffer() {
+        UTVPlayer utv = getUtvPlayer();
+        return utv != null ? utv.getFrameBuffer() : mFallbackFrameBuffer;
+    }
+
+    public int getFrameBufferSlotCapacity() {
+        return getFrameBuffer().getSlotCapacity();
+    }
+
+    public boolean isDecoderPaused() {
+        UTVPlayer utv = getUtvPlayer();
+        return utv != null ? utv.isDecoderPaused() : mDecoderPaused;
+    }
+
+    public boolean isCatchingUp() {
+        return getFrameBuffer().isCatchingUp();
+    }
+
+    public float getPlaybackSpeed() {
+        UTVPlayer utv = getUtvPlayer();
+        if (utv != null) {
+            return utv.getPlaybackSpeed();
+        }
+        if (mFallbackFrameBuffer.isCatchingUp()) {
+            return mFallbackFrameBuffer.getPlaybackSpeed();
+        }
+        return mCurrentPlaybackSpeed;
+    }
+
+    public float getAudioPlaybackSpeed() {
+        UTVPlayer utv = getUtvPlayer();
+        if (utv != null) {
+            return utv.getAudioPlaybackSpeed();
+        }
+        if (mFallbackFrameBuffer.isCatchingUp()) {
+            return mFallbackFrameBuffer.getAudioPlaybackSpeed();
+        }
+        return mCurrentPlaybackSpeed;
+    }
+
+    public void setPlaybackSpeed(float speed) {
+        applySpeedToActivePlayer(speed);
+    }
+
+    private void applySpeedToActivePlayer(float speed) {
+        float safeSpeed = speed > 0f ? speed : LivePauseFrameBuffer.NORMAL_PLAYBACK_SPEED;
+        mCurrentPlaybackSpeed = safeSpeed;
+        mHwAudioCompanion.setPlaybackSpeed(safeSpeed);
+        UTVPlayer utv = getUtvPlayer();
+        if (utv != null) {
+            utv.setPlaybackSpeed(safeSpeed);
+        }
+        try {
+            IMediaPlayer mp = unwrapIjkMediaPlayer();
+            if (mp instanceof IjkMediaPlayer) {
+                ((IjkMediaPlayer) mp).setSpeed(safeSpeed);
+            } else if (mp instanceof AndroidMediaPlayer && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                MediaPlayer internalMp = ((AndroidMediaPlayer) mp).getInternalMediaPlayer();
+                if (internalMp != null) {
+                    internalMp.setPlaybackParams(internalMp.getPlaybackParams().setSpeed(safeSpeed));
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    public boolean advanceCatchUpProgress(long realElapsedMs) {
+        UTVPlayer utv = getUtvPlayer();
+        boolean caughtUp;
+        if (utv != null) {
+            caughtUp = utv.syncAndAdvanceCatchUpProgressMs(realElapsedMs);
+        } else {
+            LivePauseFrameBuffer fb = getFrameBuffer();
+            try {
+                if (mMediaPlayer != null) {
+                    long posMs = mMediaPlayer.getCurrentPosition();
+                    if (posMs > 0L) {
+                        fb.updatePlaybackTimestampUs(posMs * 1000L + fb.getTotalEvictedVideoDurationUs());
+                    }
+                }
+            } catch (Throwable ignored) {
+            }
+            caughtUp = fb.advanceCatchUpWithLiveStreamMs(realElapsedMs);
+        }
+        if (caughtUp) {
+            applySpeedToActivePlayer(LivePauseFrameBuffer.NORMAL_PLAYBACK_SPEED);
+        }
+        return caughtUp;
+    }
+
+    public void completeCatchUp() {
+        getFrameBuffer().completeCatchUp();
+        applySpeedToActivePlayer(LivePauseFrameBuffer.NORMAL_PLAYBACK_SPEED);
+    }
+
+    public void pausePlaybackForLiveCache() {
+        pause();
+    }
+
+    public void resumePlaybackFromLiveCache() {
+        start();
+    }
+
     public void start() {
+        boolean wasPaused = mDecoderPaused || mFallbackFrameBuffer.isPaused();
+        mDecoderPaused = false;
+        if (wasPaused && getUtvPlayer() == null) {
+            mFallbackFrameBuffer.onResume();
+            applySpeedToActivePlayer(mFallbackFrameBuffer.getPlaybackSpeed());
+        }
+        UTVPlayer utv = getUtvPlayer();
+        if (utv != null) {
+            try {
+                utv.start();
+                mCurrentPlaybackSpeed = utv.getPlaybackSpeed();
+            } catch (Throwable t) {
+                Log.w(TAG, "utv.start() failed", t);
+            }
+        }
         if (isInPlaybackState()) {
             try {
-                mMediaPlayer.start();
+                if (!(unwrapPlayer(mMediaPlayer) instanceof UTVPlayer)) {
+                    mMediaPlayer.start();
+                }
                 mCurrentState = STATE_PLAYING;
                 if (mActiveSlot != null) {
                     mActiveSlot.state = STATE_PLAYING;
@@ -1334,11 +1489,28 @@ public class IjkVideoView extends FrameLayout {
 
     public void pause() {
         mHwAudioCompanion.stop();
+        mDecoderPaused = true;
+        applySpeedToActivePlayer(LivePauseFrameBuffer.NORMAL_PLAYBACK_SPEED);
+        if (getUtvPlayer() == null) {
+            mFallbackFrameBuffer.onPause();
+        }
         UTVPlayer utv = getUtvPlayer();
-        if (utv != null) utv.stopBackgroundPreload();
+        if (utv != null) {
+            utv.stopBackgroundPreload();
+            try {
+                utv.pause();
+            } catch (Throwable t) {
+                Log.w(TAG, "utv.pause() failed", t);
+            }
+        }
         if (isInPlaybackState()) {
             try {
-                if (mMediaPlayer.isPlaying()) {
+                if (unwrapPlayer(mMediaPlayer) instanceof UTVPlayer) {
+                    mCurrentState = STATE_PAUSED;
+                    if (mActiveSlot != null) {
+                        mActiveSlot.state = STATE_PAUSED;
+                    }
+                } else if (mMediaPlayer.isPlaying()) {
                     mMediaPlayer.pause();
                     mCurrentState = STATE_PAUSED;
                     if (mActiveSlot != null) {

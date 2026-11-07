@@ -1,16 +1,35 @@
 package com.bjunicom.iptv.player;
 
+import androidx.annotation.Nullable;
+
+import com.google.android.exoplayer2.C;
+import com.google.android.exoplayer2.ParserException;
 import com.google.android.exoplayer2.extractor.Extractor;
+import com.google.android.exoplayer2.extractor.ExtractorOutput;
 import com.google.android.exoplayer2.extractor.ExtractorsFactory;
+import com.google.android.exoplayer2.extractor.SeekMap;
+import com.google.android.exoplayer2.extractor.TrackOutput;
 import com.google.android.exoplayer2.extractor.ts.DefaultTsPayloadReaderFactory;
 import com.google.android.exoplayer2.extractor.ts.TsExtractor;
 import com.google.android.exoplayer2.extractor.ts.TsPayloadReader;
+import com.google.android.exoplayer2.util.ParsableByteArray;
 import com.google.android.exoplayer2.util.TimestampAdjuster;
 
 import java.util.Collections;
 
 /** One live TS extractor, using independently decodable video startup samples. */
 public final class IptvTsExtractorsFactory implements ExtractorsFactory {
+    @Nullable
+    private final LivePauseFrameBuffer frameBuffer;
+
+    public IptvTsExtractorsFactory() {
+        this(null);
+    }
+
+    public IptvTsExtractorsFactory(@Nullable LivePauseFrameBuffer frameBuffer) {
+        this.frameBuffer = frameBuffer;
+    }
+
     @Override
     public Extractor[] createExtractors() {
         int flags = DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS
@@ -47,11 +66,57 @@ public final class IptvTsExtractorsFactory implements ExtractorsFactory {
                 if (reader != null) {
                     hasVideo |= video;
                     hasAudio |= audio;
+                    if (frameBuffer != null) {
+                        return wrapPayloadReaderWithFrameBuffer(reader, frameBuffer);
+                    }
                 }
                 return reader;
             }
         };
         return new Extractor[]{new TsExtractor(
                 TsExtractor.MODE_SINGLE_PMT, new TimestampAdjuster(0), primaryTracks, 112800)};
+    }
+
+    private static TsPayloadReader wrapPayloadReaderWithFrameBuffer(
+            final TsPayloadReader delegate,
+            final LivePauseFrameBuffer frameBuffer) {
+        return new TsPayloadReader() {
+            @Override
+            public void init(TimestampAdjuster timestampAdjuster,
+                             ExtractorOutput extractorOutput,
+                             TrackIdGenerator idGenerator) {
+                ExtractorOutput wrappedOutput = new ExtractorOutput() {
+                    @Override
+                    public TrackOutput track(int id, int type) {
+                        TrackOutput downstream = extractorOutput.track(id, type);
+                        if (type == C.TRACK_TYPE_VIDEO || type == C.TRACK_TYPE_AUDIO) {
+                            return frameBuffer.wrapTrackOutput(type, downstream);
+                        }
+                        return downstream;
+                    }
+
+                    @Override
+                    public void endTracks() {
+                        extractorOutput.endTracks();
+                    }
+
+                    @Override
+                    public void seekMap(SeekMap seekMap) {
+                        extractorOutput.seekMap(seekMap);
+                    }
+                };
+                delegate.init(timestampAdjuster, wrappedOutput, idGenerator);
+            }
+
+            @Override
+            public void seek() {
+                delegate.seek();
+            }
+
+            @Override
+            public void consume(ParsableByteArray data, int flags) throws ParserException {
+                delegate.consume(data, flags);
+            }
+        };
     }
 }

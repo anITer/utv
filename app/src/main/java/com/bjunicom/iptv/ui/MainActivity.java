@@ -73,7 +73,11 @@ public class MainActivity extends AppCompatActivity {
     private static final long HUD_AUTO_HIDE_MS = 6000L;
     private static final long NUMBER_INPUT_COMMIT_MS = 1800L;
     private static final long DOUBLE_BACK_EXIT_MS = 2000L;
+    public static final long DOUBLE_CLICK_OK_PAUSE_MS = 400L;
     public static final long LONG_PRESS_OK_TIMESHIFT_MS = 2000L;
+    public static final long CATCHUP_CHECK_INTERVAL_MS = 200L;
+    public static final String PAUSE_TOAST_MESSAGE = "已暂停，最长暂停 1 分钟";
+    public static final String CATCHUP_SPEED_TEXT = "1.5x";
     public static final int TIMESHIFT_WINDOW_SEC = 6 * 3600; // 6 小时时移进度条窗口 (21600 秒)
     public static final int TIMESHIFT_STEP_SEC = 30;         // 单次按左右方向键时移步长 (30 秒)
     private static final long TIMESHIFT_SEEK_COMMIT_DEBOUNCE_MS = 900L;
@@ -83,6 +87,8 @@ public class MainActivity extends AppCompatActivity {
     private LinearLayout loadingOverlay;
     private TextView tvLoadingHint;
     private TextView tvNumberInputOsd;
+    private ImageView ivPauseIcon;
+    private TextView tvCatchupSpeedBadge;
     private RelativeLayout hudOverlay;
     private LinearLayout drawerPanel;
 
@@ -99,6 +105,11 @@ public class MainActivity extends AppCompatActivity {
     private Bitmap lastTimeshiftThumbnailBitmap;
     private boolean okKeyDownActive = false;
     private boolean longPressTimeshiftTriggered = false;
+    private boolean isPlaybackPaused = false;
+    private boolean isCatchingUpPlayback = false;
+    private boolean pendingFirstOkClick = false;
+    private long lastOkClickUpTimeMs = 0L;
+    private long lastOkKeyEventTimeMs = 0L;
     private boolean isInTimeshiftPlayback = false;
     private long timeshiftLiveEdgeEpochMs = 0L;
     private long timeshiftTargetEpochMs = 0L;
@@ -161,6 +172,39 @@ public class MainActivity extends AppCompatActivity {
 
     private final Runnable hideTimeshiftBarRunnable = () -> {
         hideTimeshiftSeekBar(false);
+    };
+
+    private final Runnable resetPendingOkClickRunnable = () -> {
+        pendingFirstOkClick = false;
+    };
+
+    private final Runnable pendingHudButtonClickRunnable = () -> {
+        pendingFirstOkClick = false;
+        if (drawerPanel != null && drawerPanel.getVisibility() != View.VISIBLE
+                && hudOverlay != null && hudOverlay.getVisibility() == View.VISIBLE) {
+            View focusedBtn = getFocusedHudButton();
+            if (focusedBtn != null) {
+                scheduleHideHud();
+                focusedBtn.performClick();
+            }
+        }
+    };
+
+    private final Runnable catchUpTickRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!isCatchingUpPlayback || isPlaybackPaused || videoView == null) {
+                hideCatchupSpeedBadge();
+                return;
+            }
+            boolean caughtUp = videoView.advanceCatchUpProgress(CATCHUP_CHECK_INTERVAL_MS);
+            if (caughtUp || !videoView.isCatchingUp()) {
+                isCatchingUpPlayback = false;
+                hideCatchupSpeedBadge();
+            } else {
+                mainHandler.postDelayed(this, CATCHUP_CHECK_INTERVAL_MS);
+            }
+        }
     };
 
     private final Runnable commitNumberInputRunnable = () -> {
@@ -299,6 +343,8 @@ public class MainActivity extends AppCompatActivity {
         loadingOverlay = findViewById(R.id.loading_overlay);
         tvLoadingHint = findViewById(R.id.tv_loading_hint);
         tvNumberInputOsd = findViewById(R.id.tv_number_input_osd);
+        ivPauseIcon = findViewById(R.id.iv_pause_icon);
+        tvCatchupSpeedBadge = findViewById(R.id.tv_catchup_speed_badge);
         hudOverlay = findViewById(R.id.player_hud_overlay);
         drawerPanel = findViewById(R.id.channel_drawer_panel);
 
@@ -421,6 +467,8 @@ public class MainActivity extends AppCompatActivity {
         applyTranslucentEdgeShadow(drawerPanel, 24f, 8f, true);
         applyTranslucentEdgeShadow(loadingOverlay, 18f, 8f);
         applyTranslucentEdgeShadow(tvNumberInputOsd, 20f, 8f);
+        applyTranslucentEdgeShadow(ivPauseIcon, 20f, 12f);
+        applyTranslucentEdgeShadow(tvCatchupSpeedBadge, 20f, 8f);
         applyTranslucentEdgeShadow(timeshiftThumbnailContainer, 22f, 8f);
         applyTranslucentEdgeShadow(findViewById(R.id.timeshift_bar_card), 20f, 8f);
         applyTranslucentEdgeShadow(etSearchChannel, 6f, 8f);
@@ -761,6 +809,35 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void setupPlayerListeners() {
+        videoView.setCatchUpStateListener(new com.bjunicom.iptv.player.LivePauseFrameBuffer.CatchUpStateListener() {
+            @Override
+            public void onCatchUpStarted(float speed) {
+                Runnable showTask = () -> {
+                    isCatchingUpPlayback = true;
+                    showCatchupSpeedBadge();
+                };
+                if (Looper.myLooper() == Looper.getMainLooper()) {
+                    showTask.run();
+                } else {
+                    mainHandler.post(showTask);
+                }
+            }
+
+            @Override
+            public void onCatchUpCompleted() {
+                Runnable hideTask = () -> {
+                    isCatchingUpPlayback = false;
+                    mainHandler.removeCallbacks(catchUpTickRunnable);
+                    hideCatchupSpeedBadge();
+                };
+                if (Looper.myLooper() == Looper.getMainLooper()) {
+                    hideTask.run();
+                } else {
+                    mainHandler.post(hideTask);
+                }
+            }
+        });
+
         videoView.setOnPreparedListener(mp -> {
             if (currentChannel != null) {
                 String vTrack = videoView.getFormattedVideoTrackInfo();
@@ -890,6 +967,14 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
         currentChannel = channel;
+        isPlaybackPaused = false;
+        isCatchingUpPlayback = false;
+        mainHandler.removeCallbacks(catchUpTickRunnable);
+        clearPendingOkClickState();
+        if (ivPauseIcon != null) {
+            ivPauseIcon.setVisibility(View.GONE);
+        }
+        hideCatchupSpeedBadge();
         isInTimeshiftPlayback = false;
         timeshiftTargetEpochMs = 0L;
         hideTimeshiftSeekBar(true);
@@ -1792,6 +1877,12 @@ public class MainActivity extends AppCompatActivity {
     public boolean dispatchKeyEvent(KeyEvent event) {
         if (event.getAction() == KeyEvent.ACTION_DOWN) {
             int keyCode = event.getKeyCode();
+            boolean isCenterOkKey = (keyCode == KeyEvent.KEYCODE_DPAD_CENTER
+                    || keyCode == KeyEvent.KEYCODE_ENTER
+                    || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER);
+            if (!isCenterOkKey) {
+                clearPendingOkClickState();
+            }
 
             if (hudOverlay.getVisibility() == View.VISIBLE || drawerPanel.getVisibility() == View.VISIBLE) {
                 scheduleHideHud();
@@ -1990,10 +2081,13 @@ public class MainActivity extends AppCompatActivity {
                 mainHandler.removeCallbacks(triggerTimeshiftSeekBarRunnable);
                 if (longPressTimeshiftTriggered) {
                     longPressTimeshiftTriggered = false;
+                    clearPendingOkClickState();
                     return true;
                 }
             }
-            // 全屏播放时，短按松开 OK 键：若信息页面(HUD)已显示则执行当前聚焦按钮功能，否则调出信息页面(HUD)
+            // 全屏播放时，松开 OK 键：
+            // - 双击 OK 键：在观看过程中触发暂停/恢复（暂停解码、扩大帧缓存区到3600槽位、Toast提示并展示暂停图标；再次双击恢复并隐藏图标）
+            // - 单击 OK 键：若信息页面(HUD)已显示则执行当前聚焦按钮功能，否则调出信息页面(HUD)
             if (drawerPanel.getVisibility() != View.VISIBLE
                     && !isTimeshiftSeekBarVisible()
                     && remoteNumberBuffer.length() == 0
@@ -2003,13 +2097,29 @@ public class MainActivity extends AppCompatActivity {
                 boolean wasLongPress = longPressCenterHandled;
                 longPressCenterHandled = false;
                 if (!wasLongPress && !event.isCanceled() && (event.getEventTime() - event.getDownTime() < LONG_PRESS_OK_TIMESHIFT_MS)) {
+                    long nowUpMs = android.os.SystemClock.uptimeMillis();
+                    long evtTimeMs = event.getEventTime();
+                    boolean withinDoubleClickWindow = pendingFirstOkClick
+                            && (nowUpMs - lastOkClickUpTimeMs >= 0L && nowUpMs - lastOkClickUpTimeMs <= DOUBLE_CLICK_OK_PAUSE_MS)
+                            && (evtTimeMs <= 0L || lastOkKeyEventTimeMs <= 0L
+                            || (evtTimeMs - lastOkKeyEventTimeMs >= 0L && evtTimeMs - lastOkKeyEventTimeMs <= DOUBLE_CLICK_OK_PAUSE_MS));
+                    if (withinDoubleClickWindow) {
+                        clearPendingOkClickState();
+                        togglePlaybackPauseResume();
+                        return true;
+                    }
+
+                    pendingFirstOkClick = true;
+                    lastOkClickUpTimeMs = nowUpMs;
+                    lastOkKeyEventTimeMs = evtTimeMs;
+                    mainHandler.removeCallbacks(resetPendingOkClickRunnable);
+                    mainHandler.postDelayed(resetPendingOkClickRunnable, DOUBLE_CLICK_OK_PAUSE_MS);
+
                     if (hudOverlay.getVisibility() == View.VISIBLE) {
-                        View focusedBtn = getFocusedHudButton();
-                        if (focusedBtn != null) {
-                            scheduleHideHud();
-                            focusedBtn.performClick();
-                            return true;
-                        }
+                        scheduleHideHud();
+                        mainHandler.removeCallbacks(pendingHudButtonClickRunnable);
+                        mainHandler.postDelayed(pendingHudButtonClickRunnable, DOUBLE_CLICK_OK_PAUSE_MS);
+                        return true;
                     }
                     showHudTemporarily();
                     return true;
@@ -2018,6 +2128,124 @@ public class MainActivity extends AppCompatActivity {
             }
         }
         return super.dispatchKeyEvent(event);
+    }
+
+    private void clearPendingOkClickState() {
+        pendingFirstOkClick = false;
+        lastOkClickUpTimeMs = 0L;
+        lastOkKeyEventTimeMs = 0L;
+        mainHandler.removeCallbacks(resetPendingOkClickRunnable);
+        mainHandler.removeCallbacks(pendingHudButtonClickRunnable);
+    }
+
+    public boolean isPlaybackPaused() {
+        return isPlaybackPaused;
+    }
+
+    public boolean isCatchingUpPlayback() {
+        return isCatchingUpPlayback;
+    }
+
+    public boolean isPauseIconVisible() {
+        return ivPauseIcon != null && ivPauseIcon.getVisibility() == View.VISIBLE;
+    }
+
+    public ImageView getPauseIconView() {
+        return ivPauseIcon;
+    }
+
+    public boolean isCatchupSpeedBadgeVisible() {
+        return tvCatchupSpeedBadge != null && tvCatchupSpeedBadge.getVisibility() == View.VISIBLE;
+    }
+
+    public String getCatchupSpeedBadgeText() {
+        return tvCatchupSpeedBadge != null && tvCatchupSpeedBadge.getText() != null
+                ? tvCatchupSpeedBadge.getText().toString()
+                : "";
+    }
+
+    public TextView getCatchupSpeedBadgeView() {
+        return tvCatchupSpeedBadge;
+    }
+
+    private void showCatchupSpeedBadge() {
+        if (tvCatchupSpeedBadge != null) {
+            tvCatchupSpeedBadge.setText(CATCHUP_SPEED_TEXT);
+            tvCatchupSpeedBadge.setVisibility(View.VISIBLE);
+        }
+    }
+
+    private void hideCatchupSpeedBadge() {
+        if (tvCatchupSpeedBadge != null) {
+            tvCatchupSpeedBadge.setVisibility(View.GONE);
+        }
+    }
+
+    /**
+     * 当恢复后追帧结束（追上正常的直播流时间戳）时，取消右下角 1.5x 图标展示并恢复正常 1.0x 播放
+     */
+    public void onCatchUpFinished() {
+        isCatchingUpPlayback = false;
+        mainHandler.removeCallbacks(catchUpTickRunnable);
+        if (videoView != null && videoView.isCatchingUp()) {
+            videoView.completeCatchUp();
+        }
+        hideCatchupSpeedBadge();
+    }
+
+    /**
+     * 观看过程中双击 OK 键切换暂停与恢复播放：
+     * - 开始暂停：立即暂停解码器解码，帧缓存区扩大到 3600 个槽位并将后续收到的数据缓存在内存中，
+     *   弹出 Toast 提示「已暂停，最长暂停 1 分钟」，UI 上展示暂停图标；
+     * - 恢复播放：暂停图标消失，按 1.5 倍速快放音视频并展示右下角 1.5x 标识，直到追上正常的直播流时间戳后恢复原速。
+     */
+    public void togglePlaybackPauseResume() {
+        if (isPlaybackPaused) {
+            resumePlaybackByUser();
+        } else {
+            pausePlaybackByUser();
+        }
+    }
+
+    public void pausePlaybackByUser() {
+        isPlaybackPaused = true;
+        isCatchingUpPlayback = false;
+        mainHandler.removeCallbacks(catchUpTickRunnable);
+        hideCatchupSpeedBadge();
+        if (hudOverlay != null && hudOverlay.getVisibility() == View.VISIBLE) {
+            hudOverlay.setVisibility(View.GONE);
+            updateHudButtonsVisualState();
+        }
+        mainHandler.removeCallbacks(hideHudRunnable);
+        if (loadingOverlay != null) {
+            loadingOverlay.setVisibility(View.GONE);
+        }
+        if (videoView != null) {
+            videoView.pausePlaybackForLiveCache();
+        }
+        if (ivPauseIcon != null) {
+            ivPauseIcon.setVisibility(View.VISIBLE);
+        }
+        Toast.makeText(this, PAUSE_TOAST_MESSAGE, Toast.LENGTH_SHORT).show();
+    }
+
+    public void resumePlaybackByUser() {
+        isPlaybackPaused = false;
+        isCatchingUpPlayback = true;
+        if (hudOverlay != null && hudOverlay.getVisibility() == View.VISIBLE) {
+            hudOverlay.setVisibility(View.GONE);
+            updateHudButtonsVisualState();
+        }
+        mainHandler.removeCallbacks(hideHudRunnable);
+        if (ivPauseIcon != null) {
+            ivPauseIcon.setVisibility(View.GONE);
+        }
+        showCatchupSpeedBadge();
+        if (videoView != null) {
+            videoView.resumePlaybackFromLiveCache();
+        }
+        mainHandler.removeCallbacks(catchUpTickRunnable);
+        mainHandler.postDelayed(catchUpTickRunnable, CATCHUP_CHECK_INTERVAL_MS);
     }
 
     private int extractDigitFromKeyCode(int keyCode) {
@@ -2337,7 +2565,7 @@ public class MainActivity extends AppCompatActivity {
         }
         refreshChannelList();
         mainHandler.post(telemetryTickRunnable);
-        if (currentChannel != null && !videoView.isPlaying()) {
+        if (currentChannel != null && !isPlaybackPaused && !videoView.isPlaying()) {
             videoView.start();
         }
     }

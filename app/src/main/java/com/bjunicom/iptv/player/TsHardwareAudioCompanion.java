@@ -40,6 +40,15 @@ public class TsHardwareAudioCompanion {
     private volatile String activeCodecLabel = "";
     private volatile HttpURLConnection activeConn;
     private volatile MulticastSocket activeSocket;
+    private volatile float playbackSpeed = 1.0f;
+
+    public void setPlaybackSpeed(float speed) {
+        this.playbackSpeed = speed > 0f ? speed : 1.0f;
+    }
+
+    public float getPlaybackSpeed() {
+        return playbackSpeed;
+    }
 
     public String getActiveCodecLabel() {
         return activeCodecLabel;

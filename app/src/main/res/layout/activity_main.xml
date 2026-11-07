@@ -82,6 +82,51 @@
         android:visibility="gone"
         tools:text="001  CCTV-1综合" />
 
+    <!-- 3.5 观看暂停状态中心悬浮图标 (双击 OK 键暂停时显示，再次双击 OK 键恢复后消失) -->
+    <ImageView
+        android:id="@+id/iv_pause_icon"
+        android:layout_width="88dp"
+        android:layout_height="88dp"
+        android:layout_gravity="center"
+        android:background="@drawable/bg_md3_hud_surface"
+        android:contentDescription="已暂停"
+        android:elevation="20dp"
+        android:outlineAmbientShadowColor="@color/ui_edge_shadow_ambient"
+        android:outlineSpotShadowColor="@color/ui_edge_shadow_spot"
+        android:padding="22dp"
+        android:scaleType="fitCenter"
+        android:src="@drawable/ic_flat_pause"
+        android:translationZ="6dp"
+        android:visibility="gone" />
+
+    <!-- 3.6 暂停恢复后 1.5 倍速快放追帧右下角提示徽章 (追上直播时间戳后消失) -->
+    <TextView
+        android:id="@+id/tv_catchup_speed_badge"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:layout_marginEnd="28dp"
+        android:layout_marginBottom="28dp"
+        android:background="@drawable/bg_md3_hud_surface"
+        android:elevation="20dp"
+        android:fontFamily="monospace"
+        android:includeFontPadding="false"
+        android:letterSpacing="0.02"
+        android:outlineAmbientShadowColor="@color/ui_edge_shadow_ambient"
+        android:outlineSpotShadowColor="@color/ui_edge_shadow_spot"
+        android:paddingHorizontal="18dp"
+        android:paddingVertical="8dp"
+        android:shadowColor="@color/ui_text_shadow"
+        android:shadowDx="0"
+        android:shadowDy="1.5"
+        android:shadowRadius="3.5"
+        android:text="1.5x"
+        android:textColor="@color/accent_amber"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        android:translationZ="6dp"
+        android:visibility="gone" />
+
     <!-- 4. Material Design 3 顶部与底部悬浮式播放控制 HUD -->
     <RelativeLayout
         android:id="@+id/player_hud_overlay"
@@ -511,7 +556,7 @@
                 android:shadowDy="1.5"
                 android:shadowRadius="3.0"
                 android:singleLine="true"
-                android:text="遥控器导航: [◄/►]调出频道列表/切换按钮  [OK]调出信息页/确认按钮  [长按OK 2秒]时移回看  [▲/▼]上下换台  [菜单]快捷面板"
+                android:text="遥控器导航: [◄/►]调出频道列表/切换按钮  [OK]调出信息页/确认  [双击OK]暂停/恢复  [长按OK 2秒]时移回看  [▲/▼]上下换台  [菜单]快捷面板"
                 android:textColor="@color/text_secondary"
                 android:textSize="12sp" />
         </LinearLayout>

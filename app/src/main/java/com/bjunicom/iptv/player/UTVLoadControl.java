@@ -25,8 +25,10 @@ public class UTVLoadControl extends DefaultLoadControl {
     public static final int UTV_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = 400;
     public static final int UTV_TARGET_BUFFER_BYTES = 12 * 1024 * 1024;
     public static final int UTV_BACK_BUFFER_DURATION_MS = 1500;
+    public static final long UTV_PAUSED_MAX_BUFFER_US = 65_000_000L;
 
     private final DefaultAllocator sharedAllocator;
+    private volatile boolean livePauseExpanded = false;
 
     public UTVLoadControl() {
         this(new DefaultAllocator(true, C.DEFAULT_BUFFER_SEGMENT_SIZE));
@@ -51,9 +53,27 @@ public class UTVLoadControl extends DefaultLoadControl {
         return sharedAllocator;
     }
 
+    public void setLivePauseExpanded(boolean expanded) {
+        this.livePauseExpanded = expanded;
+    }
+
+    public boolean isLivePauseExpanded() {
+        return livePauseExpanded;
+    }
+
     @Override
     public Allocator getAllocator() {
         return sharedAllocator;
+    }
+
+    @Override
+    public boolean shouldContinueLoading(long playbackPositionUs,
+                                         long bufferedDurationUs,
+                                         float playbackSpeed) {
+        if (livePauseExpanded && bufferedDurationUs < UTV_PAUSED_MAX_BUFFER_US) {
+            return true;
+        }
+        return super.shouldContinueLoading(playbackPositionUs, bufferedDurationUs, playbackSpeed);
     }
 
     @Override
